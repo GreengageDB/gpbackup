@@ -25,10 +25,10 @@ fi
 gpdb_src/concourse/scripts/setup_gpadmin_user.bash
 make_cluster
 
-wget https://golang.org/dl/go1.20.5.linux-amd64.tar.gz -O - | tar -C /opt -xz;
+wget https://golang.org/dl/go1.20.5.linux-amd64.tar.gz -q -O - | tar -C /opt -xz;
 
 su - gpadmin -c "
-source /usr/local/greenplum-db-devel/greenplum_path.sh;
+source /usr/local/greengage-db-devel/greengage_path.sh;
 source ~/gpdb_src/gpAux/gpdemo/gpdemo-env.sh;
 gpconfig -c shared_preload_libraries -v \"\$(psql -At -c \"SELECT array_to_string(array_append(string_to_array(current_setting('shared_preload_libraries'), ','), 'dummy_seclabel'), ',')\" postgres)\";
 gpstop -ar;
