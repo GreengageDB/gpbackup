@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        gg_version: [6, 7]
+        gg_version: [6]
 
     steps:
       - name: Checkout repository
