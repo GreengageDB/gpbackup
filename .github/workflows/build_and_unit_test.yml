@@ -7,6 +7,11 @@ on:
     branches: [ master ]
     types: [ opened, synchronize, reopened, edited, ready_for_review ]
 
+# Concurrency control to cancel previous runs on new push to same PR/branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true  # Automatically cancel any previous runs for the same group
+
 jobs:
 
   build_and_unit_test:
@@ -73,7 +78,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./ci/Dockerfile
+          file: ./arenadata/Dockerfile
           push: false
           tags: gpbackup:test
           build-args: |
