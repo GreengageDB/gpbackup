@@ -41,3 +41,47 @@ jobs:
       run: |
         cd ${GOPATH}/src/github.com/greenplum-db/gpbackup
         make unit_all_gpdb_versions
+
+  build_and_test:
+    name: Regression tests on Greengage ${{ matrix.gg_version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        gg_version: [6]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: tree:0
+          submodules: 'recursive'
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          version: latest
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./ci/Dockerfile
+          push: false
+          tags: gpbackup:test
+          build-args: |
+            GPDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb${{ matrix.gg_version }}_ubuntu:latest
+
+      - name: Test
+        run: |
+          docker run --rm -it
+          --sysctl 'kernel.sem=500 1024000 200 4096'
+          gpbackup:test
+          bash /home/gpadmin/go/src/github.com/greenplum-db/gpbackup/arenadata/run_gpbackup_tests.bash
