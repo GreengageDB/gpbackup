@@ -86,7 +86,7 @@ jobs:
 
       - name: Test
         run: >
-          docker run --rm -it
+          docker run --rm
           --sysctl 'kernel.sem=500 1024000 200 4096'
           gpbackup:test
           bash /home/gpadmin/go/src/github.com/greenplum-db/gpbackup/arenadata/run_gpbackup_tests.bash
