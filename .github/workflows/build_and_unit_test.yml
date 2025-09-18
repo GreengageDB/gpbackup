@@ -79,6 +79,7 @@ jobs:
         with:
           context: .
           file: ./arenadata/Dockerfile
+          load: true
           push: false
           tags: gpbackup:test
           build-args: |
