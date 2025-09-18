@@ -85,7 +85,7 @@ jobs:
             GPDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb${{ matrix.gg_version }}_ubuntu:latest
 
       - name: Test
-        run: |
+        run: >
           docker run --rm -it
           --sysctl 'kernel.sem=500 1024000 200 4096'
           gpbackup:test
