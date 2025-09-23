@@ -279,7 +279,7 @@ func CheckHelperPids(c *cluster.Cluster, fpInfo filepath.FilePathInfo, operation
 		procPattern := fmt.Sprintf("gpbackup_helper --%s-agent --toc-file %s*", operation, tocFile)
 		pipeFile := fpInfo.GetSegmentPipeFilePath(contentID)
 		pipePattern := fmt.Sprintf("--pipe-file %s", pipeFile)
-		return fmt.Sprintf(`ps ux | grep "%s" | grep "%s" | grep -v grep | awk '{print $2}'`, procPattern, pipePattern)
+		return fmt.Sprintf(`ps ux | grep -- "%s" | grep -- "%s" | grep -v grep | awk '{print $2}'`, procPattern, pipePattern)
 	})
 	pidMap := make(map[string][]int)
 	for _, cmd := range remoteOutput.Commands {
@@ -320,7 +320,7 @@ func CleanUpSegmentHelperProcesses(c *cluster.Cluster, fpInfo filepath.FilePathI
 				procPattern := fmt.Sprintf("gpbackup_helper --%s-agent --toc-file %s", operation, tocFile)
 				pipeFile := fpInfo.GetSegmentPipeFilePath(contentID)
 				pipePattern := fmt.Sprintf("--pipe-file %s", pipeFile)
-				return fmt.Sprintf("PIDS=`ps ux | grep \"%s\" | grep \"%s\" | grep -v grep | awk '{print $2}'`; if [[ ! -z \"$PIDS\" ]]; then kill -USR1 $PIDS; fi", procPattern, pipePattern)
+				return fmt.Sprintf("PIDS=`ps ux | grep -- \"%s\" | grep -- \"%s\" | grep -v grep | awk '{print $2}'`; if [[ ! -z \"$PIDS\" ]]; then kill -USR1 $PIDS; fi", procPattern, pipePattern)
 			})
 		case <-time.After(timeout):
 			for host, pids := range helperPids {

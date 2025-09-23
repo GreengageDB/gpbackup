@@ -60,47 +60,47 @@ var _ = Describe("restore internal tests", func() {
 		},
 		{
 			Schema: "foo", Name: "bar", ObjectType: toc.OBJ_STATISTICS,
-			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'foo.bar'::regclass::oid AND attname = 'i');`,
 		},
 		{
 			Schema: "foo", Name: `"b'ar"`, ObjectType: toc.OBJ_STATISTICS,
-			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'foo."b''ar"'::regclass::oid AND attname = 'i');`,
 		},
 		{
 			Schema: "foo", Name: `"b.ar"`, ObjectType: toc.OBJ_STATISTICS,
-			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'foo."b.ar"'::regclass::oid AND attname = 'i');`,
 		},
 		{
 			Schema: `"fo.o"`, Name: "bar", ObjectType: toc.OBJ_STATISTICS,
-			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = '"fo.o".bar'::regclass::oid AND attname = 'i');`,
 		},
 		{
 			Schema: `"fo.o"`, Name: `"b'ar"`, ObjectType: toc.OBJ_STATISTICS,
-			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = '"fo.o"."b''ar"'::regclass::oid AND attname = 'i');`,
 		},
 		{
 			Schema: `"fo.o"`, Name: `"b.ar"`, ObjectType: toc.OBJ_STATISTICS,
-			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = '"fo.o"."b.ar"'::regclass::oid AND attname = 'i');`,
 		},
 		{
 			Schema: `"fo'o"`, Name: "bar", ObjectType: toc.OBJ_STATISTICS,
-			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = '"fo''o".bar'::regclass::oid AND attname = 'i');`,
 		},
 		{
 			Schema: `"fo'o"`, Name: `"b'ar"`, ObjectType: toc.OBJ_STATISTICS,
-			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = '"fo''o"."b''ar"'::regclass::oid AND attname = 'i');`,
 		},
 		{
 			Schema: `"fo'o"`, Name: `"b.ar"`, ObjectType: toc.OBJ_STATISTICS,
-			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+			Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = '"fo''o"."b.ar"'::regclass::oid AND attname = 'i');`,
 		},
 	}
@@ -176,47 +176,47 @@ var _ = Describe("restore internal tests", func() {
 				},
 				{
 					Schema: "foo2", Name: "bar", ObjectType: toc.OBJ_STATISTICS,
-					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'foo2.bar'::regclass::oid AND attname = 'i');`,
 				},
 				{
 					Schema: "foo2", Name: `"b'ar"`, ObjectType: toc.OBJ_STATISTICS,
-					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'foo2."b''ar"'::regclass::oid AND attname = 'i');`,
 				},
 				{
 					Schema: "foo2", Name: `"b.ar"`, ObjectType: toc.OBJ_STATISTICS,
-					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'foo2."b.ar"'::regclass::oid AND attname = 'i');`,
 				},
 				{
 					Schema: "foo2", Name: "bar", ObjectType: toc.OBJ_STATISTICS,
-					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'foo2.bar'::regclass::oid AND attname = 'i');`,
 				},
 				{
 					Schema: "foo2", Name: `"b'ar"`, ObjectType: toc.OBJ_STATISTICS,
-					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'foo2."b''ar"'::regclass::oid AND attname = 'i');`,
 				},
 				{
 					Schema: "foo2", Name: `"b.ar"`, ObjectType: toc.OBJ_STATISTICS,
-					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'foo2."b.ar"'::regclass::oid AND attname = 'i');`,
 				},
 				{
 					Schema: "foo2", Name: "bar", ObjectType: toc.OBJ_STATISTICS,
-					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'foo2.bar'::regclass::oid AND attname = 'i');`,
 				},
 				{
 					Schema: "foo2", Name: `"b'ar"`, ObjectType: toc.OBJ_STATISTICS,
-					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'foo2."b''ar"'::regclass::oid AND attname = 'i');`,
 				},
 				{
 					Schema: "foo2", Name: `"b.ar"`, ObjectType: toc.OBJ_STATISTICS,
-					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+					Statement: `DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'foo2."b.ar"'::regclass::oid AND attname = 'i');`,
 				},
 			}

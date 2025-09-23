@@ -100,7 +100,7 @@ SET
 	reltuples = 0.000000::real
 WHERE oid = 'testschema.testtable2'::regclass::oid;`,
 
-				`DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+				`DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 	(SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'testschema.testtable2'::regclass::oid AND attname = 'testattWithArray');`,
 				fmt.Sprintf(`INSERT INTO pg_statistic SELECT
 	attrelid,
@@ -126,7 +126,7 @@ WHERE oid = 'testschema.testtable2'::regclass::oid;`,
 	NULL
 FROM pg_attribute WHERE attrelid = 'testschema.testtable2'::regclass::oid AND attname = 'testattWithArray';`, insertReplace1, insertReplace2, insertReplace3, insertReplace4, insertReplace5),
 
-				`DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+				`DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 	(SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'testschema.testtable2'::regclass::oid AND attname = 'testatt');`,
 				fmt.Sprintf(`INSERT INTO pg_statistic SELECT
 	attrelid,
@@ -181,7 +181,7 @@ WHERE oid = '"""test''schema"""."""test''table"""'::regclass::oid;`))
 			}
 
 			attStatsQueries := backup.GenerateAttributeStatisticsQueries(tableTestTable, attStats)
-			Expect(attStatsQueries[0]).To(Equal(fmt.Sprintf(`DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+			Expect(attStatsQueries[0]).To(Equal(fmt.Sprintf(`DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 	(SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'testschema."test''table"'::regclass::oid AND attname = 'testatt');`)))
 
 			insertReplace1, insertReplace2, insertReplace3, insertReplace4, insertReplace5 := getStatInsertReplace(0, 0)
@@ -220,7 +220,7 @@ FROM pg_attribute WHERE attrelid = 'testschema."test''table"'::regclass::oid AND
 
 			attStatsQueries := backup.GenerateAttributeStatisticsQueries(tableTestTable, attStats)
 
-			Expect(attStatsQueries[0]).To(Equal(fmt.Sprintf(`DELETE FROM pg_statistic WHERE (starelid, staattnum) IN
+			Expect(attStatsQueries[0]).To(Equal(fmt.Sprintf(`DELETE FROM pg_statistic WHERE (starelid, staattnum) =
 	(SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = 'testschema."test''table"'::regclass::oid AND attname = 'testatt');`)))
 
 			insertReplace1, insertReplace2, insertReplace3, insertReplace4, insertReplace5 := getStatInsertReplace(10, 12)

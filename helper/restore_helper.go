@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	errorsStd "errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -54,6 +55,7 @@ type IRestoreReader interface {
 	copyAllData() (int64, error)
 	closeFileHandle()
 	getReaderType() ReaderType
+	discardData(num int64) (int64, error)
 }
 
 type RestoreReader struct {
@@ -62,6 +64,7 @@ type RestoreReader struct {
 	seekReader io.ReadSeeker
 	pluginCmd  IPluginCmd
 	readerType ReaderType
+	discardErr bool
 }
 
 // Wait for plugin process that should be already finished. This should be
@@ -102,14 +105,53 @@ func (r *RestoreReader) positionReader(pos uint64, oid int) error {
 	return nil
 }
 
+func (r *RestoreReader) discardData(num int64) (int64, error) {
+	if r.readerType != SUBSET {
+		panic("discardData should be called for readerType == SUBSET only")
+	}
+
+	if r.discardErr {
+		err := fmt.Errorf("%d bytes to discard, but discard error has already occurred. Skipping read.", num)
+		logVerbose(err.Error())
+		return 0, err
+	}
+
+	n, err := io.CopyN(io.Discard, r.bufReader, num)
+	if err == nil {
+		logVerbose(fmt.Sprintf("discarded %d bytes", n))
+	} else {
+		r.discardErr = true
+		err = errors.Wrapf(err, "discarded %d bytes from %d", n, num)
+		logError(err.Error())
+	}
+	return n, err
+}
+
 func (r *RestoreReader) copyData(num int64) (int64, error) {
 	var bytesRead int64
 	var err error
 	switch r.readerType {
 	case SEEKABLE:
 		bytesRead, err = io.CopyN(writer, r.seekReader, num)
-	case NONSEEKABLE, SUBSET:
+	case NONSEEKABLE:
 		bytesRead, err = io.CopyN(writer, r.bufReader, num)
+	case SUBSET:
+		if r.discardErr {
+			err := fmt.Errorf("%d bytes to copy, but discard error has already occurred. Skipping read.", num)
+			logVerbose(err.Error())
+			return 0, err
+		}
+
+		bytesRead, err = io.CopyN(writer, r.bufReader, num)
+		if err != nil && err != io.EOF && *onErrorContinue {
+			err = errors.Wrapf(err, "copied %d bytes from %d", bytesRead, num)
+			bytesDiscard, errDiscard := r.discardData(num - bytesRead)
+			bytesRead += bytesDiscard
+			if errDiscard != nil {
+				err = errorsStd.Join(errDiscard, err)
+				err = errors.Wrap(err, "discard error in copyData")
+			}
+		}
 	}
 	return bytesRead, err
 }
@@ -351,6 +393,10 @@ func doRestoreAgentInternal(restoreHelper IRestoreHelper) error {
 						logWarn(fmt.Sprintf("Oid %d, Batch %d: Skip file discovered, skipping this relation.", tableOid, batchNum))
 						err = nil
 						skipOid = tableOid
+						if *singleDataFile && readers[contentToRestore] != nil && readers[contentToRestore].getReaderType() == SUBSET {
+							bytesToDiscard := int64(end[contentToRestore] - start[contentToRestore])
+							_, err = readers[contentToRestore].discardData(bytesToDiscard)
+						}
 						/* Close up to *copyQueue files with this tableOid */
 						for idx := 0; idx < *copyQueue; idx++ {
 							batchToDelete := batchNum + idx
@@ -613,7 +659,7 @@ func getSubsetFlag(fileToRead string, pluginConfig *utils.PluginConfig) bool {
 		return false
 	}
 	// Helper's option does not allow to use subset
-	if !*isFiltered || *onErrorContinue {
+	if !*isFiltered {
 		return false
 	}
 	// Restore subset and compression does not allow together
