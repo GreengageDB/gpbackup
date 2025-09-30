@@ -13,8 +13,8 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/iohelper"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/blang/semver"
-	"github.com/greenplum-db/gpbackup/utils"
 	"github.com/pkg/errors"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -85,12 +85,12 @@ var _ = Describe("utils/plugin tests", func() {
 			_ = subject.CheckPluginExistsOnAllHosts(testCluster)
 
 			apiVersionCommands := executor.ClusterCommands[0]
-			expectedCommand := "source my/install/dir/greenplum_path.sh && /a/b/myPlugin plugin_api_version"
+			expectedCommand := "source my/install/dir/greengage_path.sh && /a/b/myPlugin plugin_api_version"
 			for _, shellCommands := range apiVersionCommands {
 				Expect(shellCommands.CommandString).To(ContainSubstring(expectedCommand))
 			}
 			nativeVersionCommands := executor.ClusterCommands[1]
-			expectedCommand = "source my/install/dir/greenplum_path.sh && /a/b/myPlugin --version"
+			expectedCommand = "source my/install/dir/greengage_path.sh && /a/b/myPlugin --version"
 			// for _, contentID := range testCluster.ContentIDs {
 			// 	cmd := nativeVersionCommands[contentID]
 			// 	Expect(cmd[len(cmd)-1]).To(Equal(expectedCommand))

@@ -8,7 +8,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gp-common-go-libs/structmatcher"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
-	"github.com/greenplum-db/gpbackup/history"
+	"github.com/GreengageDB/gpbackup/history"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

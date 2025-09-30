@@ -20,7 +20,7 @@ jobs:
     - uses: actions/checkout@v2
       with:
         fetch-depth: 0
-        path: go/src/github.com/greenplum-db/gpbackup
+        path: go/src/github.com/GreengageDB/gpbackup
 
     - name: Set up Go
       uses: actions/setup-go@v2
@@ -34,17 +34,17 @@ jobs:
 
     - name: Dependencies
       run: |
-        cd ${GOPATH}/src/github.com/greenplum-db/gpbackup
+        cd ${GOPATH}/src/github.com/GreengageDB/gpbackup
         make depend
 
     - name: Build
       run: |
-        cd ${GOPATH}/src/github.com/greenplum-db/gpbackup
+        cd ${GOPATH}/src/github.com/GreengageDB/gpbackup
         make build
 
     - name: Unit Test
       run: |
-        cd ${GOPATH}/src/github.com/greenplum-db/gpbackup
+        cd ${GOPATH}/src/github.com/GreengageDB/gpbackup
         make unit_all_gpdb_versions
 
   build_and_test:
@@ -78,7 +78,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./arenadata/Dockerfile
+          file: ./ci/Dockerfile
           load: true
           push: false
           tags: gpbackup:test
@@ -90,4 +90,4 @@ jobs:
           docker run --rm
           --sysctl 'kernel.sem=500 1024000 200 4096'
           gpbackup:test
-          bash /home/gpadmin/go/src/github.com/greenplum-db/gpbackup/arenadata/run_gpbackup_tests.bash
+          bash /home/gpadmin/go/src/github.com/greenplum-db/gpbackup/ci/scripts/run_gpbackup_tests.bash

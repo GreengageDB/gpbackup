@@ -10,12 +10,12 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/iohelper"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
-	"github.com/greenplum-db/gpbackup/filepath"
-	"github.com/greenplum-db/gpbackup/history"
-	"github.com/greenplum-db/gpbackup/options"
-	"github.com/greenplum-db/gpbackup/report"
-	"github.com/greenplum-db/gpbackup/toc"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/filepath"
+	"github.com/GreengageDB/gpbackup/history"
+	"github.com/GreengageDB/gpbackup/options"
+	"github.com/GreengageDB/gpbackup/report"
+	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 )
 
 /*
@@ -111,9 +111,9 @@ SET enable_nestloop = on;
 		backupConfigMajorVer, _ := strconv.Atoi(strings.Split(backupConfig.DatabaseVersion, ".")[0])
 		if backupConfigMajorVer < 6 && !resizeRestore {
 			setupQuery += "SET gp_use_legacy_hashops = on;\n"
-			gplog.Warn("This backup set was taken on a version of Greenplum prior to 6.x. This restore will use the legacy hash operators when loading data.")
-			gplog.Warn("To use the new Greenplum 6.x default hash operators, these tables will need to be redistributed.")
-			gplog.Warn("For more information, refer to the migration guide located as https://docs.greenplum.org/latest/install_guide/migrate.html.")
+			gplog.Warn("This backup set was taken on a version of Greengage prior to 6.x. This restore will use the legacy hash operators when loading data.")
+			gplog.Warn("To use the new Greengage 6.x default hash operators, these tables will need to be redistributed.")
+			gplog.Warn("For more information, refer to the migration guide located as https://docs.greengage.org/latest/install_guide/migrate.html.")
 		}
 	}
 

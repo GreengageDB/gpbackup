@@ -1,5 +1,5 @@
 --
--- Greenplum Database database dump
+-- Greengage Database database dump
 --
 
 SET statement_timeout = 0;
@@ -68,6 +68,6 @@ COPY returns (id, date, amt) FROM stdin;
 
 
 --
--- Greenplum Database database dump complete
+-- Greengage Database database dump complete
 --
 

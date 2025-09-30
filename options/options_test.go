@@ -7,7 +7,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
-	"github.com/greenplum-db/gpbackup/options"
+	"github.com/GreengageDB/gpbackup/options"
 	"github.com/spf13/pflag"
 
 	. "github.com/onsi/ginkgo/v2"

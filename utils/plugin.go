@@ -13,8 +13,8 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/iohelper"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
+	"github.com/GreengageDB/gpbackup/filepath"
 	"github.com/blang/semver"
-	"github.com/greenplum-db/gpbackup/filepath"
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v2"
 )
@@ -103,7 +103,7 @@ func (plugin *PluginConfig) CheckPluginExistsOnAllHosts(c *cluster.Cluster) stri
 }
 
 func (plugin *PluginConfig) checkPluginAPIVersion(c *cluster.Cluster) {
-	command := fmt.Sprintf("source %s/greenplum_path.sh && %s plugin_api_version",
+	command := fmt.Sprintf("source %s/greengage_path.sh && %s plugin_api_version",
 		operating.System.Getenv("GPHOME"), plugin.ExecutablePath)
 	remoteOutput := c.GenerateAndExecuteCommand(
 		"Checking plugin api version on all hosts",
@@ -159,7 +159,7 @@ func (plugin *PluginConfig) checkPluginAPIVersion(c *cluster.Cluster) {
 }
 
 func (plugin *PluginConfig) getPluginNativeVersion(c *cluster.Cluster) string {
-	command := fmt.Sprintf("source %s/greenplum_path.sh && %s --version",
+	command := fmt.Sprintf("source %s/greengage_path.sh && %s --version",
 		operating.System.Getenv("GPHOME"), plugin.ExecutablePath)
 	remoteOutput := c.GenerateAndExecuteCommand(
 		"Checking plugin version on all hosts",
@@ -284,7 +284,7 @@ func (plugin *PluginConfig) buildHookString(command string,
 	}
 
 	backupDir := fpInfo.GetDirForContent(contentID)
-	return fmt.Sprintf("source %s/greenplum_path.sh && %s %s %s %s %s %s",
+	return fmt.Sprintf("source %s/greengage_path.sh && %s %s %s %s %s %s",
 		operating.System.Getenv("GPHOME"), plugin.ExecutablePath, command,
 		plugin.ConfigPath, backupDir, scope, contentIDStr)
 }
@@ -426,7 +426,7 @@ func (plugin *PluginConfig) BackupSegmentTOCs(c *cluster.Cluster, fpInfo filepat
 	remoteOutput = c.GenerateAndExecuteCommand("Processing segment TOC files with plugin", cluster.ON_SEGMENTS,
 		func(contentID int) string {
 			tocFile := fpInfo.GetSegmentTOCFilePath(contentID)
-			return fmt.Sprintf("source %s/greenplum_path.sh && %s backup_file %s %s && "+
+			return fmt.Sprintf("source %s/greengage_path.sh && %s backup_file %s %s && "+
 				"chmod 0755 %s", operating.System.Getenv("GPHOME"), plugin.ExecutablePath, plugin.ConfigPath, tocFile, tocFile)
 		})
 	c.CheckClusterError(remoteOutput, "Unable to process segment TOC files using plugin", func(contentID int) string {
@@ -445,7 +445,7 @@ func (plugin *PluginConfig) RestoreSegmentTOCs(c *cluster.Cluster, fpInfo filepa
 			tocFile := fpInfo.GetSegmentTOCFilePath(contentID)
 			// Restore the filename with the origin content to the directory with the destination content
 			tocFile = strings.ReplaceAll(tocFile, fmt.Sprintf("gpbackup_%d", contentID), fmt.Sprintf("gpbackup_%d", origContent))
-			command = fmt.Sprintf("mkdir -p %s && source %s/greenplum_path.sh && %s restore_file %s %s",
+			command = fmt.Sprintf("mkdir -p %s && source %s/greengage_path.sh && %s restore_file %s %s",
 				fpInfo.GetDirForContent(contentID), operating.System.Getenv("GPHOME"),
 				plugin.ExecutablePath, plugin.ConfigPath, tocFile)
 			return command

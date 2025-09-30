@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/greenplum-db/gpbackup/toc"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 )
 
 func PrintCreateTextSearchParserStatement(metadataFile *utils.FileWithByteCount, objToc *toc.TOC, parser TextSearchParser, parserMetadata ObjectMetadata) {

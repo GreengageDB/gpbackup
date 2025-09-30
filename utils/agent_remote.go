@@ -16,7 +16,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/iohelper"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
-	"github.com/greenplum-db/gpbackup/filepath"
+	"github.com/GreengageDB/gpbackup/filepath"
 	"github.com/pkg/errors"
 )
 
@@ -191,7 +191,7 @@ func StartGpbackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, oper
 		// we run these commands in sequence to ensure that any failure is critical; the last command ensures the agent process was successfully started
 		return fmt.Sprintf(`cat << HEREDOC > %[1]s && chmod +x %[1]s && ( nohup %[1]s &> /dev/null &)
 #!/bin/bash
-source %[2]s/greenplum_path.sh
+source %[2]s/greengage_path.sh
 %[2]s/bin/%s
 
 HEREDOC

@@ -8,8 +8,8 @@ import (
 
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
+	"github.com/GreengageDB/gpbackup/history"
 	"github.com/blang/semver"
-	"github.com/greenplum-db/gpbackup/history"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

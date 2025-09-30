@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/GreengageDB/gp-common-go-libs/operating"
-	"github.com/greenplum-db/gpbackup/toc"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"

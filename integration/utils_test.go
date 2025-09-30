@@ -9,9 +9,9 @@ import (
 
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
-	fp "github.com/greenplum-db/gpbackup/filepath"
-	"github.com/greenplum-db/gpbackup/testutils"
-	"github.com/greenplum-db/gpbackup/utils"
+	fp "github.com/GreengageDB/gpbackup/filepath"
+	"github.com/GreengageDB/gpbackup/testutils"
+	"github.com/GreengageDB/gpbackup/utils"
 
 	"golang.org/x/sys/unix"
 

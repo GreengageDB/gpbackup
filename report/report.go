@@ -14,10 +14,9 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/iohelper"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
+	"github.com/GreengageDB/gpbackup/history"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/blang/semver"
-	"github.com/greenplum-db/gpbackup/arenadata"
-	"github.com/greenplum-db/gpbackup/history"
-	"github.com/greenplum-db/gpbackup/utils"
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v2"
 )
@@ -160,7 +159,7 @@ func (report *Report) WriteBackupReportFile(reportFilename string, timestamp str
 	reportInfo = append(reportInfo,
 		LineInfo{Key: "segment count:", Value: fmt.Sprintf("%d", report.SegmentCount)})
 
-	_, err = fmt.Fprint(reportFile, "Greenplum Database Backup Report\n\n")
+	_, err = fmt.Fprint(reportFile, "Greengage Database Backup Report\n\n")
 	if err != nil {
 		gplog.Error("Unable to write backup report file %s", reportFilename)
 		return
@@ -185,7 +184,7 @@ func WriteRestoreReportFile(reportFilename string, backupTimestamp string, start
 	gprestoreCommandLine := strings.Join(os.Args, " ")
 	start, end, duration := GetDurationInfo(startTimestamp, operating.System.Now())
 
-	utils.MustPrintf(reportFile, "Greenplum Database Restore Report\n\n")
+	utils.MustPrintf(reportFile, "Greengage Database Restore Report\n\n")
 
 	reportInfo := make([]LineInfo, 0)
 	reportInfo = append(reportInfo,
@@ -294,14 +293,6 @@ func PrintObjectCounts(reportFile io.WriteCloser, objectCounts map[string]int) {
  * users will never use a +dev version in production.
  */
 func EnsureBackupVersionCompatibility(backupVersion string, restoreVersion string) {
-	if strings.Index(restoreVersion, "_arenadata") != -1 {
-		// arenadata build
-		if strings.Index(backupVersion, "_arenadata") != -1 {
-			arenadata.EnsureAdVersionCompatibility(backupVersion, restoreVersion)
-			backupVersion = arenadata.GetOriginalVersion(backupVersion)
-		}
-		restoreVersion = arenadata.GetOriginalVersion(restoreVersion)
-	}
 	backupSemVer, err := semver.Make(backupVersion)
 	gplog.FatalOnError(err)
 	restoreSemVer, err := semver.Make(restoreVersion)

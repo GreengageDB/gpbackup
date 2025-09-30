@@ -1,4 +1,4 @@
-module github.com/greenplum-db/gpbackup
+module github.com/GreengageDB/gpbackup
 
 go 1.20
 

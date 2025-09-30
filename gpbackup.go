@@ -5,15 +5,15 @@ package main
 import (
 	"os"
 
-	. "github.com/greenplum-db/gpbackup/backup"
-	"github.com/greenplum-db/gpbackup/options"
+	. "github.com/GreengageDB/gpbackup/backup"
+	"github.com/GreengageDB/gpbackup/options"
 	"github.com/spf13/cobra"
 )
 
 func main() {
 	var rootCmd = &cobra.Command{
 		Use:     "gpbackup",
-		Short:   "gpbackup is the parallel backup utility for Greenplum",
+		Short:   "gpbackup is the parallel backup utility for Greengage",
 		Args:    cobra.NoArgs,
 		Version: GetVersion(),
 		Run: func(cmd *cobra.Command, args []string) {

@@ -9,7 +9,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/iohelper"
-	"github.com/greenplum-db/gpbackup/options"
+	"github.com/GreengageDB/gpbackup/options"
 	"github.com/pkg/errors"
 )
 

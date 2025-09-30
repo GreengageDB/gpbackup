@@ -2,16 +2,16 @@
 
 We warmly welcome and greatly appreciate contributions from the
 community. By participating you agree to the [code of
-conduct](https://github.com/greenplum-db/gpbackup/blob/main/CODE-OF-CONDUCT.md).
+conduct](https://github.com/GreengageDB/gpbackup/blob/master/CODE-OF-CONDUCT.md).
 Overall, we follow GPDB's comprehensive contribution policy. Please
-refer to it [here](https://github.com/greenplum-db/gpdb#contributing)
+refer to it [here](https://github.com/GreengageDB/greengage#contributing)
 for details.
 
 ## Getting Started
 
 * Sign our [Contributor License Agreement](https://cla.vmware.com/cla/1/preview)
 * Fork the gpbackup repository on GitHub
-* Run `go get github.com/greenplum-db/gpbackup/...` and add your fork as a remote
+* Run `go get github.com/GreengageDB/gpbackup/...` and add your fork as a remote
 * Run `make depend` to install required dependencies
 * Follow the README to set up your environment and run the tests
 
@@ -54,9 +54,3 @@ Your contribution will be analyzed for product fit and engineering
 quality prior to merging. Your pull request is much more likely to be
 accepted if it is small and focused with a clear message that conveys
 the intent of your change.
-
-## Community
-
-Connect with Greenplum on:
-* [Slack](https://greenplum.slack.com/)
-* [Dev Google Group mailing list](https://groups.google.com/a/greenplum.org/forum/#!forum/gpdb-dev/join)

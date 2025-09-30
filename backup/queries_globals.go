@@ -10,8 +10,8 @@ import (
 
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
-	"github.com/greenplum-db/gpbackup/toc"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 )
 
 type SessionGUCs struct {
@@ -278,7 +278,7 @@ func GetResourceGroups[T ResourceGroupBefore7 | ResourceGroupAtLeast7](connectio
 		query = fmt.Sprintf(`%s %s;`, before7SelectClause, before7FromClause)
 	} else { // GPDB7+
 		// Resource groups were heavily reworked for GPDB7
-		// See: https://github.com/greenplum-db/gpdb/commit/483adea86b50c1759460a6265b3d8e3f4198d92e
+		// See: https://github.com/GreengageDB/greengage/commit/483adea86b50c1759460a6265b3d8e3f4198d92e
 		query = `
 			SELECT
 				g.oid       AS oid,

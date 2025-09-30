@@ -7,4 +7,4 @@
 ARG GPDB_IMAGE=hub.adsw.io/library/gpdb6_regress:latest
 FROM $GPDB_IMAGE
 
-COPY . /home/gpadmin/go/src/github.com/greenplum-db/gpbackup
+COPY . /home/gpadmin/go/src/github.com/greengage-db/gpbackup

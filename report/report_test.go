@@ -15,18 +15,18 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gp-common-go-libs/structmatcher"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
+	"github.com/GreengageDB/gpbackup/backup"
+	"github.com/GreengageDB/gpbackup/filepath"
+	"github.com/GreengageDB/gpbackup/history"
+	"github.com/GreengageDB/gpbackup/options"
+	"github.com/GreengageDB/gpbackup/testutils"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/blang/semver"
-	"github.com/greenplum-db/gpbackup/backup"
-	"github.com/greenplum-db/gpbackup/filepath"
-	"github.com/greenplum-db/gpbackup/history"
-	"github.com/greenplum-db/gpbackup/options"
-	"github.com/greenplum-db/gpbackup/testutils"
-	"github.com/greenplum-db/gpbackup/utils"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 	"gopkg.in/yaml.v2"
 
-	"github.com/greenplum-db/gpbackup/report"
+	"github.com/GreengageDB/gpbackup/report"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gbytes"
@@ -94,7 +94,7 @@ data file format: Single Data File Per Segment`,
 
 		It("writes a report for a successful backup", func() {
 			backupReport.WriteBackupReportFile("filename", timestamp, endtime, objectCounts, "")
-			Expect(buffer).To(Say(`Greenplum Database Backup Report
+			Expect(buffer).To(Say(`Greengage Database Backup Report
 
 timestamp key:         20170101010101
 gpdb version:          5\.0\.0 build test
@@ -124,7 +124,7 @@ types       1000`))
 		})
 		It("writes a report for a failed backup", func() {
 			backupReport.WriteBackupReportFile("filename", timestamp, endtime, objectCounts, "Cannot access /tmp/backups: Permission denied")
-			Expect(buffer).To(Say(`Greenplum Database Backup Report
+			Expect(buffer).To(Say(`Greengage Database Backup Report
 
 timestamp key:         20170101010101
 gpdb version:          5\.0\.0 build test
@@ -156,7 +156,7 @@ types       1000`))
 		It("writes a report without database size information", func() {
 			backupReport.DatabaseSize = ""
 			backupReport.WriteBackupReportFile("filename", timestamp, endtime, objectCounts, "")
-			Expect(buffer).To(Say(`Greenplum Database Backup Report
+			Expect(buffer).To(Say(`Greengage Database Backup Report
 
 timestamp key:         20170101010101
 gpdb version:          5\.0\.0 build test
@@ -245,7 +245,7 @@ incremental backup set:
 		It("writes a report for a failed restore", func() {
 			gplog.SetErrorCode(2)
 			report.WriteRestoreReportFile("filename", timestamp, restoreStartTime, connectionPool, restoreVersion, 3, 4, "Cannot access /tmp/backups: Permission denied")
-			Expect(buffer).To(Say(`Greenplum Database Restore Report
+			Expect(buffer).To(Say(`Greengage Database Restore Report
 
 timestamp key:           20170101010101
 gpdb version:            5\.0\.0 build test
@@ -266,7 +266,7 @@ restore error:           Cannot access /tmp/backups: Permission denied`))
 		It("writes a report for a successful restore", func() {
 			gplog.SetErrorCode(0)
 			report.WriteRestoreReportFile("filename", timestamp, restoreStartTime, connectionPool, restoreVersion, 3, 3, "")
-			Expect(buffer).To(Say(`Greenplum Database Restore Report
+			Expect(buffer).To(Say(`Greengage Database Restore Report
 
 timestamp key:           20170101010101
 gpdb version:            5\.0\.0 build test
@@ -286,7 +286,7 @@ restore status:          Success`))
 		It("writes a report for a successful restore with errors", func() {
 			gplog.SetErrorCode(1)
 			report.WriteRestoreReportFile("filename", timestamp, restoreStartTime, connectionPool, restoreVersion, 3, 3, "")
-			Expect(buffer).To(Say(`Greenplum Database Restore Report
+			Expect(buffer).To(Say(`Greengage Database Restore Report
 
 timestamp key:           20170101010101
 gpdb version:            5\.0\.0 build test
@@ -310,7 +310,7 @@ restore status:          Success but non-fatal errors occurred. See log file .+ 
 			}
 			report.WriteRestoreReportFile("filename", timestamp, restoreStartTime, connectionPool, restoreVersion, 3, 3, "")
 			Expect(stdout).To(Say("skipping report creation"))
-			Expect(buffer).ToNot(Say("Greenplum Database Restore Report"))
+			Expect(buffer).ToNot(Say("Greengage Database Restore Report"))
 			Expect(gplog.GetErrorCode()).To(Equal(0))
 
 		})
@@ -414,26 +414,6 @@ restore status:          Success but non-fatal errors occurred. See log file .+ 
 		It("Does not panic if gpbackup version equals gprestore version", func() {
 			report.EnsureBackupVersionCompatibility("0.1.0", "0.1.0")
 		})
-		It("Panics if gpbackup version is greater than gprestore version (arenadata build)", func() {
-			defer testhelper.ShouldPanicWithMessage("gprestore arenadata9 cannot restore a backup taken with gpbackup arenadata10; please use gprestore arenadata10 or later.")
-			report.EnsureBackupVersionCompatibility("1.21.0_arenadata10", "1.21.0_arenadata9")
-		})
-		It("Does not panic if gpbackup version is less than gprestore version (arenadata build)", func() {
-			report.EnsureBackupVersionCompatibility("1.21.0_arenadata9", "1.21.0_arenadata10")
-		})
-		It("Does not panic if gpbackup version equals gprestore version (arenadata build)", func() {
-			report.EnsureBackupVersionCompatibility("1.20.4_arenadata1", "1.20.4_arenadata1")
-		})
-		It("Does not panic if gpbackup version equals gprestore version (arenadata dev build)", func() {
-			report.EnsureBackupVersionCompatibility("1.20.4_arenadata2+dev.1.g768b7e0", "1.20.4_arenadata2+dev.1.g768b7e0")
-		})
-		It("Does not panic if gpbackup has upstream version, while gprestore has arenadata version", func() {
-			report.EnsureBackupVersionCompatibility("1.20.4", "1.20.4_arenadata2")
-		})
-		It("Panics if gpbackup has upstream version, gprestore has arenadata version and gpbackup version is greater", func() {
-			defer testhelper.ShouldPanicWithMessage("gprestore 1.20.4 cannot restore a backup taken with gpbackup 1.20.5; please use gprestore 1.20.5 or later.")
-			report.EnsureBackupVersionCompatibility("1.20.5", "1.20.4_arenadata2")
-		})
 	})
 	Describe("EnsureDatabaseVersionCompatibility", func() {
 		var restoreVersion dbconn.GPDBVersion
@@ -457,7 +437,7 @@ restore status:          Success but non-fatal errors occurred. See log file .+ 
 	})
 
 	Describe("Email-related functions", func() {
-		reportFileContents := []byte(`Greenplum Database Backup Report
+		reportFileContents := []byte(`Greengage Database Backup Report
 
 Timestamp Key: 20170101010101`)
 		contactsFileContents, _ := yaml.Marshal(report.ContactFile{
@@ -565,7 +545,7 @@ Content-Disposition: inline
 <html>
 <body>
 <pre style=\"font: monospace\">
-Greenplum Database Backup Report
+Greengage Database Backup Report
 
 Timestamp Key: 20170101010101
 </pre>
@@ -587,7 +567,7 @@ Content-Disposition: inline
 <html>
 <body>
 <pre style=\"font: monospace\">
-Greenplum Database Backup Report
+Greengage Database Backup Report
 
 Timestamp Key: 20170101010101
 </pre>

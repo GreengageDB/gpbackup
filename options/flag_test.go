@@ -4,7 +4,7 @@ import (
 	"flag"
 
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
-	"github.com/greenplum-db/gpbackup/options"
+	"github.com/GreengageDB/gpbackup/options"
 	"github.com/spf13/pflag"
 
 	. "github.com/onsi/ginkgo/v2"
