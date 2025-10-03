@@ -21,8 +21,8 @@ type RestorePlanEntry struct {
 
 const (
     BackupStatusInProgress = "In Progress"
-       BackupStatusSucceed = "Success"
-       BackupStatusFailed  = "Failure"
+	BackupStatusSucceed = "Success"
+	BackupStatusFailed  = "Failure"
 )
 
 type BackupConfig struct {
