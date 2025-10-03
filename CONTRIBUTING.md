@@ -9,7 +9,7 @@ for details.
 
 ## Getting Started
 
-* Sign our [Contributor License Agreement](https://cla.vmware.com/cla/1/preview)
+* Sign our [Contributor License Agreement](https://greengagedb.org/assets/pdf/ICLA.pdf)
 * Fork the gpbackup repository on GitHub
 * Run `go get github.com/GreengageDB/gpbackup/...` and add your fork as a remote
 * Run `make depend` to install required dependencies

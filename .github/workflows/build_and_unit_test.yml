@@ -90,4 +90,4 @@ jobs:
           docker run --rm
           --sysctl 'kernel.sem=500 1024000 200 4096'
           gpbackup:test
-          bash /home/gpadmin/go/src/github.com/greenplum-db/gpbackup/ci/scripts/run_gpbackup_tests.bash
+          bash /home/gpadmin/go/src/github.com/GreengageDB/gpbackup/ci/scripts/run_gpbackup_tests.bash

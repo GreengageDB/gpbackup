@@ -1,10 +1,7 @@
 # Supported base images:
-# centos: hub.adsw.io/library/gpdb6_regress:latest
-# rocky: hub.adsw.io/library/gpdb7_regress:latest
-# ubuntu: hub.adsw.io/library/gpdb6_u22:latest
-# ubuntu: hub.adsw.io/library/gpdb7_u22:latest
-# default image is centos
-ARG GPDB_IMAGE=hub.adsw.io/library/gpdb6_regress:latest
+# ggdb6: ghcr.io/greengagedb/greengage/ggdb6_ubuntu:latest
+# ggdb7: ghcr.io/greengagedb/greengage/ggdb7_ubuntu:latest
+ARG GPDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb6_ubuntu:latest
 FROM $GPDB_IMAGE
 
-COPY . /home/gpadmin/go/src/github.com/greengage-db/gpbackup
+COPY . /home/gpadmin/go/src/github.com/GreengageDB/gpbackup
