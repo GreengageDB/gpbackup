@@ -50,6 +50,8 @@ popd
 
 ### Test execution
 
+For how to run tests in a docker container, see: [ci/README.md](ci/README.md)
+
 **NOTE**: The integration and end_to_end tests require a running Greengage Database instance.
 
 To run all tests except end-to-end (linters, unit, and integration), use
