@@ -65,14 +65,14 @@ To run only integration tests
 make integration
 ```
 Integration test requirements
- - Running GPDB instance
- - GPDB's gpcloud extension
+ - Running GGDB instance
+ - GGDB's gpcloud extension
 ```bash
 make -C gpcontrib/gpcloud/ install
 ```
- - GPDB configured with `--with-perl`
+ - GGDB configured with `--with-perl`
 
-To run end to end tests (requires a running GPDB instance), use
+To run end to end tests (requires a running GGDB instance), use
 ```bash
 make end_to_end
 ```

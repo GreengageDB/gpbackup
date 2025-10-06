@@ -3,7 +3,7 @@
 We warmly welcome and greatly appreciate contributions from the
 community. By participating you agree to the [code of
 conduct](https://github.com/GreengageDB/gpbackup/blob/master/CODE-OF-CONDUCT.md).
-Overall, we follow GPDB's comprehensive contribution policy. Please
+Overall, we follow GGDB's comprehensive contribution policy. Please
 refer to it [here](https://github.com/GreengageDB/greengage#contributing)
 for details.
 

@@ -83,7 +83,7 @@ jobs:
           push: false
           tags: gpbackup:test
           build-args: |
-            GPDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb${{ matrix.gg_version }}_ubuntu:latest
+            GGDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb${{ matrix.gg_version }}_ubuntu:latest
 
       - name: Test
         run: >
