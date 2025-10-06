@@ -5,9 +5,9 @@ import (
 
 	"github.com/GreengageDB/gp-common-go-libs/structmatcher"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
-	"github.com/greenplum-db/gpbackup/backup"
-	"github.com/greenplum-db/gpbackup/options"
-	"github.com/greenplum-db/gpbackup/testutils"
+	"github.com/GreengageDB/gpbackup/backup"
+	"github.com/GreengageDB/gpbackup/options"
+	"github.com/GreengageDB/gpbackup/testutils"
 	"github.com/lib/pq"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -379,8 +379,7 @@ PARTITION BY LIST (gender)
 		})
 		PIt("returns a value for a partition definition for a table with a negative partition value", func() {
 			// Pend test until this fix makes it into an RC
-			// this test exercises a corner case bug that was fixed in GPDB6:
-			// https://github.com/greenplum-db/gpdb/pull/13330
+			// this test exercises a corner case bug that was fixed in GPDB6.
 			testutils.SkipIfBefore6(connectionPool)
 			testhelper.AssertQueryRuns(connectionPool, `CREATE TABLE public.part_table (id int)
 DISTRIBUTED BY (id)

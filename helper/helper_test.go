@@ -7,13 +7,13 @@ import (
 	"os"
 	"strings"
 
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/utils"
 	"golang.org/x/sys/unix"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/greenplum-db/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/pkg/errors"
 )
 

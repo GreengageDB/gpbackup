@@ -3,7 +3,7 @@
 package main
 
 import (
-	. "github.com/greenplum-db/gpbackup/helper"
+	. "github.com/GreengageDB/gpbackup/helper"
 )
 
 func main() {

@@ -13,12 +13,12 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
-	"github.com/greenplum-db/gpbackup/filepath"
-	"github.com/greenplum-db/gpbackup/history"
-	"github.com/greenplum-db/gpbackup/options"
-	"github.com/greenplum-db/gpbackup/report"
-	"github.com/greenplum-db/gpbackup/toc"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/filepath"
+	"github.com/GreengageDB/gpbackup/history"
+	"github.com/GreengageDB/gpbackup/options"
+	"github.com/GreengageDB/gpbackup/report"
+	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -102,7 +102,7 @@ func DoSetup() {
 
 	gplog.Info("gpbackup version = %s", backupConfig.BackupVersion)
 	gplog.Info("gprestore version = %s", GetVersion())
-	gplog.Info("Greenplum Database Version = %s", connectionPool.Version.VersionString)
+	gplog.Info("Greengage Database Version = %s", connectionPool.Version.VersionString)
 
 	BackupConfigurationValidation()
 	metadataFilename := globalFPInfo.GetMetadataFilePath()

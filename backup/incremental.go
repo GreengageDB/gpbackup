@@ -6,10 +6,10 @@ import (
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
-	"github.com/greenplum-db/gpbackup/history"
-	"github.com/greenplum-db/gpbackup/options"
-	"github.com/greenplum-db/gpbackup/toc"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/history"
+	"github.com/GreengageDB/gpbackup/options"
+	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/pkg/errors"
 )
 

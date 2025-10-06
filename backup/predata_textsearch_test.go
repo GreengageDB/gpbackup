@@ -1,9 +1,9 @@
 package backup_test
 
 import (
-	"github.com/greenplum-db/gpbackup/backup"
-	"github.com/greenplum-db/gpbackup/testutils"
-	"github.com/greenplum-db/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/backup"
+	"github.com/GreengageDB/gpbackup/testutils"
+	"github.com/GreengageDB/gpbackup/toc"
 
 	. "github.com/onsi/ginkgo/v2"
 )

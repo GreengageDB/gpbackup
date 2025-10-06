@@ -10,11 +10,11 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
-	"github.com/greenplum-db/gpbackup/backup"
-	"github.com/greenplum-db/gpbackup/history"
-	"github.com/greenplum-db/gpbackup/options"
-	"github.com/greenplum-db/gpbackup/restore"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/backup"
+	"github.com/GreengageDB/gpbackup/history"
+	"github.com/GreengageDB/gpbackup/options"
+	"github.com/GreengageDB/gpbackup/restore"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/jackc/pgconn"
 
 	. "github.com/onsi/ginkgo/v2"

@@ -32,7 +32,7 @@ options:
 ```
 
 ## Available plugins
-[gpbackup_s3_plugin](https://github.com/greenplum-db/gpbackup-s3-plugin): Allows users to back up their Greenplum Database to Amazon S3.
+[gpbackup_s3_plugin](https://github.com/GreengageDB/gpbackup-s3-plugin): Allows users to back up their Greengage Database to Amazon S3.
 
 ## Developing plugins
 
@@ -86,7 +86,7 @@ These arguments are passed to the plugin by gpbackup/gprestore.
 [scope](#scope): The scope at which this plugin's setup/cleanup hook is invoked. Values for this parameter are "coordinator", "segment_host" and "segment" (with "master" being a supported synonym for "coordinator" for backwards compatibility). Each such hook is invoked at each of these scopes. For eg. If we have a cluster with a coordinator on 1 coordinator host and 2 segment hosts each with 4 segments, each of these hooks will be executed in the following manner: There will be 1 invocation
 of each method with the parameter "coordinator", offering a chance to perform some setup/cleanup to be done *once* per cluster. Creation/Deletion of a remote directory is a perfect candidate here. Furthermore, there will be 1 invocation for each of these commands for each of the segment hosts, offering a chance to establish/teardown connectivity to a remote storage provider such as S3 for instance. Finally, there will be 1 invocation for each of these commands for each of the segments.
 
-Note: "segment_host" and "segment" are both provided as a single physical segment host may house multiple segment processes in Greenplum. There maybe some setup or cleanup required at the segment host level as compared to each segment process.
+Note: "segment_host" and "segment" are both provided as a single physical segment host may house multiple segment processes in Greengage. There maybe some setup or cleanup required at the segment host level as compared to each segment process.
 
 [contentID](#contentID): The contentID corresponding to the scope. This is passed in only for the "coordinator" and "segment" scopes.
 
@@ -347,14 +347,6 @@ _e.g.:_ gpbackup_s3_plugin version 1.1.0+dev.2.g16b18a1
 test_plugin --version
 ```
 
-
-## Plugin flow within gpbackup and gprestore
-### Backup Plugin Flow
-![Backup Plugin Flow](https://github.com/greenplum-db/gpbackup/wiki/backup_plugin_flow.png)
-
-### Restore Plugin Flow
-![Restore Plugin Flow](https://github.com/greenplum-db/gpbackup/wiki/restore_plugin_flow.png)
-
 ## Custom yaml file
 Parameters specific to a plugin can be specified through the plugin configuration yaml file. The _executablepath_ key is required and used by gpbackup and gprestore. Additional arguments should be specified under the _options_ keyword. A path to this file is passed as the first argument to every API command. Options and valid arguments should be documented by the plugin.
 
@@ -366,12 +358,12 @@ options:
   aws_access_key_id: ...
   aws_secret_access_key: ...
   bucket: my_bucket_name
-  folder: greenplum_backups
+  folder: greengage_backups
 ```
 
 ## Verification using the gpbackup plugin API test bench
 
-We provide tests to ensure your plugin will work with gpbackup and gprestore. If the tests succesfully run your plugin, you can be confident that your plugin will work with the utilities. The tests are located [here](https://github.com/greenplum-db/gpbackup/blob/coordinator/plugins/plugin_test.sh).
+We provide tests to ensure your plugin will work with gpbackup and gprestore. If the tests succesfully run your plugin, you can be confident that your plugin will work with the utilities. The tests are located [here](https://github.com/GreengageDB/gpbackup/blob/master/plugins/plugin_test.sh).
 
 Run the test bench script using:
 

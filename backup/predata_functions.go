@@ -10,8 +10,8 @@ import (
 	"fmt"
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
-	"github.com/greenplum-db/gpbackup/toc"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 )
 
 func PrintCreateFunctionStatement(metadataFile *utils.FileWithByteCount, objToc *toc.TOC, funcDef Function, funcMetadata ObjectMetadata) {

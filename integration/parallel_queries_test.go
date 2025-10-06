@@ -7,9 +7,9 @@ import (
 
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
-	"github.com/greenplum-db/gpbackup/options"
-	"github.com/greenplum-db/gpbackup/restore"
-	"github.com/greenplum-db/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/options"
+	"github.com/GreengageDB/gpbackup/restore"
+	"github.com/GreengageDB/gpbackup/toc"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

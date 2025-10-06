@@ -10,8 +10,8 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
-	"github.com/greenplum-db/gpbackup/filepath"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/filepath"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/pkg/errors"
 
 	. "github.com/onsi/ginkgo/v2"

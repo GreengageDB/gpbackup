@@ -11,9 +11,9 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/iohelper"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
-	"github.com/greenplum-db/gpbackup/filepath"
-	"github.com/greenplum-db/gpbackup/testutils"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/filepath"
+	"github.com/GreengageDB/gpbackup/testutils"
+	"github.com/GreengageDB/gpbackup/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )

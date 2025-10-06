@@ -7,11 +7,11 @@ import (
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
+	"github.com/GreengageDB/gpbackup/backup"
+	"github.com/GreengageDB/gpbackup/filepath"
+	"github.com/GreengageDB/gpbackup/testutils"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/blang/semver"
-	"github.com/greenplum-db/gpbackup/backup"
-	"github.com/greenplum-db/gpbackup/filepath"
-	"github.com/greenplum-db/gpbackup/testutils"
-	"github.com/greenplum-db/gpbackup/utils"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

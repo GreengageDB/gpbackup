@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/utils"
 	"gopkg.in/yaml.v2"
 )
 

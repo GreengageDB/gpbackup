@@ -2,7 +2,7 @@ package restore
 
 import (
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
-	"github.com/greenplum-db/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/toc"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
-	"github.com/greenplum-db/gpbackup/toc"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 )
 
 /*

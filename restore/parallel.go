@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
-	"github.com/greenplum-db/gpbackup/options"
-	"github.com/greenplum-db/gpbackup/toc"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/options"
+	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 )
 
 var (
@@ -230,7 +230,7 @@ func ExecuteStatements(statements []toc.StatementWithType, progressBar utils.Pro
 }
 
 /*
- *   There is an existing bug in Greenplum where creating indexes in parallel
+ *   There is an existing bug in Greengage where creating indexes in parallel
  *   on an AO table that didn't have any indexes previously can cause
  *   deadlock.
  *

@@ -15,12 +15,12 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
-	"github.com/greenplum-db/gpbackup/filepath"
-	"github.com/greenplum-db/gpbackup/history"
-	"github.com/greenplum-db/gpbackup/options"
-	"github.com/greenplum-db/gpbackup/report"
-	"github.com/greenplum-db/gpbackup/toc"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/filepath"
+	"github.com/GreengageDB/gpbackup/history"
+	"github.com/GreengageDB/gpbackup/options"
+	"github.com/GreengageDB/gpbackup/report"
+	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -50,7 +50,7 @@ func DoSetup() {
 	timestamp := history.CurrentTimestamp()
 	createBackupLockFile(timestamp)
 	initializeConnectionPool(timestamp)
-	gplog.Info("Greenplum Database Version = %s", connectionPool.Version.VersionString)
+	gplog.Info("Greengage Database Version = %s", connectionPool.Version.VersionString)
 
 	gplog.Info("Starting backup of database %s", MustGetFlagString(options.DBNAME))
 	opts, err := options.NewOptions(cmdFlags)

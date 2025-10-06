@@ -9,7 +9,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
-	"github.com/greenplum-db/gpbackup/utils"
+	"github.com/GreengageDB/gpbackup/utils"
 	"gopkg.in/cheggaaa/pb.v1"
 
 	. "github.com/onsi/ginkgo/v2"

@@ -24,12 +24,12 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gp-common-go-libs/structmatcher"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
+	"github.com/GreengageDB/gpbackup/backup"
+	"github.com/GreengageDB/gpbackup/filepath"
+	"github.com/GreengageDB/gpbackup/testutils"
+	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/blang/semver"
-	"github.com/greenplum-db/gpbackup/backup"
-	"github.com/greenplum-db/gpbackup/filepath"
-	"github.com/greenplum-db/gpbackup/testutils"
-	"github.com/greenplum-db/gpbackup/toc"
-	"github.com/greenplum-db/gpbackup/utils"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 
@@ -127,13 +127,13 @@ func buildOldBinaries(version string) (string, string) {
 	mustRunCommand(command)
 	command = exec.Command("dep", "ensure")
 	mustRunCommand(command)
-	gpbackupOldPath, err := Build("github.com/greenplum-db/gpbackup",
+	gpbackupOldPath, err := Build("github.com/GreengageDB/gpbackup",
 		"-tags", "gpbackup", "-ldflags",
-		fmt.Sprintf("-X github.com/greenplum-db/gpbackup/backup.version=%s", version))
+		fmt.Sprintf("-X github.com/GreengageDB/gpbackup/backup.version=%s", version))
 	Expect(err).ShouldNot(HaveOccurred())
-	gpbackupHelperOldPath, err := Build("github.com/greenplum-db/gpbackup",
+	gpbackupHelperOldPath, err := Build("github.com/GreengageDB/gpbackup",
 		"-tags", "gpbackup_helper", "-ldflags",
-		fmt.Sprintf("-X github.com/greenplum-db/gpbackup/helper.version=%s", version))
+		fmt.Sprintf("-X github.com/GreengageDB/gpbackup/helper.version=%s", version))
 	Expect(err).ShouldNot(HaveOccurred())
 	command = exec.Command("git", "checkout", "-", "-f")
 	mustRunCommand(command)

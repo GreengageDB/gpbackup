@@ -1,6 +1,6 @@
-# Greenplum Backup
+# Greengage Backup
 
-`gpbackup` and `gprestore` are Go utilities for performing Greenplum Database backups.  They are still currently in active development.
+`gpbackup` and `gprestore` are Go utilities for performing Greengage Database backups.  They are still currently in active development.
 
 ## Pre-Requisites
 
@@ -10,10 +10,10 @@ The project also has a dependency on `sqlite3`. This is installed by default on 
 ## Downloading
 
 ```bash
-go get github.com/greenplum-db/gpbackup/...
+go get github.com/GreengageDB/gpbackup/...
 ```
 
-This will place the code in `$GOPATH/github.com/greenplum-db/gpbackup`.
+This will place the code in `$GOPATH/github.com/GreengageDB/gpbackup/`.
 
 ## Building and installing binaries
 
@@ -26,7 +26,7 @@ make build
 
 The `build` target will put the `gpbackup` and `gprestore` binaries in `$HOME/go/bin`.
 
-This will also attempt to copy `gpbackup_helper` to the greenplum segments (retrieving hostnames from `gp_segment_configuration`). Pay attention to the output as it will indicate whether this operation was successful.
+This will also attempt to copy `gpbackup_helper` to the greengage segments (retrieving hostnames from `gp_segment_configuration`). Pay attention to the output as it will indicate whether this operation was successful.
 
 `make build_linux` is for cross compiling on macOS, and the target is Linux.
 
@@ -36,7 +36,7 @@ This will also attempt to copy `gpbackup_helper` to the greenplum segments (retr
 
 ### Test setup
 
-Required for Greenplum Database 6 or higher, several tests require the `dummy_seclabel` Greenplum contrib module. This module exists only to support regression testing of the SECURITY LABEL statement. It is not intended to be used in production. Use the following commands to install the module.
+Required for Greengage Database 6 or higher, several tests require the `dummy_seclabel` Greengage contrib module. This module exists only to support regression testing of the SECURITY LABEL statement. It is not intended to be used in production. Use the following commands to install the module.
 
 ```bash
 pushd $(find ~/workspace/gpdb -name dummy_seclabel)
@@ -50,7 +50,9 @@ popd
 
 ### Test execution
 
-**NOTE**: The integration and end_to_end tests require a running Greenplum Database instance.
+For how to run tests in a docker container, see: [ci/README.md](ci/README.md)
+
+**NOTE**: The integration and end_to_end tests require a running Greengage Database instance.
 
 To run all tests except end-to-end (linters, unit, and integration), use
 ```bash
@@ -65,14 +67,14 @@ To run only integration tests
 make integration
 ```
 Integration test requirements
- - Running GPDB instance
- - GPDB's gpcloud extension
+ - Running GGDB instance
+ - GGDB's gpcloud extension
 ```bash
 make -C gpcontrib/gpcloud/ install
 ```
- - GPDB configured with `--with-perl`
+ - GGDB configured with `--with-perl`
 
-To run end to end tests (requires a running GPDB instance), use
+To run end to end tests (requires a running GGDB instance), use
 ```bash
 make end_to_end
 ```
@@ -116,13 +118,9 @@ To remove the compiled binaries and other generated files, run
 make clean
 ```
 
-# More Information
-
-The Greenplum Backup [wiki](https://github.com/greenplum-db/gpbackup/wiki) for this project has several articles providing a more in-depth explanation of certain aspects of gpbackup and gprestore.
-
 # How to Contribute
 
-See [CONTRIBUTING.md file](https://github.com/greenplum-db/gpbackup/blob/master/CONTRIBUTING.md).
+See [CONTRIBUTING.md file](https://github.com/GreengageDB/gpbackup/blob/master/CONTRIBUTING.md).
 
 # Code Formatting
 

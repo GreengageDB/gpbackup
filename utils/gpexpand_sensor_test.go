@@ -6,9 +6,9 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/blang/vfs"
 	"github.com/blang/vfs/memfs"
-	"github.com/greenplum-db/gpbackup/utils"
 	"github.com/pkg/errors"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -137,14 +137,14 @@ var _ = Describe("gpexpand_sensor", func() {
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(Equal("gpexpand sensor requires a connection to the postgres database"))
 			})
-			It("returns an error when supplied with Greenplum version < 6", func() {
+			It("returns an error when supplied with Greengage version < 6", func() {
 				testhelper.SetDBVersion(connectionPool, "5.3.0")
 				gpexpandSensor := utils.NewGpexpandSensor(memoryfs, connectionPool)
 
 				_, err := gpexpandSensor.IsGpexpandRunning()
 
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(Equal("gpexpand sensor requires a connection to Greenplum version >= 6"))
+				Expect(err.Error()).To(Equal("gpexpand sensor requires a connection to Greengage version >= 6"))
 			})
 		})
 	})
