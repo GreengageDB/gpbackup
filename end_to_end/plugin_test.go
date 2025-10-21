@@ -527,15 +527,13 @@ var _ = Describe("End to End plugin tests", func() {
 
 				timestamp := "20251021073531"
 				gprestore(gprestorePath, restoreHelperPath, timestamp,
-					"--redirect-db", "restoredb", "--metadata-only", "--resize-cluster",
-					"--plugin-config", "/tmp/plugin_dest/20251021/20251021073531/gpbackup_20251021073531_plugin_config.yaml")
+					"--redirect-db", "restoredb", "--resize-cluster", "--metadata-only",
+					"--plugin-config", examplePluginTestConfig)
 
-				gprestoreCmd := exec.Command(gprestorePath, "--timestamp", timestamp, "--copy-queue-size", "1",
-					"--redirect-db", "restoredb", "--data-only", "--resize-cluster", "--debug", "--exclude-table", "a.b",
-					"--plugin-config", "/tmp/plugin_dest/20251021/20251021073531/gpbackup_20251021073531_plugin_config.yaml")
-
-				_, err := gprestoreCmd.CombinedOutput()
-				Expect(err).ToNot(HaveOccurred())
+				gprestore(gprestorePath, restoreHelperPath, timestamp,
+					"--redirect-db", "restoredb", "--resize-cluster", "--data-only",
+					"--plugin-config", examplePluginTestConfig,
+					"--exclude-table", "dummy_schema.dummy_table")
 
 				assertArtifactsCleaned(timestamp)
 
