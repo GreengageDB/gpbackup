@@ -528,12 +528,10 @@ var _ = Describe("End to End plugin tests", func() {
 				timestamp := "20251021073531"
 				gprestore(gprestorePath, restoreHelperPath, timestamp,
 					"--redirect-db", "restoredb", "--metadata-only", "--resize-cluster",
-					// "--plugin-config", examplePluginTestConfig)
 					"--plugin-config", "/tmp/plugin_dest/20251021/20251021073531/gpbackup_20251021073531_plugin_config.yaml")
 
 				gprestoreCmd := exec.Command(gprestorePath, "--timestamp", timestamp, "--copy-queue-size", "1",
 					"--redirect-db", "restoredb", "--data-only", "--resize-cluster", "--debug", "--exclude-table", "a.b",
-					// "--plugin-config", examplePluginTestConfig)
 					"--plugin-config", "/tmp/plugin_dest/20251021/20251021073531/gpbackup_20251021073531_plugin_config.yaml")
 
 				_, err := gprestoreCmd.CombinedOutput()

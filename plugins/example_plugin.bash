@@ -95,7 +95,9 @@ restore_data_subset() {
   timestamp_dir=`basename $(dirname "$2")`
   timestamp_day_dir=${timestamp_dir%??????}
   cat "$3" | grep -oP " (\d+) (\d+)" | while read -r offset_start offset_end; do
-    dd if="/tmp/plugin_dest/$timestamp_day_dir/$timestamp_dir/$filename" ibs=1 skip="$offset_start" count="$(($offset_end-$offset_start))" 2>/dev/null
+    if [ $offset_start -lt $offset_end ]; then
+      dd if="/tmp/plugin_dest/$timestamp_day_dir/$timestamp_dir/$filename" ibs=1 skip="$offset_start" count="$(($offset_end-$offset_start))" 2>/dev/null
+    fi
   done
 }
 
