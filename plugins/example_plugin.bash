@@ -89,6 +89,16 @@ restore_data() {
 	cat /tmp/plugin_dest/$timestamp_day_dir/$timestamp_dir/$filename
 }
 
+restore_data_subset() {
+  echo "restore_data_subset $1 $2 $3" >> /tmp/plugin_out.txt
+  filename=`basename "$2"`
+  timestamp_dir=`basename $(dirname "$2")`
+  timestamp_day_dir=${timestamp_dir%??????}
+  cat "$3" | grep -oP " (\d+) (\d+)" | while read -r offset_start offset_end; do
+    dd if="/tmp/plugin_dest/$timestamp_day_dir/$timestamp_dir/$filename" ibs=1 skip="$offset_start" count="$(($offset_end-$offset_start))" 2>/dev/null
+  done
+}
+
 delete_backup() {
   echo "delete_backup $1 $2" >> /tmp/plugin_out.txt
   timestamp_day_dir=${2%??????}
