@@ -520,6 +520,17 @@ var _ = Describe("End to End plugin tests", func() {
 				assertArtifactsCleaned(timestamp)
 			})
 			It("runs gprestore to smaller cluster with subset", func() {
+				subsetPluginTestConfig := "/tmp/test_subset_plugin_config.yaml"
+				subsetPluginTestConfigContents := fmt.Sprintf(`executablepath: %s
+options:
+  restore_subset: "on"`, examplePluginExec)
+				f, err := os.Create(subsetPluginTestConfig)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = f.WriteString(subsetPluginTestConfigContents)
+				Expect(err).ToNot(HaveOccurred())
+				err = f.Close()
+				Expect(err).ToNot(HaveOccurred())
+
 				pluginBackupDirectory := `/tmp/plugin_dest`
 				os.Mkdir(pluginBackupDirectory, 0777)
 				command := exec.Command("tar", "-xzf", "resources/5-segment-db-subset.tar.gz", "-C", pluginBackupDirectory)
@@ -528,11 +539,11 @@ var _ = Describe("End to End plugin tests", func() {
 				timestamp := "20251021073531"
 				gprestore(gprestorePath, restoreHelperPath, timestamp,
 					"--redirect-db", "restoredb", "--resize-cluster", "--metadata-only",
-					"--plugin-config", examplePluginTestConfig)
+					"--plugin-config", subsetPluginTestConfig)
 
 				gprestore(gprestorePath, restoreHelperPath, timestamp,
 					"--redirect-db", "restoredb", "--resize-cluster", "--data-only",
-					"--plugin-config", examplePluginTestConfig,
+					"--plugin-config", subsetPluginTestConfig,
 					"--exclude-table", "dummy_schema.dummy_table")
 
 				assertArtifactsCleaned(timestamp)
