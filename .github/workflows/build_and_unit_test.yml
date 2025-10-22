@@ -5,7 +5,6 @@ on:
     branches: [ master ]
   pull_request:
     branches: [ master ]
-    types: [ opened, synchronize, reopened, edited, ready_for_review ]
 
 # Concurrency control to cancel previous runs on new push to same PR/branch
 concurrency:
