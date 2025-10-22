@@ -166,7 +166,7 @@ func (*restoreMockHelperImpl) doRestoreAgentCleanup() {
 	// This was intentionaly left blank to support the IRestoreHelper interface
 }
 
-func (h *restoreMockHelperImpl) getRestoreDataReader(fileToRead string, objToc *toc.SegmentTOC, oidList []int) (IRestoreReader, error) {
+func (h *restoreMockHelperImpl) getRestoreDataReader(fileToRead string, objToc *toc.SegmentTOC, oidList []int, batch int) (IRestoreReader, error) {
 	Expect(h.restoreData).ToNot(BeNil())
 	return h.restoreData, nil
 }
