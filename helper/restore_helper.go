@@ -7,7 +7,6 @@ import (
 	errorsStd "errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path"
@@ -208,7 +207,7 @@ type IRestoreHelper interface {
 	createPipe(pipe string) error
 	closeAndDeletePipe(tableOid int, batchNum int)
 
-	getRestoreDataReader(fileToRead string, objToc *toc.SegmentTOC, oidList []int) (IRestoreReader, error)
+	getRestoreDataReader(fileToRead string, objToc *toc.SegmentTOC, oidList []int, batch int) (IRestoreReader, error)
 	getRestorePipeWriter(currentPipe string) (*bufio.Writer, *os.File, error)
 	checkForSkipFile(pipeFile string, tableOid int) bool
 }
@@ -286,7 +285,7 @@ func doRestoreAgentInternal(restoreHelper IRestoreHelper) error {
 			tocEntries[contentToRestore] = segmentTOC[contentToRestore].DataEntries
 
 			filename := replaceContentInFilename(*dataFile, contentToRestore)
-			readers[contentToRestore], err = restoreHelper.getRestoreDataReader(filename, segmentTOC[contentToRestore], oidList)
+			readers[contentToRestore], err = restoreHelper.getRestoreDataReader(filename, segmentTOC[contentToRestore], oidList, b)
 			if readers[contentToRestore] != nil {
 				// NOTE: If we reach here with batches > 1, there will be
 				// *origSize / *destSize (N old segments / N new segments)
@@ -368,7 +367,7 @@ func doRestoreAgentInternal(restoreHelper IRestoreHelper) error {
 				// We pre-create readers above for the sake of not re-opening SDF readers.  For MDF we can't
 				// re-use them but still having them in a map simplifies overall code flow.  We repeatedly assign
 				// to a map entry here intentionally.
-				readers[contentToRestore], err = restoreHelper.getRestoreDataReader(filename, nil, nil)
+				readers[contentToRestore], err = restoreHelper.getRestoreDataReader(filename, nil, nil, 0)
 				if err != nil {
 					logError(fmt.Sprintf("Oid: %d, Batch %d: Error encountered getting restore data reader: %v", tableOid, batchNum, err))
 					return err
@@ -571,7 +570,7 @@ func (RestoreHelper) getOidWithBatchListFromFile(oidFileName string) ([]oidWithB
 	return oidList, nil
 }
 
-func (RestoreHelper) getRestoreDataReader(fileToRead string, objToc *toc.SegmentTOC, oidList []int) (IRestoreReader, error) {
+func (RestoreHelper) getRestoreDataReader(fileToRead string, objToc *toc.SegmentTOC, oidList []int, batch int) (IRestoreReader, error) {
 	var readHandle io.Reader
 	var seekHandle io.ReadSeeker
 	var isSubset bool
@@ -580,7 +579,7 @@ func (RestoreHelper) getRestoreDataReader(fileToRead string, objToc *toc.Segment
 	restoreReader := new(RestoreReader)
 
 	if *pluginConfigFile != "" {
-		pluginCmd, readHandle, isSubset, err = startRestorePluginCommand(fileToRead, objToc, oidList)
+		pluginCmd, readHandle, isSubset, err = startRestorePluginCommand(fileToRead, objToc, oidList, batch)
 		restoreReader.pluginCmd = pluginCmd
 		if isSubset {
 			// Reader that operates on subset data
@@ -701,7 +700,7 @@ func (p PluginCmd) errLog() {
 	}
 }
 
-func startRestorePluginCommand(fileToRead string, objToc *toc.SegmentTOC, oidList []int) (IPluginCmd, io.Reader, bool, error) {
+func startRestorePluginCommand(fileToRead string, objToc *toc.SegmentTOC, oidList []int, batch int) (IPluginCmd, io.Reader, bool, error) {
 	isSubset := false
 	pluginConfig, err := utils.ReadPluginConfig(*pluginConfigFile)
 	if err != nil {
@@ -710,7 +709,11 @@ func startRestorePluginCommand(fileToRead string, objToc *toc.SegmentTOC, oidLis
 	}
 	cmdStr := ""
 	if objToc != nil && getSubsetFlag(fileToRead, pluginConfig) {
-		offsetsFile, _ := ioutil.TempFile("/tmp", "gprestore_offsets_")
+		offsetsFile, err := utils.OpenFileForWrite(fmt.Sprintf("%s_%d", utils.GetOffsetsFilename(*pipeFile), batch))
+		if err != nil {
+			logError("Encountered error creating offsets file: %v", err)
+			return nil, nil, false, err
+		}
 		defer func() {
 			offsetsFile.Close()
 		}()

@@ -269,6 +269,14 @@ func DoCleanup() {
 		}
 	}
 
+	offsetsFiles, _ := filepath.Glob(utils.GetOffsetsFilename(*pipeFile) + "*")
+	for _, offsetsFile := range offsetsFiles {
+		err := utils.RemoveFileIfExists(offsetsFile)
+		if err != nil {
+			logVerbose("Encountered error during cleanup offset files: %v", err)
+		}
+	}
+
 	skipFiles, _ := filepath.Glob(utils.GetSkipFilename(*pipeFile) + "*")
 	for _, skipFile := range skipFiles {
 		err := utils.RemoveFileIfExists(skipFile)

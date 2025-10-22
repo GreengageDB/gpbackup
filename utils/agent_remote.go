@@ -378,6 +378,10 @@ func GetErrorFilename(pipeFile string) string {
 	return regexp.MustCompile(`_pipe(\d*)$`).ReplaceAllString(pipeFile, "_error$1")
 }
 
+func GetOffsetsFilename(pipeFile string) string {
+	return regexp.MustCompile(`_pipe(\d*)$`).ReplaceAllString(pipeFile, "_offsets$1")
+}
+
 func GetSkipFilename(pipeFile string) string {
 	return regexp.MustCompile(`_pipe(\d*)$`).ReplaceAllString(pipeFile, "_skip$1")
 }
