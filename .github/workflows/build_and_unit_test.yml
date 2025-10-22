@@ -51,6 +51,7 @@ jobs:
     name: Regression tests on Greengage ${{ matrix.gg_version }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         gg_version: [6, 7]
 
