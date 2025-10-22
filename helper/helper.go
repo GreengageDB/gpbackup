@@ -273,7 +273,7 @@ func DoCleanup() {
 	for _, offsetsFile := range offsetsFiles {
 		err := utils.RemoveFileIfExists(offsetsFile)
 		if err != nil {
-			logVerbose("Encountered error during cleanup offset files: %v", err)
+			logVerbose("Encountered error during cleanup offsets files: %v", err)
 		}
 	}
 

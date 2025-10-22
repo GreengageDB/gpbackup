@@ -296,7 +296,7 @@ func assertArtifactsCleaned(timestamp string) {
 		errorFile := utils.GetErrorFilename(pipeFile)
 		skipFile := utils.GetSkipFilename(pipeFile)
 
-		return fmt.Sprintf("! ls %s* && ! ls %s* && ! ls %s* && ! ls %s* && ! ls %s* && ! ls %s*", errorFile, offsetsFile, skipFile, oidFile, scriptFile, pipeFile)
+		return fmt.Sprintf("! ls %s* && ! ls %s* && ! ls %s* && ! ls %s* && ! ls %s* && ! ls %s*", errorFile, skipFile, oidFile, scriptFile, pipeFile, offsetsFile)
 	}
 	remoteOutput := backupCluster.GenerateAndExecuteCommand(description, cluster.ON_SEGMENTS|cluster.INCLUDE_COORDINATOR, cleanupFunc)
 	if remoteOutput.NumErrors != 0 {
