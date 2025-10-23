@@ -467,7 +467,32 @@ func PrintCreateViewStatement(metadataFile *utils.FileWithByteCount, objToc *toc
 	section, entry := view.GetMetadataEntry()
 	tier := globalTierMap[view.GetUniqueID()]
 	objToc.AddMetadataEntry(section, entry, start, metadataFile.ByteCount, tier)
-	PrintObjectMetadata(metadataFile, objToc, viewMetadata, view, "", tier)
+	PrintPostCreateViewStatements(metadataFile, objToc, view, viewMetadata, tier)
+}
+
+/*
+ * This function prints additional statements that come after the CREATE VIEW statement.
+ */
+func PrintPostCreateViewStatements(metadataFile *utils.FileWithByteCount, objToc *toc.TOC, view View, tableMetadata ObjectMetadata, tier []uint32) {
+	PrintObjectMetadata(metadataFile, objToc, tableMetadata, view, "", tier)
+	statements := make([]string, 0)
+	for _, att := range view.ColumnDefs {
+		if att.Comment != "" {
+			escapedComment := utils.EscapeSingleQuotes(att.Comment)
+			statements = append(statements, fmt.Sprintf("COMMENT ON COLUMN %s.%s IS '%s';", view.FQN(), att.Name, escapedComment))
+		}
+		if len(att.Privileges) > 0 {
+			columnMetadata := ObjectMetadata{Privileges: getColumnACL(att.Privileges), Owner: tableMetadata.Owner}
+			columnPrivileges := columnMetadata.GetPrivilegesStatements(view.FQN(), toc.OBJ_COLUMN, att.Name)
+			statements = append(statements, strings.TrimSpace(columnPrivileges))
+		}
+		if att.SecurityLabel != "" {
+			escapedLabel := utils.EscapeSingleQuotes(att.SecurityLabel)
+			statements = append(statements, fmt.Sprintf("SECURITY LABEL FOR %s ON COLUMN %s.%s IS '%s';", att.SecurityLabelProvider, view.FQN(), att.Name, escapedLabel))
+		}
+	}
+
+	PrintStatements(metadataFile, objToc, view, statements, tier)
 }
 
 // The CREATE statement here should be kept in sync with the one in
