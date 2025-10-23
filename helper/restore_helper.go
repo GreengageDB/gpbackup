@@ -255,17 +255,9 @@ func doRestoreAgentInternal(restoreHelper IRestoreHelper) error {
 		}
 	}
 
-	// With the change to make oidlist include batch numbers we need to pull
-	// them out. We also need to remove duplicate oids.
-	var oidList []int
-	var prevOid int
+	oidList := make(map[int][]int)
 	for _, v := range oidWithBatchList {
-		if v.oid == prevOid {
-			continue
-		} else {
-			oidList = append(oidList, v.oid)
-			prevOid = v.oid
-		}
+		oidList[v.batch] = append(oidList[v.batch], v.oid)
 	}
 
 	if *singleDataFile {
@@ -286,7 +278,7 @@ func doRestoreAgentInternal(restoreHelper IRestoreHelper) error {
 			tocEntries[contentToRestore] = segmentTOC[contentToRestore].DataEntries
 
 			filename := replaceContentInFilename(*dataFile, contentToRestore)
-			readers[contentToRestore], err = restoreHelper.getRestoreDataReader(filename, segmentTOC[contentToRestore], oidList)
+			readers[contentToRestore], err = restoreHelper.getRestoreDataReader(filename, segmentTOC[contentToRestore], oidList[b])
 			if readers[contentToRestore] != nil {
 				// NOTE: If we reach here with batches > 1, there will be
 				// *origSize / *destSize (N old segments / N new segments)
