@@ -1834,6 +1834,10 @@ var _ = Describe("backup and restore end to end tests", func() {
 				testhelper.AssertQueryRuns(backupConn, "ALTER TABLE postdata_metadata.foobar REPLICA IDENTITY USING INDEX fooidx3")
 			}
 
+			// Create a view. For views, the only metadata is COMMENT.
+			testhelper.AssertQueryRuns(backupConn, "CREATE VIEW postdata_metadata.fooview AS SELECT a FROM postdata_metadata.foobar;")
+			testhelper.AssertQueryRuns(backupConn, "COMMENT ON COLUMN postdata_metadata.fooview.a IS 'hello my comment';")
+
 			// Create a rule. Currently for rules, the only metadata is COMMENT.
 			testhelper.AssertQueryRuns(backupConn, "CREATE RULE postdata_rule AS ON UPDATE TO postdata_metadata.foobar DO SELECT * FROM postdata_metadata.foobar;")
 			testhelper.AssertQueryRuns(backupConn, "COMMENT ON RULE postdata_rule ON postdata_metadata.foobar IS 'hello';")
