@@ -339,6 +339,15 @@ GRANT ALL ON TABLE shamwow.shazam TO testrole;`}
 				`CREATE VIEW shamwow.shazam AS SELECT count(*) FROM pg_tables;`,
 				`COMMENT ON COLUMN shamwow.shazam.Count IS 'Column 0 comment';`)
 		})
+		It("can print a dummy view with column comments", func() {
+			view.ColumnDefs = append(view.ColumnDefs,
+				backup.ColumnDefinition{Oid: 42, Num: 1, Name: "Count", Comment: "Column 0 comment"})
+			backup.PrintCreateDummyViewStatement(backupfile, tocfile, view, emptyMetadata)
+			testutils.ExpectEntry(tocfile.PredataEntries, 0, "shamwow", "", "shazam", toc.OBJ_VIEW)
+			testutils.AssertBufferContents(tocfile.PredataEntries, buffer,
+				"CREATE VIEW shamwow.shazam AS \nSELECT\n\tNULL:: AS Count;",
+				"COMMENT ON COLUMN shamwow.shazam.Count IS 'Column 0 comment';")
+		})
 	})
 	Describe("PrintPostCreateViewStatements", func() {
 		var (

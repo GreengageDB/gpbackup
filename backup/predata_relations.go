@@ -272,12 +272,39 @@ func printAlterColumnStatements(metadataFile *utils.FileWithByteCount, table Tab
 	}
 }
 
+func PrintPostCreateRelationStatements(metadataFile *utils.FileWithByteCount,
+	objToc *toc.TOC, obj toc.TOCObjectWithMetadata, columnDefs []ColumnDefinition,
+	tableMetadata ObjectMetadata, tier []uint32) {
+	statements := make([]string, 0)
+	for _, att := range columnDefs {
+		if att.Comment != "" {
+			escapedComment := utils.EscapeSingleQuotes(att.Comment)
+			statements = append(statements,
+				fmt.Sprintf("COMMENT ON COLUMN %s.%s IS '%s';", obj.FQN(), att.Name, escapedComment))
+		}
+		if len(att.Privileges) > 0 {
+			columnMetadata := ObjectMetadata{Privileges: getColumnACL(att.Privileges), Owner: tableMetadata.Owner}
+			columnPrivileges := columnMetadata.GetPrivilegesStatements(obj.FQN(), toc.OBJ_COLUMN, att.Name)
+			statements = append(statements, strings.TrimSpace(columnPrivileges))
+		}
+		if att.SecurityLabel != "" {
+			escapedLabel := utils.EscapeSingleQuotes(att.SecurityLabel)
+			statements = append(statements,
+				fmt.Sprintf("SECURITY LABEL FOR %s ON COLUMN %s.%s IS '%s';",
+					att.SecurityLabelProvider, obj.FQN(), att.Name, escapedLabel))
+		}
+	}
+
+	PrintStatements(metadataFile, objToc, obj, statements, tier)
+}
+
 /*
  * This function prints additional statements that come after the CREATE TABLE
  * statement for both regular and external tables.
  */
 func PrintPostCreateTableStatements(metadataFile *utils.FileWithByteCount, objToc *toc.TOC, table Table, tableMetadata ObjectMetadata, tier []uint32) {
 	PrintObjectMetadata(metadataFile, objToc, tableMetadata, table, "", tier)
+	PrintPostCreateRelationStatements(metadataFile, objToc, table, table.ColumnDefs, tableMetadata, tier)
 	statements := make([]string, 0)
 	for _, att := range table.ColumnDefs {
 		if att.Comment != "" {
@@ -475,24 +502,8 @@ func PrintCreateViewStatement(metadataFile *utils.FileWithByteCount, objToc *toc
  */
 func PrintPostCreateViewStatements(metadataFile *utils.FileWithByteCount, objToc *toc.TOC, view View, tableMetadata ObjectMetadata, tier []uint32) {
 	PrintObjectMetadata(metadataFile, objToc, tableMetadata, view, "", tier)
-	statements := make([]string, 0)
-	for _, att := range view.ColumnDefs {
-		if att.Comment != "" {
-			escapedComment := utils.EscapeSingleQuotes(att.Comment)
-			statements = append(statements, fmt.Sprintf("COMMENT ON COLUMN %s.%s IS '%s';", view.FQN(), att.Name, escapedComment))
-		}
-		if len(att.Privileges) > 0 {
-			columnMetadata := ObjectMetadata{Privileges: getColumnACL(att.Privileges), Owner: tableMetadata.Owner}
-			columnPrivileges := columnMetadata.GetPrivilegesStatements(view.FQN(), toc.OBJ_COLUMN, att.Name)
-			statements = append(statements, strings.TrimSpace(columnPrivileges))
-		}
-		if att.SecurityLabel != "" {
-			escapedLabel := utils.EscapeSingleQuotes(att.SecurityLabel)
-			statements = append(statements, fmt.Sprintf("SECURITY LABEL FOR %s ON COLUMN %s.%s IS '%s';", att.SecurityLabelProvider, view.FQN(), att.Name, escapedLabel))
-		}
-	}
 
-	PrintStatements(metadataFile, objToc, view, statements, tier)
+	PrintPostCreateRelationStatements(metadataFile, objToc, view, view.ColumnDefs, tableMetadata, tier)
 }
 
 // The CREATE statement here should be kept in sync with the one in
@@ -535,7 +546,7 @@ func PrintCreateDummyViewStatement(metadataFile *utils.FileWithByteCount, objToc
 	section, entry := view.GetMetadataEntry()
 	tier := globalTierMap[view.GetUniqueID()]
 	objToc.AddMetadataEntry(section, entry, start, metadataFile.ByteCount, tier)
-	PrintObjectMetadata(metadataFile, objToc, viewMetadata, view, "", tier)
+	PrintPostCreateViewStatements(metadataFile, objToc, view, viewMetadata, tier)
 }
 
 func ExpandIncludesForPartitions(conn *dbconn.DBConn, opts *options.Options, includeOids []string, flags *pflag.FlagSet) error {

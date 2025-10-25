@@ -183,6 +183,26 @@ func assertTablesNotRestored(conn *dbconn.DBConn, tables []string) {
 	}
 }
 
+func assertColumnComment(conn *dbconn.DBConn, relname string, column string, expected_comment string) {
+	comment := dbconn.MustSelectString(conn, fmt.Sprintf(`
+		SELECT pd.description FROM pg_description pd, pg_class pc, pg_attribute pa
+		WHERE pc.relname = '%s' AND pa.attname ='%s'
+		AND pa.attrelid = pc.oid 
+		AND pd.objoid = pc.oid
+		AND pd.objsubid = pa.attnum`, relname, column))
+
+	Expect(comment).To(Equal(expected_comment))
+}
+
+func assertGrant(conn *dbconn.DBConn, schema string, table string, role string, grant string) {
+	query := fmt.Sprintf(`SELECT privilege_type
+				FROM information_schema.role_table_grants 
+				WHERE table_schema='%s' AND table_name='%s' AND grantee='%s'`, schema, table, role)
+
+	privilege := dbconn.MustSelectString(conn, query)
+	Expect(privilege).To(Equal(grant))
+}
+
 func unMarshalRowCounts(filepath string) map[string]int {
 	rowFile, err := os.Open(filepath)
 
@@ -1834,10 +1854,6 @@ var _ = Describe("backup and restore end to end tests", func() {
 				testhelper.AssertQueryRuns(backupConn, "ALTER TABLE postdata_metadata.foobar REPLICA IDENTITY USING INDEX fooidx3")
 			}
 
-			// Create a view. For views, the only metadata is COMMENT.
-			testhelper.AssertQueryRuns(backupConn, "CREATE VIEW postdata_metadata.fooview AS SELECT a FROM postdata_metadata.foobar;")
-			testhelper.AssertQueryRuns(backupConn, "COMMENT ON COLUMN postdata_metadata.fooview.a IS 'hello my comment';")
-
 			// Create a rule. Currently for rules, the only metadata is COMMENT.
 			testhelper.AssertQueryRuns(backupConn, "CREATE RULE postdata_rule AS ON UPDATE TO postdata_metadata.foobar DO SELECT * FROM postdata_metadata.foobar;")
 			testhelper.AssertQueryRuns(backupConn, "COMMENT ON RULE postdata_rule ON postdata_metadata.foobar IS 'hello';")
@@ -1871,6 +1887,69 @@ var _ = Describe("backup and restore end to end tests", func() {
 			stdout := string(outputRes)
 			Expect(stdout).To(Not(ContainSubstring("CRITICAL")))
 			Expect(stdout).To(Not(ContainSubstring("Error encountered when executing statement")))
+		})
+		It("runs gprestore with metadata has comment on view column", func() {
+			testhelper.AssertQueryRuns(backupConn, "CREATE TABLESPACE test_tablespace LOCATION '/tmp/test_dir';")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP TABLESPACE test_tablespace;")
+
+			// Store everything in this test schema for easy test cleanup.
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA postdata_metadata;")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA postdata_metadata CASCADE;")
+			defer testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA postdata_metadata CASCADE;")
+
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE postdata_metadata.foobar(
+				key int PRIMARY KEY, 
+				data varchar(20),
+				"c""1" int, 
+				"c'2" int
+			);`)
+
+			// Create a view and comment on column.
+			testhelper.AssertQueryRuns(backupConn, `CREATE VIEW postdata_metadata.fooview AS SELECT key, "c""1", "c'2" FROM postdata_metadata.foobar;`)
+			testhelper.AssertQueryRuns(backupConn, "COMMENT ON COLUMN postdata_metadata.fooview.key IS 'hello my comment';")
+			testhelper.AssertQueryRuns(backupConn, `COMMENT ON COLUMN postdata_metadata.fooview."c""1" IS 'hello my comment c"1';`)
+			testhelper.AssertQueryRuns(backupConn, `COMMENT ON COLUMN postdata_metadata.fooview."c'2" IS 'hello my comment c''2';`)
+
+			// Create a dependent view and a comment on column. Will require dummy view in backup.
+			testhelper.AssertQueryRuns(backupConn, `CREATE VIEW postdata_metadata.fooviewdep AS 
+				SELECT key, count(data)
+				FROM postdata_metadata.foobar
+				WHERE length((foobar.data)::text) > 0
+				GROUP BY key`)
+
+			testhelper.AssertQueryRuns(backupConn, "COMMENT ON COLUMN postdata_metadata.fooviewdep.key IS 'hello my comment2';")
+
+			testhelper.AssertQueryRuns(backupConn, "CREATE ROLE foorole;")
+			defer func() {
+				testhelper.AssertQueryRuns(backupConn, "DROP OWNED BY foorole;")
+				testhelper.AssertQueryRuns(restoreConn, "DROP OWNED BY foorole;")
+
+				testhelper.AssertQueryRuns(restoreConn, "DROP ROLE foorole;")
+			}()
+
+			testhelper.AssertQueryRuns(backupConn, "REVOKE ALL ON TABLE postdata_metadata.fooview FROM PUBLIC;")
+			testhelper.AssertQueryRuns(backupConn, "GRANT SELECT ON TABLE postdata_metadata.fooview TO foorole;")
+
+			outputBkp := gpbackup(gpbackupPath, backupHelperPath,
+				"--metadata-only")
+			timestamp := getBackupTimestamp(string(outputBkp))
+
+			outputRes := gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--jobs", "8", "--verbose")
+
+			// The gprestore parallel postdata restore should have succeeded without a CRITICAL error.
+			stdout := string(outputRes)
+			Expect(stdout).To(Not(ContainSubstring("CRITICAL")))
+			Expect(stdout).To(Not(ContainSubstring("Error encountered when executing statement")))
+
+			assertRelationsCreatedInSchema(restoreConn, "postdata_metadata", 3)
+			assertColumnComment(restoreConn, "fooview", "key", "hello my comment")
+			assertColumnComment(restoreConn, "fooview", `c"1`, `hello my comment c"1`)
+			assertColumnComment(restoreConn, "fooview", `c''2`, `hello my comment c'2`)
+			assertColumnComment(restoreConn, "fooviewdep", "key", "hello my comment2")
+
+			// Check grant
+			assertGrant(restoreConn, "postdata_metadata", "fooview", "foorole", "SELECT")
 		})
 		Describe("Edge case tests", func() {
 			It(`successfully backs up precise real data types`, func() {
