@@ -348,6 +348,14 @@ GRANT ALL ON TABLE shamwow.shazam TO testrole;`}
 				"CREATE VIEW shamwow.shazam AS \nSELECT\n\tNULL:: AS Count;",
 				"COMMENT ON COLUMN shamwow.shazam.Count IS 'Column 0 comment';")
 		})
+		It("prints a SECURITY LABEL statement for the view column", func() {
+			view.ColumnDefs = append(view.ColumnDefs,
+				backup.ColumnDefinition{Oid: 42, Num: 1, Name: "Count", SecurityLabel: "unclassified", SecurityLabelProvider: "dummy"})
+			backup.PrintCreateDummyViewStatement(backupfile, tocfile, view, emptyMetadata)
+			testhelper.ExpectRegexp(buffer, `
+
+SECURITY LABEL FOR dummy ON COLUMN shamwow.shazam.Count IS 'unclassified';`)
+		})
 	})
 	Describe("PrintPostCreateViewStatements", func() {
 		var (

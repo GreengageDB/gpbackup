@@ -272,9 +272,9 @@ func printAlterColumnStatements(metadataFile *utils.FileWithByteCount, table Tab
 	}
 }
 
-func PrintPostCreateRelationStatements(metadataFile *utils.FileWithByteCount,
+func GetPostCreateRelationStatements(metadataFile *utils.FileWithByteCount,
 	objToc *toc.TOC, obj toc.TOCObjectWithMetadata, columnDefs []ColumnDefinition,
-	tableMetadata ObjectMetadata, tier []uint32) {
+	tableMetadata ObjectMetadata, tier []uint32) []string {
 	statements := make([]string, 0)
 	for _, att := range columnDefs {
 		if att.Comment != "" {
@@ -295,7 +295,7 @@ func PrintPostCreateRelationStatements(metadataFile *utils.FileWithByteCount,
 		}
 	}
 
-	PrintStatements(metadataFile, objToc, obj, statements, tier)
+	return statements
 }
 
 /*
@@ -304,23 +304,7 @@ func PrintPostCreateRelationStatements(metadataFile *utils.FileWithByteCount,
  */
 func PrintPostCreateTableStatements(metadataFile *utils.FileWithByteCount, objToc *toc.TOC, table Table, tableMetadata ObjectMetadata, tier []uint32) {
 	PrintObjectMetadata(metadataFile, objToc, tableMetadata, table, "", tier)
-	PrintPostCreateRelationStatements(metadataFile, objToc, table, table.ColumnDefs, tableMetadata, tier)
-	statements := make([]string, 0)
-	for _, att := range table.ColumnDefs {
-		if att.Comment != "" {
-			escapedComment := utils.EscapeSingleQuotes(att.Comment)
-			statements = append(statements, fmt.Sprintf("COMMENT ON COLUMN %s.%s IS '%s';", table.FQN(), att.Name, escapedComment))
-		}
-		if len(att.Privileges) > 0 {
-			columnMetadata := ObjectMetadata{Privileges: getColumnACL(att.Privileges), Owner: tableMetadata.Owner}
-			columnPrivileges := columnMetadata.GetPrivilegesStatements(table.FQN(), toc.OBJ_COLUMN, att.Name)
-			statements = append(statements, strings.TrimSpace(columnPrivileges))
-		}
-		if att.SecurityLabel != "" {
-			escapedLabel := utils.EscapeSingleQuotes(att.SecurityLabel)
-			statements = append(statements, fmt.Sprintf("SECURITY LABEL FOR %s ON COLUMN %s.%s IS '%s';", att.SecurityLabelProvider, table.FQN(), att.Name, escapedLabel))
-		}
-	}
+	statements := GetPostCreateRelationStatements(metadataFile, objToc, table, table.ColumnDefs, tableMetadata, tier)
 
 	// It seems that replica identity on foreign tables default to "n" and cannot be altered in postgres 9.4
 	if (table.ReplicaIdentity != "") && (table.ForeignDef == ForeignTableDefinition{}) {
@@ -503,7 +487,8 @@ func PrintCreateViewStatement(metadataFile *utils.FileWithByteCount, objToc *toc
 func PrintPostCreateViewStatements(metadataFile *utils.FileWithByteCount, objToc *toc.TOC, view View, tableMetadata ObjectMetadata, tier []uint32) {
 	PrintObjectMetadata(metadataFile, objToc, tableMetadata, view, "", tier)
 
-	PrintPostCreateRelationStatements(metadataFile, objToc, view, view.ColumnDefs, tableMetadata, tier)
+	statements := GetPostCreateRelationStatements(metadataFile, objToc, view, view.ColumnDefs, tableMetadata, tier)
+	PrintStatements(metadataFile, objToc, view, statements, tier)
 }
 
 // The CREATE statement here should be kept in sync with the one in
