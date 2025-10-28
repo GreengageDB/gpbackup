@@ -199,17 +199,30 @@ func assertColumnComment(conn *dbconn.DBConn, nspname string, relname string, at
 	Expect(description).To(Equal(expected_description))
 }
 
-func assertGrant(conn *dbconn.DBConn, table_schema string, table_name string, grantee string, expected_privilege_type string) {
+func assertGrant(conn *dbconn.DBConn, table_schema string, table_name string, column_name string, grantee string, expected_privilege_type string) {
 	query := fmt.Sprintf(`
 		SELECT privilege_type
-		FROM information_schema.role_table_grants
-		WHERE table_schema = '%s' AND table_name = '%s' AND grantee = '%s'`,
+		FROM information_schema.role_column_grants
+		WHERE table_schema = '%s' AND table_name = '%s' AND column_name = '%s' AND grantee = '%s'`,
 		utils.EscapeSingleQuotes(table_schema),
 		utils.EscapeSingleQuotes(table_name),
+		utils.EscapeSingleQuotes(column_name),
 		utils.EscapeSingleQuotes(grantee))
 
 	privilege_type := dbconn.MustSelectString(conn, query)
 	Expect(privilege_type).To(Equal(expected_privilege_type))
+}
+
+func assertSecLabel(conn *dbconn.DBConn, objtype string, provider string, table_schema string, table_name string, column_name string, expected_label string) {
+	query := fmt.Sprintf(`
+		SELECT label FROM pg_seclabels WHERE objtype = '%s' AND provider = '%s' AND objname = '%s.%s.%s'`,
+		objtype, provider,
+		utils.QuoteIdent(conn, table_schema),
+		utils.QuoteIdent(conn, table_name),
+		utils.QuoteIdent(conn, column_name))
+
+	label := dbconn.MustSelectString(conn, query)
+	Expect(label).To(Equal(expected_label))
 }
 
 func unMarshalRowCounts(filepath string) map[string]int {
@@ -1936,8 +1949,9 @@ var _ = Describe("backup and restore end to end tests", func() {
 				testhelper.AssertQueryRuns(restoreConn, "DROP ROLE foorole;")
 			}()
 
-			testhelper.AssertQueryRuns(backupConn, "REVOKE ALL ON TABLE postdata_metadata.fooview FROM PUBLIC;")
-			testhelper.AssertQueryRuns(backupConn, "GRANT SELECT ON TABLE postdata_metadata.fooview TO foorole;")
+			testhelper.AssertQueryRuns(backupConn, "REVOKE ALL (key) ON TABLE postdata_metadata.fooview FROM PUBLIC;")
+			testhelper.AssertQueryRuns(backupConn, "GRANT SELECT (key) ON TABLE postdata_metadata.fooview TO foorole;")
+			testhelper.AssertQueryRuns(backupConn, "SECURITY LABEL FOR dummy ON COLUMN postdata_metadata.fooview.key IS 'unclassified';")
 
 			outputBkp := gpbackup(gpbackupPath, backupHelperPath,
 				"--metadata-only")
@@ -1958,7 +1972,8 @@ var _ = Describe("backup and restore end to end tests", func() {
 			assertColumnComment(restoreConn, "postdata_metadata", "fooviewdep", "key", "hello my comment2")
 
 			// Check grant
-			assertGrant(restoreConn, "postdata_metadata", "fooview", "foorole", "SELECT")
+			assertGrant(restoreConn, "postdata_metadata", "fooview", "key", "foorole", "SELECT")
+			assertSecLabel(restoreConn, "column", "dummy", "postdata_metadata", "fooview", "key", "unclassified")
 		})
 		Describe("Edge case tests", func() {
 			It(`successfully backs up precise real data types`, func() {
