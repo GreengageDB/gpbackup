@@ -1888,7 +1888,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 			Expect(stdout).To(Not(ContainSubstring("CRITICAL")))
 			Expect(stdout).To(Not(ContainSubstring("Error encountered when executing statement")))
 		})
-		It("runs gprestore with metadata has comment on view column", func() {
+		It("runs gpbackup and gprestore with metadata has comment on view column", func() {
 			testhelper.AssertQueryRuns(backupConn, "CREATE TABLESPACE test_tablespace LOCATION '/tmp/test_dir';")
 			defer testhelper.AssertQueryRuns(backupConn, "DROP TABLESPACE test_tablespace;")
 
