@@ -183,24 +183,33 @@ func assertTablesNotRestored(conn *dbconn.DBConn, tables []string) {
 	}
 }
 
-func assertColumnComment(conn *dbconn.DBConn, relname string, column string, expected_comment string) {
-	comment := dbconn.MustSelectString(conn, fmt.Sprintf(`
-		SELECT pd.description FROM pg_description pd, pg_class pc, pg_attribute pa
-		WHERE pc.relname = '%s' AND pa.attname ='%s'
+func assertColumnComment(conn *dbconn.DBConn, nspname string, relname string, attname string, expected_description string) {
+	query := fmt.Sprintf(`
+		SELECT pd.description FROM pg_description pd, pg_class pc, pg_attribute pa, pg_namespace pn
+		WHERE pc.relname = '%s' AND pa.attname = '%s' AND pn.nspname = '%s'
+		AND pn.oid = pc.relnamespace
 		AND pa.attrelid = pc.oid 
 		AND pd.objoid = pc.oid
-		AND pd.objsubid = pa.attnum`, relname, column))
+		AND pd.objsubid = pa.attnum`,
+		utils.EscapeSingleQuotes(relname),
+		utils.EscapeSingleQuotes(attname),
+		utils.EscapeSingleQuotes(nspname))
 
-	Expect(comment).To(Equal(expected_comment))
+	description := dbconn.MustSelectString(conn, query)
+	Expect(description).To(Equal(expected_description))
 }
 
-func assertGrant(conn *dbconn.DBConn, schema string, table string, role string, grant string) {
-	query := fmt.Sprintf(`SELECT privilege_type
-				FROM information_schema.role_table_grants 
-				WHERE table_schema='%s' AND table_name='%s' AND grantee='%s'`, schema, table, role)
+func assertGrant(conn *dbconn.DBConn, table_schema string, table_name string, grantee string, expected_privilege_type string) {
+	query := fmt.Sprintf(`
+		SELECT privilege_type
+		FROM information_schema.role_table_grants
+		WHERE table_schema = '%s' AND table_name = '%s' AND grantee = '%s'`,
+		utils.EscapeSingleQuotes(table_schema),
+		utils.EscapeSingleQuotes(table_name),
+		utils.EscapeSingleQuotes(grantee))
 
-	privilege := dbconn.MustSelectString(conn, query)
-	Expect(privilege).To(Equal(grant))
+	privilege_type := dbconn.MustSelectString(conn, query)
+	Expect(privilege_type).To(Equal(expected_privilege_type))
 }
 
 func unMarshalRowCounts(filepath string) map[string]int {
@@ -1943,10 +1952,10 @@ var _ = Describe("backup and restore end to end tests", func() {
 			Expect(stdout).To(Not(ContainSubstring("Error encountered when executing statement")))
 
 			assertRelationsCreatedInSchema(restoreConn, "postdata_metadata", 3)
-			assertColumnComment(restoreConn, "fooview", "key", "hello my comment")
-			assertColumnComment(restoreConn, "fooview", `c"1`, `hello my comment c"1`)
-			assertColumnComment(restoreConn, "fooview", `c''2`, `hello my comment c'2`)
-			assertColumnComment(restoreConn, "fooviewdep", "key", "hello my comment2")
+			assertColumnComment(restoreConn, "postdata_metadata", "fooview", "key", "hello my comment")
+			assertColumnComment(restoreConn, "postdata_metadata", "fooview", `c"1`, `hello my comment c"1`)
+			assertColumnComment(restoreConn, "postdata_metadata", "fooview", `c'2`, `hello my comment c'2`)
+			assertColumnComment(restoreConn, "postdata_metadata", "fooviewdep", "key", "hello my comment2")
 
 			// Check grant
 			assertGrant(restoreConn, "postdata_metadata", "fooview", "foorole", "SELECT")
