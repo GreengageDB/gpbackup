@@ -183,7 +183,7 @@ func assertTablesNotRestored(conn *dbconn.DBConn, tables []string) {
 	}
 }
 
-func assertColumnComment(conn *dbconn.DBConn, nspname string, relname string, attname string, expected_description string) {
+func assertColumnComment(conn *dbconn.DBConn, nspname string, relname string, attname string, expected string) {
 	query := fmt.Sprintf(`
 		SELECT pd.description FROM pg_description pd, pg_class pc, pg_attribute pa, pg_namespace pn
 		WHERE pc.relname = '%s' AND pa.attname = '%s' AND pn.nspname = '%s'
@@ -196,33 +196,33 @@ func assertColumnComment(conn *dbconn.DBConn, nspname string, relname string, at
 		utils.EscapeSingleQuotes(nspname))
 
 	description := dbconn.MustSelectString(conn, query)
-	Expect(description).To(Equal(expected_description))
+	Expect(description).To(Equal(expected))
 }
 
-func assertGrant(conn *dbconn.DBConn, table_schema string, table_name string, column_name string, grantee string, expected_privilege_type string) {
+func assertGrant(conn *dbconn.DBConn, schema string, table string, column string, grantee string, expected string) {
 	query := fmt.Sprintf(`
 		SELECT privilege_type
 		FROM information_schema.role_column_grants
 		WHERE table_schema = '%s' AND table_name = '%s' AND column_name = '%s' AND grantee = '%s'`,
-		utils.EscapeSingleQuotes(table_schema),
-		utils.EscapeSingleQuotes(table_name),
-		utils.EscapeSingleQuotes(column_name),
+		utils.EscapeSingleQuotes(schema),
+		utils.EscapeSingleQuotes(table),
+		utils.EscapeSingleQuotes(column),
 		utils.EscapeSingleQuotes(grantee))
 
-	privilege_type := dbconn.MustSelectString(conn, query)
-	Expect(privilege_type).To(Equal(expected_privilege_type))
+	privilege := dbconn.MustSelectString(conn, query)
+	Expect(privilege).To(Equal(expected))
 }
 
-func assertSecLabel(conn *dbconn.DBConn, objtype string, provider string, table_schema string, table_name string, column_name string, expected_label string) {
+func assertSecLabel(conn *dbconn.DBConn, objtype string, provider string, schema string, table string, column string, expected string) {
 	query := fmt.Sprintf(`
 		SELECT label FROM pg_seclabels WHERE objtype = '%s' AND provider = '%s' AND objname = '%s.%s.%s'`,
 		objtype, provider,
-		utils.QuoteIdent(conn, table_schema),
-		utils.QuoteIdent(conn, table_name),
-		utils.QuoteIdent(conn, column_name))
+		utils.QuoteIdent(conn, schema),
+		utils.QuoteIdent(conn, table),
+		utils.QuoteIdent(conn, column))
 
 	label := dbconn.MustSelectString(conn, query)
-	Expect(label).To(Equal(expected_label))
+	Expect(label).To(Equal(expected))
 }
 
 func unMarshalRowCounts(filepath string) map[string]int {
