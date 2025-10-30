@@ -272,7 +272,7 @@ func printAlterColumnStatements(metadataFile *utils.FileWithByteCount, table Tab
 	}
 }
 
-func GetPostCreateRelationStatements(obj toc.TOCObjectWithMetadata, columnDefs []ColumnDefinition, tableMetadata ObjectMetadata, tier []uint32) []string {
+func GetPostCreateRelationStatements(obj toc.TOCObjectWithMetadata, columnDefs []ColumnDefinition, tableMetadata ObjectMetadata) []string {
 	statements := make([]string, 0)
 	for _, att := range columnDefs {
 		if att.Comment != "" {
@@ -302,7 +302,7 @@ func GetPostCreateRelationStatements(obj toc.TOCObjectWithMetadata, columnDefs [
  */
 func PrintPostCreateTableStatements(metadataFile *utils.FileWithByteCount, objToc *toc.TOC, table Table, tableMetadata ObjectMetadata, tier []uint32) {
 	PrintObjectMetadata(metadataFile, objToc, tableMetadata, table, "", tier)
-	statements := GetPostCreateRelationStatements(table, table.ColumnDefs, tableMetadata, tier)
+	statements := GetPostCreateRelationStatements(table, table.ColumnDefs, tableMetadata)
 
 	// It seems that replica identity on foreign tables default to "n" and cannot be altered in postgres 9.4
 	if (table.ReplicaIdentity != "") && (table.ForeignDef == ForeignTableDefinition{}) {
@@ -485,7 +485,7 @@ func PrintCreateViewStatement(metadataFile *utils.FileWithByteCount, objToc *toc
 func PrintPostCreateViewStatements(metadataFile *utils.FileWithByteCount, objToc *toc.TOC, view View, tableMetadata ObjectMetadata, tier []uint32) {
 	PrintObjectMetadata(metadataFile, objToc, tableMetadata, view, "", tier)
 
-	statements := GetPostCreateRelationStatements(view, view.ColumnDefs, tableMetadata, tier)
+	statements := GetPostCreateRelationStatements(view, view.ColumnDefs, tableMetadata)
 	PrintStatements(metadataFile, objToc, view, statements, tier)
 }
 
