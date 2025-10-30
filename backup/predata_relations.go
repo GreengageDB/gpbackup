@@ -529,7 +529,7 @@ func PrintCreateDummyViewStatement(metadataFile *utils.FileWithByteCount, objToc
 	section, entry := view.GetMetadataEntry()
 	tier := globalTierMap[view.GetUniqueID()]
 	objToc.AddMetadataEntry(section, entry, start, metadataFile.ByteCount, tier)
-	PrintPostCreateViewStatements(metadataFile, objToc, view, viewMetadata, tier)
+	PrintObjectMetadata(metadataFile, objToc, viewMetadata, view, "", tier)
 }
 
 func ExpandIncludesForPartitions(conn *dbconn.DBConn, opts *options.Options, includeOids []string, flags *pflag.FlagSet) error {
