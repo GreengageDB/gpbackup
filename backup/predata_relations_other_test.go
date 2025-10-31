@@ -12,6 +12,7 @@ import (
 	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/testutils"
 	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/lib/pq"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -328,6 +329,81 @@ GRANT ALL ON TABLE shamwow.shazam TO testrole;`}
 			testutils.ExpectEntry(tocfile.PredataEntries, 0, "shamwow", "", "shazam", toc.OBJ_VIEW)
 			testutils.AssertBufferContents(tocfile.PredataEntries, buffer,
 				`CREATE VIEW shamwow.shazam WITH (security_barrier=true) AS SELECT count(*) FROM pg_tables;`)
+		})
+		It("can print a view with column comments", func() {
+			view.ColumnDefs = append(view.ColumnDefs,
+				backup.ColumnDefinition{Oid: 42, Num: 1, Name: "Count", Comment: "Column 0 comment"})
+			backup.PrintCreateViewStatement(backupfile, tocfile, view, emptyMetadata)
+			testutils.ExpectEntry(tocfile.PredataEntries, 0, "shamwow", "", "shazam", toc.OBJ_VIEW)
+			testutils.AssertBufferContents(tocfile.PredataEntries, buffer,
+				`CREATE VIEW shamwow.shazam AS SELECT count(*) FROM pg_tables;`,
+				`COMMENT ON COLUMN shamwow.shazam.Count IS 'Column 0 comment';`)
+		})
+		It("prints a SECURITY LABEL statement for the view column", func() {
+			view.ColumnDefs = append(view.ColumnDefs,
+				backup.ColumnDefinition{Oid: 42, Num: 1, Name: "Count", SecurityLabel: "unclassified", SecurityLabelProvider: "dummy"})
+			backup.PrintCreateViewStatement(backupfile, tocfile, view, emptyMetadata)
+			testhelper.ExpectRegexp(buffer, `
+
+SECURITY LABEL FOR dummy ON COLUMN shamwow.shazam.Count IS 'unclassified';`)
+		})
+	})
+	Describe("PrintPostCreateViewStatements", func() {
+		var (
+			testView      backup.View
+			emptyMetadata backup.ObjectMetadata
+		)
+		BeforeEach(func() {
+			testView = backup.View{Oid: 1, Schema: "shamwow", Name: "shazam", Definition: sql.NullString{String: "SELECT count(*) FROM pg_tables;", Valid: true}}
+			emptyMetadata = backup.ObjectMetadata{}
+		})
+
+		rowCommentOne := backup.ColumnDefinition{Oid: 0, Num: 1, Name: "i", Type: "integer", StatTarget: -1, Comment: "This is a column comment."}
+		rowCommentTwo := backup.ColumnDefinition{Oid: 0, Num: 2, Name: "j", Type: "integer", StatTarget: -1, Comment: "This is another column comment."}
+		It("prints a block with a single column comment", func() {
+			col := []backup.ColumnDefinition{rowCommentOne}
+			testView.ColumnDefs = col
+			backup.PrintPostCreateViewStatements(backupfile, tocfile, testView, emptyMetadata, []uint32{0, 0})
+			testhelper.ExpectRegexp(buffer, `
+COMMENT ON COLUMN shamwow.shazam.i IS 'This is a column comment.';`)
+		})
+		It("prints a block with a single column comment containing special characters", func() {
+			rowCommentSpecialCharacters := backup.ColumnDefinition{Oid: 0, Num: 1, Name: "i", Type: "integer", StatTarget: -1, Comment: `This is a ta'ble 1+=;,./\>,<@\\n^comment.`}
+
+			col := []backup.ColumnDefinition{rowCommentSpecialCharacters}
+			testView.ColumnDefs = col
+			backup.PrintPostCreateViewStatements(backupfile, tocfile, testView, emptyMetadata, []uint32{0, 0})
+			testhelper.ExpectRegexp(buffer, `
+
+COMMENT ON COLUMN shamwow.shazam.i IS 'This is a ta''ble 1+=;,./\>,<@\\n^comment.';`)
+		})
+		It("prints a block with multiple column comments", func() {
+			col := []backup.ColumnDefinition{rowCommentOne, rowCommentTwo}
+			testView.ColumnDefs = col
+			backup.PrintPostCreateViewStatements(backupfile, tocfile, testView, emptyMetadata, []uint32{0, 0})
+			testhelper.ExpectRegexp(buffer, `
+
+COMMENT ON COLUMN shamwow.shazam.i IS 'This is a column comment.';
+
+
+COMMENT ON COLUMN shamwow.shazam.j IS 'This is another column comment.';`)
+		})
+		It("prints owner, comment, security label, and ACL statements for view column", func() {
+			testView.ColumnDefs = []backup.ColumnDefinition{
+				{Oid: 0, Num: 1, Name: "i", Type: "integer", Privileges: pq.StringArray{"testrole=r/testrole", `" test, role "=r/testrole`}},
+				rowCommentTwo,
+			}
+			backup.PrintPostCreateViewStatements(backupfile, tocfile, testView, emptyMetadata, []uint32{0, 0})
+			expected := `
+
+REVOKE ALL (i) ON TABLE shamwow.shazam FROM PUBLIC;
+GRANT SELECT (i) ON TABLE shamwow.shazam TO testrole;
+GRANT SELECT (i) ON TABLE shamwow.shazam TO " test, role ";
+
+
+COMMENT ON COLUMN shamwow.shazam.j IS 'This is another column comment.';
+`
+			Expect(buffer.Contents()).Should(ContainSubstring(expected))
 		})
 	})
 	Describe("PrintAlterSequenceStatements", func() {

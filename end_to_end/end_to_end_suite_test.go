@@ -183,6 +183,48 @@ func assertTablesNotRestored(conn *dbconn.DBConn, tables []string) {
 	}
 }
 
+func assertColumnComment(conn *dbconn.DBConn, nspname string, relname string, attname string, expected string) {
+	query := fmt.Sprintf(`
+		SELECT pd.description FROM pg_description pd, pg_class pc, pg_attribute pa, pg_namespace pn
+		WHERE pc.relname = '%s' AND pa.attname = '%s' AND pn.nspname = '%s'
+		AND pn.oid = pc.relnamespace
+		AND pa.attrelid = pc.oid 
+		AND pd.objoid = pc.oid
+		AND pd.objsubid = pa.attnum`,
+		utils.EscapeSingleQuotes(relname),
+		utils.EscapeSingleQuotes(attname),
+		utils.EscapeSingleQuotes(nspname))
+
+	description := dbconn.MustSelectString(conn, query)
+	Expect(description).To(Equal(expected))
+}
+
+func assertGrant(conn *dbconn.DBConn, schema string, table string, column string, grantee string, expected string) {
+	query := fmt.Sprintf(`
+		SELECT privilege_type
+		FROM information_schema.role_column_grants
+		WHERE table_schema = '%s' AND table_name = '%s' AND column_name = '%s' AND grantee = '%s'`,
+		utils.EscapeSingleQuotes(schema),
+		utils.EscapeSingleQuotes(table),
+		utils.EscapeSingleQuotes(column),
+		utils.EscapeSingleQuotes(grantee))
+
+	privilege := dbconn.MustSelectString(conn, query)
+	Expect(privilege).To(Equal(expected))
+}
+
+func assertSecLabel(conn *dbconn.DBConn, objtype string, provider string, schema string, table string, column string, expected string) {
+	query := fmt.Sprintf(`
+		SELECT label FROM pg_seclabels WHERE objtype = '%s' AND provider = '%s' AND objname = '%s.%s.%s'`,
+		objtype, provider,
+		utils.QuoteIdent(conn, schema),
+		utils.QuoteIdent(conn, table),
+		utils.QuoteIdent(conn, column))
+
+	label := dbconn.MustSelectString(conn, query)
+	Expect(label).To(Equal(expected))
+}
+
 func unMarshalRowCounts(filepath string) map[string]int {
 	rowFile, err := os.Open(filepath)
 
@@ -1867,6 +1909,71 @@ var _ = Describe("backup and restore end to end tests", func() {
 			stdout := string(outputRes)
 			Expect(stdout).To(Not(ContainSubstring("CRITICAL")))
 			Expect(stdout).To(Not(ContainSubstring("Error encountered when executing statement")))
+		})
+		It("runs gpbackup and gprestore with metadata has comment on view column", func() {
+			testhelper.AssertQueryRuns(backupConn, "CREATE TABLESPACE test_tablespace LOCATION '/tmp/test_dir';")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP TABLESPACE test_tablespace;")
+
+			// Store everything in this test schema for easy test cleanup.
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA postdata_metadata;")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA postdata_metadata CASCADE;")
+			defer testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA postdata_metadata CASCADE;")
+
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE postdata_metadata.foobar(
+				key int PRIMARY KEY, 
+				data varchar(20),
+				"c""1" int, 
+				"c'2" int
+			);`)
+
+			// Create a view and comment on column.
+			testhelper.AssertQueryRuns(backupConn, `CREATE VIEW postdata_metadata.fooview AS SELECT key, "c""1", "c'2" FROM postdata_metadata.foobar;`)
+			testhelper.AssertQueryRuns(backupConn, "COMMENT ON COLUMN postdata_metadata.fooview.key IS 'hello my comment';")
+			testhelper.AssertQueryRuns(backupConn, `COMMENT ON COLUMN postdata_metadata.fooview."c""1" IS 'hello my comment c"1';`)
+			testhelper.AssertQueryRuns(backupConn, `COMMENT ON COLUMN postdata_metadata.fooview."c'2" IS 'hello my comment c''2';`)
+
+			// Create a dependent view and a comment on column. Will require dummy view in backup.
+			testhelper.AssertQueryRuns(backupConn, `CREATE VIEW postdata_metadata.fooviewdep AS 
+				SELECT key, count(data)
+				FROM postdata_metadata.foobar
+				WHERE length((foobar.data)::text) > 0
+				GROUP BY key`)
+
+			testhelper.AssertQueryRuns(backupConn, "COMMENT ON COLUMN postdata_metadata.fooviewdep.key IS 'hello my comment2';")
+
+			testhelper.AssertQueryRuns(backupConn, "CREATE ROLE foorole;")
+			defer func() {
+				testhelper.AssertQueryRuns(backupConn, "DROP OWNED BY foorole;")
+				testhelper.AssertQueryRuns(restoreConn, "DROP OWNED BY foorole;")
+
+				testhelper.AssertQueryRuns(restoreConn, "DROP ROLE foorole;")
+			}()
+
+			testhelper.AssertQueryRuns(backupConn, "REVOKE ALL (key) ON TABLE postdata_metadata.fooview FROM PUBLIC;")
+			testhelper.AssertQueryRuns(backupConn, "GRANT SELECT (key) ON TABLE postdata_metadata.fooview TO foorole;")
+			testhelper.AssertQueryRuns(backupConn, "SECURITY LABEL FOR dummy ON COLUMN postdata_metadata.fooview.key IS 'unclassified';")
+
+			outputBkp := gpbackup(gpbackupPath, backupHelperPath,
+				"--metadata-only")
+			timestamp := getBackupTimestamp(string(outputBkp))
+
+			outputRes := gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--jobs", "8", "--verbose")
+
+			// The gprestore parallel postdata restore should have succeeded without a CRITICAL error.
+			stdout := string(outputRes)
+			Expect(stdout).To(Not(ContainSubstring("CRITICAL")))
+			Expect(stdout).To(Not(ContainSubstring("Error encountered when executing statement")))
+
+			assertRelationsCreatedInSchema(restoreConn, "postdata_metadata", 3)
+			assertColumnComment(restoreConn, "postdata_metadata", "fooview", "key", "hello my comment")
+			assertColumnComment(restoreConn, "postdata_metadata", "fooview", `c"1`, `hello my comment c"1`)
+			assertColumnComment(restoreConn, "postdata_metadata", "fooview", `c'2`, `hello my comment c'2`)
+			assertColumnComment(restoreConn, "postdata_metadata", "fooviewdep", "key", "hello my comment2")
+
+			// Check grant
+			assertGrant(restoreConn, "postdata_metadata", "fooview", "key", "foorole", "SELECT")
+			assertSecLabel(restoreConn, "column", "dummy", "postdata_metadata", "fooview", "key", "unclassified")
 		})
 		Describe("Edge case tests", func() {
 			It(`successfully backs up precise real data types`, func() {
