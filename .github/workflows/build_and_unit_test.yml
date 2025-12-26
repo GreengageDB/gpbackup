@@ -85,6 +85,18 @@ jobs:
           build-args: |
             GGDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb${{ matrix.gg_version }}_ubuntu@sha256:0eac4b01ec4f425ce82063f034cf92e68dcc61c5033c2f08bf415e5c78e66f15
 
+      - name: Disk usage by directory
+        run: |
+          sudo du -h --max-depth=1 / | sort -hr | head -n 30
+
+      - name: Workspace size
+        run: |
+          du -h --max-depth=2 $GITHUB_WORKSPACE | sort -hr | head -n 30
+
+      - name: Docker disk usage
+        run: |
+          docker system df
+
       - name: Test
         run: >
           docker run --rm
