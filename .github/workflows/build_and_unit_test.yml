@@ -55,6 +55,7 @@ jobs:
         gg_version: [6, 7]
 
     steps:
+      - run: df -h
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -85,6 +86,7 @@ jobs:
           build-args: |
             GGDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb${{ matrix.gg_version }}_ubuntu:latest
 
+      - run: df -h
       - name: Test
         run: >
           docker run --rm
