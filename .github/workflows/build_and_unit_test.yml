@@ -85,13 +85,17 @@ jobs:
           build-args: |
             GGDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb${{ matrix.gg_version }}_ubuntu@sha256:0eac4b01ec4f425ce82063f034cf92e68dcc61c5033c2f08bf415e5c78e66f15
 
-      - name: Disk usage by directory
+      - name: Dump root disk usage
         run: |
-          sudo du -h --max-depth=1 / | sort -hr | head -n 30
+          sudo du -x -h / \
+            | sort -hr | gzip \
+            > disk-usage.txt.gz
 
-      - name: Workspace size
-        run: |
-          du -h --max-depth=2 $GITHUB_WORKSPACE | sort -hr | head -n 30
+      - name: Upload workspace file list
+        uses: actions/upload-artifact@v4
+        with:
+          name: disk-usage
+          path: disk-usage.txt.gz
 
       - name: Docker disk usage
         run: |
