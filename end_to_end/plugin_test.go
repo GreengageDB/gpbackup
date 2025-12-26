@@ -550,6 +550,47 @@ options:
 
 				os.RemoveAll(pluginBackupDirectory)
 			})
+			It("runs gprestore to smaller cluster with subset and error", func() {
+				subsetPluginTestConfig := "/tmp/test_subset_plugin_config.yaml"
+				subsetPluginTestConfigContents := fmt.Sprintf(`executablepath: %s
+options:
+  restore_subset: "on"`, examplePluginExec)
+				f, err := os.Create(subsetPluginTestConfig)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = f.WriteString(subsetPluginTestConfigContents)
+				Expect(err).ToNot(HaveOccurred())
+				err = f.Close()
+				Expect(err).ToNot(HaveOccurred())
+
+				pluginBackupDirectory := `/tmp/plugin_dest`
+				os.Mkdir(pluginBackupDirectory, 0777)
+				command := exec.Command("tar", "-xzf", "resources/5-segment-db-subset-error.tar.gz", "-C", pluginBackupDirectory)
+				mustRunCommand(command)
+
+				timestamp := "20251226074815"
+				gprestore(gprestorePath, restoreHelperPath, timestamp,
+					"--redirect-db", "restoredb", "--resize-cluster", "--metadata-only",
+					"--plugin-config", subsetPluginTestConfig)
+
+				gprestoreCmd := exec.Command(gprestorePath,
+					"--timestamp", timestamp, "--on-error-continue",
+					"--redirect-db", "restoredb", "--resize-cluster", "--data-only",
+					"--plugin-config", subsetPluginTestConfig,
+					"--exclude-table", "dummy_schema.dummy_table")
+
+				output, err := gprestoreCmd.CombinedOutput()
+				Expect(err).To(HaveOccurred())
+				Expect(string(output)).To(ContainSubstring("Error loading data into table public.dit"))
+				Expect(string(output)).To(ContainSubstring("Encountered 1 error(s) during table data restore"))
+				Expect(string(output)).To(ContainSubstring("Data restore completed with failures"))
+				assertDataRestored(restoreConn, map[string]int{
+					"public.dit": 0,
+					"public.di":  10})
+
+				assertArtifactsCleaned(timestamp)
+
+				os.RemoveAll(pluginBackupDirectory)
+			})
 		})
 	})
 

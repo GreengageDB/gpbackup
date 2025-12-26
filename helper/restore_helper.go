@@ -385,9 +385,17 @@ func doRestoreAgentInternal(restoreHelper IRestoreHelper) error {
 						logWarn(fmt.Sprintf("Oid %d, Batch %d: Skip file discovered, skipping this relation.", tableOid, batchNum))
 						err = nil
 						skipOid = tableOid
-						if *singleDataFile && readers[contentToRestore] != nil && readers[contentToRestore].getReaderType() == SUBSET {
-							bytesToDiscard := int64(end[contentToRestore] - start[contentToRestore])
-							_, err = readers[contentToRestore].discardData(bytesToDiscard)
+						if *singleDataFile {
+							// Discard remaining batches
+							for batchToDiscard := batchNum; batchToDiscard < batches; batchToDiscard++ {
+								contentToDiscard := *content + (*destSize * batchToDiscard)
+								if readers[contentToDiscard] != nil && readers[contentToDiscard].getReaderType() == SUBSET {
+									start[contentToDiscard] = tocEntries[contentToDiscard][uint(tableOid)].StartByte
+									end[contentToDiscard] = tocEntries[contentToDiscard][uint(tableOid)].EndByte
+									bytesToDiscard := int64(end[contentToDiscard] - start[contentToDiscard])
+									_, err = readers[contentToDiscard].discardData(bytesToDiscard)
+								}
+							}
 						}
 						/* Close up to *copyQueue files with this tableOid */
 						for idx := 0; idx < *copyQueue; idx++ {
