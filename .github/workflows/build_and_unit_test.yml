@@ -106,6 +106,7 @@ jobs:
       - name: Test
         run: |
           while true; do df -h /; sleep 60; done >disk_log.txt 2>&1 &
-#          docker run --rm --sysctl 'kernel.sem=500 1024000 200 4096' gpbackup:test bash /home/gpadmin/go/src/github.com/GreengageDB/gpbackup/ci/scripts/run_gpbackup_tests.bash
           killall bash
           cat disk_log.txt
+
+#          docker run --rm --sysctl 'kernel.sem=500 1024000 200 4096' gpbackup:test bash /home/gpadmin/go/src/github.com/GreengageDB/gpbackup/ci/scripts/run_gpbackup_tests.bash
