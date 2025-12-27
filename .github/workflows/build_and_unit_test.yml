@@ -59,6 +59,9 @@ jobs:
           set -eux
           df -h
           du -sh /* 2>/dev/null | sort -hr
+          du -sh /usr/* 2>/dev/null | sort -hr
+          du -sh /opt/* 2>/dev/null | sort -hr
+          du -sh /mnt/* 2>/dev/null | sort -hr
           mount
 
       - name: Checkout repository
