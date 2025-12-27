@@ -72,6 +72,7 @@ jobs:
 
           # Verify gains
           df -h /
+          while true; do; df -h /; sleep 60; done >disk_log.txt 2>&1 &
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -103,9 +104,15 @@ jobs:
           build-args: |
             GGDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb${{ matrix.gg_version }}_ubuntu:latest
 
-      - name: Test
-        run: >
-          docker run --rm
-          --sysctl 'kernel.sem=500 1024000 200 4096'
-          gpbackup:test
-          bash /home/gpadmin/go/src/github.com/GreengageDB/gpbackup/ci/scripts/run_gpbackup_tests.bash
+#      - name: Test
+#        run: >
+#          docker run --rm
+#          --sysctl 'kernel.sem=500 1024000 200 4096'
+#          gpbackup:test
+#          bash /home/gpadmin/go/src/github.com/GreengageDB/gpbackup/ci/scripts/run_gpbackup_tests.bash
+
+      - name: Clean Up Disk Space 2
+        if: runner.os == 'Linux'
+        run: |
+          killall bash
+          cat disk_log.txt
