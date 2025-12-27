@@ -56,8 +56,9 @@ jobs:
 
     steps:
       - run: |
-          df -h /
-          du -sh /* 2>/dev/null | sort -hr
+          set -eux
+          df -h
+          du -sh 2>/dev/null | sort -hr
           mount
 
       - name: Checkout repository
