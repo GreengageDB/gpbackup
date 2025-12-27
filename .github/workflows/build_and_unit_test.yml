@@ -56,9 +56,9 @@ jobs:
 
     steps:
       - run: |
-        df -h /
-        du -sh /* 2>/dev/null | sort -hr
-        mount
+          df -h /
+          du -sh /* 2>/dev/null | sort -hr
+          mount
 
       - name: Checkout repository
         uses: actions/checkout@v4
