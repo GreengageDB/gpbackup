@@ -11,3 +11,7 @@ docker run --rm -it --sysctl 'kernel.sem=500 1024000 200 4096' gpbackup:test bas
 docker build -t gpbackup:test7x -f Dockerfile --build-arg GGDB_IMAGE=greengagedb/ggdb7_ubuntu:testing .
 docker run --rm -it --sysctl 'kernel.sem=500 1024000 200 4096' gpbackup:test7x bash -c "ssh-keygen -A && /usr/sbin/sshd && bash /home/gpadmin/go/src/github.com/GreengageDB/gpbackup/ci/scripts/run_gpbackup_tests.bash"
 ```
+
+**NOTE**:
+Running all tests requires 11-13 GB, not including the size of the repository
+itself, the Docker image, and the Docker container.
