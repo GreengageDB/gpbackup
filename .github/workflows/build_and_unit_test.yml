@@ -58,8 +58,9 @@ jobs:
       - name: Clean Up Disk Space
         run: |
           # Space usage before cleanup
+          set -eux
+          mount
           df -h /
-          df -h /mnt/
           # Remove unused tool caches
           sudo rm -rf /usr/lib/jvm
           sudo rm -rf /usr/local/.ghcup
@@ -69,7 +70,6 @@ jobs:
           sudo rm -rf /usr/share/swift
           # Verify gains
           df -h /
-          df -h /mnt/
 
       - name: Checkout repository
         uses: actions/checkout@v4
