@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	BackupPreventedByGfrebalanceMessage  GgrebalanceFailureMessage = `Greengage rebalance currently in process, please re-run gpbackup when the rebalance has completed`
+	BackupPreventedByGgrebalanceMessage  GgrebalanceFailureMessage = `Greengage rebalance currently in process, please re-run gpbackup when the rebalance has completed`
 	RestorePreventedByGgrebalanceMessage GgrebalanceFailureMessage = `Greengage rebalance currently in process.  Once rebalance is complete, it will be possible to restart gprestore, but please note existing backup sets taken with a different cluster configuration may no longer be compatible with the newly rebalanced cluster configuration`
 
 	GgrebalanceCheckSchemaQuery   = "SELECT COUNT(1) AS rebalance_schema_exists FROM pg_namespace WHERE nspname = 'ggrebalance'"

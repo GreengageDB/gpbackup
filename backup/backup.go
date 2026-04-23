@@ -47,7 +47,7 @@ func DoSetup() {
 	gplog.Info("gpbackup version = %s", GetVersion())
 
 	utils.CheckGpexpandRunning(utils.BackupPreventedByGpexpandMessage)
-	utils.CheckGgrebalanceRunning(utils.BackupPreventedByGfrebalanceMessage)
+	utils.CheckGgrebalanceRunning(utils.BackupPreventedByGgrebalanceMessage)
 	timestamp := history.CurrentTimestamp()
 	createBackupLockFile(timestamp)
 	initializeConnectionPool(timestamp)
