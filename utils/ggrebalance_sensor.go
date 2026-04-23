@@ -76,12 +76,12 @@ func (sensor GgrebalanceSensor) IsGgrebalanceRunning() (bool, error) {
 		}
 
 		// and check latest state
-		latest_state, err := dbconn.SelectString(sensor.postgresConn, GgrebalanceGetLatesttateQuery)
+		latestState, err := dbconn.SelectString(sensor.postgresConn, GgrebalanceGetLatesttateQuery)
 		if err != nil {
 			gplog.Error(fmt.Sprintf("Error encountered retrieving ggrebalance state status: %v", err))
 			return false, err
 		}
-		if latest_state == "STATE_EXECUTOR_DONE" {
+		if latestState == "STATE_EXECUTOR_DONE" {
 			// latest state is the final one - ggrebalance has completed all operations
 			return false, nil
 		}
