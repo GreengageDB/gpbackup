@@ -55,6 +55,7 @@ func DoSetup() {
 	gplog.Verbose("Restore Command: %s", os.Args)
 
 	utils.CheckGpexpandRunning(utils.RestorePreventedByGpexpandMessage)
+	utils.CheckGgrebalanceRunning(utils.RestorePreventedByGgrebalanceMessage)
 	restoreStartTime = history.CurrentTimestamp()
 
 	CreateConnectionPool("postgres")
