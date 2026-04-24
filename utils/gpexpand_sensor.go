@@ -29,16 +29,11 @@ func CheckGpexpandRunning(errMsg string) {
 	checkExtToolRunning(errMsg, NewGpexpandSensorEmpty())
 }
 
-func NewGpexpandSensorEmpty() *GpexpandSensor {
-	return &GpexpandSensor{
-		GGDBToolSensor: GGDBToolSensor{
-			fs:           nil,
-			postgresConn: nil,
-		},
-	}
+func NewGpexpandSensorEmpty() GGDBToolSensorInterface {
+	return new(GpexpandSensor)
 }
 
-func NewGpexpandSensor(myfs vfs.Filesystem, conn *dbconn.DBConn) *GpexpandSensor {
+func NewGpexpandSensor(myfs vfs.Filesystem, conn *dbconn.DBConn) GGDBToolSensorInterface {
 	sensor := NewGpexpandSensorEmpty()
 	sensor.SetConnection(conn)
 	sensor.SetFs(myfs)
@@ -49,7 +44,7 @@ func (sensor GpexpandSensor) GetMinGgdbVersion() string {
 	return "6"
 }
 
-func (sensor GpexpandSensor) IsRunning() (bool, error) {
+func (sensor *GpexpandSensor) IsRunning() (bool, error) {
 	coordinatorDataDir, err := getCoordinatorDataDir(sensor.postgresConn, "gpexpand", sensor.GetMinGgdbVersion())
 	if err != nil {
 		return false, err

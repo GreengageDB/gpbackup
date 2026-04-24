@@ -28,16 +28,11 @@ func CheckGgrebalanceRunning(errMsg string) {
 	checkExtToolRunning(errMsg, NewGgrebalanceSensorEmpty())
 }
 
-func NewGgrebalanceSensorEmpty() *GgrebalanceSensor {
-	return &GgrebalanceSensor{
-		GGDBToolSensor: GGDBToolSensor{
-			fs:           nil,
-			postgresConn: nil,
-		},
-	}
+func NewGgrebalanceSensorEmpty() GGDBToolSensorInterface {
+	return new(GgrebalanceSensor)
 }
 
-func NewGgrebalanceSensor(myfs vfs.Filesystem, conn *dbconn.DBConn) *GgrebalanceSensor {
+func NewGgrebalanceSensor(myfs vfs.Filesystem, conn *dbconn.DBConn) GGDBToolSensorInterface {
 	sensor := NewGgrebalanceSensorEmpty()
 	sensor.SetConnection(conn)
 	sensor.SetFs(myfs)
@@ -48,7 +43,7 @@ func (sensor GgrebalanceSensor) GetMinGgdbVersion() string {
 	return "7"
 }
 
-func (sensor GgrebalanceSensor) IsRunning() (bool, error) {
+func (sensor *GgrebalanceSensor) IsRunning() (bool, error) {
 	coordinatorDataDir, err := getCoordinatorDataDir(sensor.postgresConn, "ggrebalance", sensor.GetMinGgdbVersion())
 	if err != nil {
 		return false, err
