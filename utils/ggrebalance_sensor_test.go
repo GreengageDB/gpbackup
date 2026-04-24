@@ -41,7 +41,7 @@ var _ = Describe("ggrabalance_sensor", func() {
 				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceCheckSchemaQuery)).WillReturnRows(rebalanceSchemaExistenceRows)
 
 				ggrebalanceSensor := utils.NewGgrebalanceSensor(memoryfs, connectionPool)
-				result, err := ggrebalanceSensor.IsGgrebalanceRunning()
+				result, err := ggrebalanceSensor.IsRunning()
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(result).To(BeFalse())
@@ -57,7 +57,7 @@ var _ = Describe("ggrabalance_sensor", func() {
 				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceGetLatestStateQuery)).WillReturnRows(rebalanceLatestStateRows)
 
 				ggrebalanceSensor := utils.NewGgrebalanceSensor(memoryfs, connectionPool)
-				result, err := ggrebalanceSensor.IsGgrebalanceRunning()
+				result, err := ggrebalanceSensor.IsRunning()
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(result).To(BeFalse())
@@ -69,7 +69,7 @@ var _ = Describe("ggrabalance_sensor", func() {
 				Expect(vfs.WriteFile(memoryfs, path, []byte{0}, 0400)).To(Succeed())
 
 				ggrebalanceSensor := utils.NewGgrebalanceSensor(memoryfs, connectionPool)
-				result, err := ggrebalanceSensor.IsGgrebalanceRunning()
+				result, err := ggrebalanceSensor.IsRunning()
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(result).To(BeTrue())
@@ -85,7 +85,7 @@ var _ = Describe("ggrabalance_sensor", func() {
 				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceGetLatestStateQuery)).WillReturnRows(rebalanceLatestStateRows)
 
 				ggrebalanceSensor := utils.NewGgrebalanceSensor(memoryfs, connectionPool)
-				result, err := ggrebalanceSensor.IsGgrebalanceRunning()
+				result, err := ggrebalanceSensor.IsRunning()
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(result).To(BeTrue())
@@ -101,7 +101,7 @@ var _ = Describe("ggrabalance_sensor", func() {
 				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceGetLatestStateQuery)).WillReturnRows(rebalanceLatestStateRows)
 
 				ggrebalanceSensor := utils.NewGgrebalanceSensor(memoryfs, connectionPool)
-				result, err := ggrebalanceSensor.IsGgrebalanceRunning()
+				result, err := ggrebalanceSensor.IsRunning()
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(result).To(BeTrue())
@@ -112,7 +112,7 @@ var _ = Describe("ggrabalance_sensor", func() {
 				mock.ExpectQuery(utils.CoordinatorDataDirQuery).WillReturnError(errors.New("query error"))
 
 				ggrebalanceSensor := utils.NewGgrebalanceSensor(memoryfs, connectionPool)
-				_, err := ggrebalanceSensor.IsGgrebalanceRunning()
+				_, err := ggrebalanceSensor.IsRunning()
 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(Equal("query error"))
@@ -121,7 +121,7 @@ var _ = Describe("ggrabalance_sensor", func() {
 				mock.ExpectQuery(utils.CoordinatorDataDirQuery).WillReturnRows(mddPathRow)
 
 				ggrebalanceSensor := utils.NewGgrebalanceSensor(vfs.Dummy(errors.New("fs error")), connectionPool)
-				_, err := ggrebalanceSensor.IsGgrebalanceRunning()
+				_, err := ggrebalanceSensor.IsRunning()
 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(Equal("fs error"))
@@ -130,7 +130,7 @@ var _ = Describe("ggrabalance_sensor", func() {
 				connectionPool.DBName = "notThePostgresDatabase"
 
 				ggrebalanceSensor := utils.NewGgrebalanceSensor(memoryfs, connectionPool)
-				_, err := ggrebalanceSensor.IsGgrebalanceRunning()
+				_, err := ggrebalanceSensor.IsRunning()
 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(Equal("ggrebalance sensor requires a connection to the postgres database"))
@@ -139,7 +139,7 @@ var _ = Describe("ggrabalance_sensor", func() {
 				testhelper.SetDBVersion(connectionPool, "6.1.0")
 
 				ggrebalanceSensor := utils.NewGgrebalanceSensor(memoryfs, connectionPool)
-				_, err := ggrebalanceSensor.IsGgrebalanceRunning()
+				_, err := ggrebalanceSensor.IsRunning()
 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(Equal("ggrebalance sensor requires a connection to Greengage version >= 7"))

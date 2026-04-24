@@ -8,7 +8,6 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/blang/vfs"
-	"github.com/pkg/errors"
 )
 
 const (
@@ -26,30 +25,31 @@ type GgrebalanceSensor struct {
 }
 
 func CheckGgrebalanceRunning(errMsg string) {
-	postgresConn := dbconn.NewDBConnFromEnvironment("postgres")
-	postgresConn.MustConnect(1)
-	defer postgresConn.Close()
-	if postgresConn.Version.AtLeast("7") {
-		ggrebalanceSensor := NewGgrebalanceSensor(vfs.OS(), postgresConn)
-		isGgrebalanceRunning, err := ggrebalanceSensor.IsGgrebalanceRunning()
-		gplog.FatalOnError(err)
-		if isGgrebalanceRunning {
-			gplog.Fatal(errors.New(errMsg), "")
-		}
-	}
+	checkExtToolRunning(errMsg, NewGgrebalanceSensorEmpty())
 }
 
-func NewGgrebalanceSensor(myfs vfs.Filesystem, conn *dbconn.DBConn) GgrebalanceSensor {
-	return GgrebalanceSensor{
+func NewGgrebalanceSensorEmpty() *GgrebalanceSensor {
+	return &GgrebalanceSensor{
 		GGDBToolSensor: GGDBToolSensor{
-			fs:           myfs,
-			postgresConn: conn,
+			fs:           nil,
+			postgresConn: nil,
 		},
 	}
 }
 
-func (sensor GgrebalanceSensor) IsGgrebalanceRunning() (bool, error) {
-	coordinatorDataDir, err := getCoordinatorDataDir(sensor.postgresConn, "ggrebalance", "7")
+func NewGgrebalanceSensor(myfs vfs.Filesystem, conn *dbconn.DBConn) *GgrebalanceSensor {
+	sensor := NewGgrebalanceSensorEmpty()
+	sensor.SetConnection(conn)
+	sensor.SetFs(myfs)
+	return sensor
+}
+
+func (sensor GgrebalanceSensor) GetMinGgdbVersion() string {
+	return "7"
+}
+
+func (sensor GgrebalanceSensor) IsRunning() (bool, error) {
+	coordinatorDataDir, err := getCoordinatorDataDir(sensor.postgresConn, "ggrebalance", sensor.GetMinGgdbVersion())
 	if err != nil {
 		return false, err
 	}

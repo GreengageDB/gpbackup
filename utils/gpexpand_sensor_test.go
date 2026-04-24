@@ -42,7 +42,7 @@ var _ = Describe("gpexpand_sensor", func() {
 				Expect(vfs.WriteFile(memoryfs, path, []byte{0}, 0400)).To(Succeed())
 				gpexpandSensor := utils.NewGpexpandSensor(memoryfs, connectionPool)
 
-				result, err := gpexpandSensor.IsGpexpandRunning()
+				result, err := gpexpandSensor.IsRunning()
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(result).To(BeTrue())
@@ -55,7 +55,7 @@ var _ = Describe("gpexpand_sensor", func() {
 				mock.ExpectQuery(utils.GpexpandTemporaryTableStatusQuery).WillReturnRows(hasGpexpandPhase2StatusRow)
 				gpexpandSensor := utils.NewGpexpandSensor(memoryfs, connectionPool)
 
-				result, err := gpexpandSensor.IsGpexpandRunning()
+				result, err := gpexpandSensor.IsRunning()
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(result).To(BeTrue())
@@ -67,7 +67,7 @@ var _ = Describe("gpexpand_sensor", func() {
 				mock.ExpectQuery(regexp.QuoteMeta(utils.GpexpandStatusTableExistsQuery)).WillReturnRows(tableDoesNotExistsRow)
 				gpexpandSensor := utils.NewGpexpandSensor(memoryfs, connectionPool)
 
-				result, err := gpexpandSensor.IsGpexpandRunning()
+				result, err := gpexpandSensor.IsRunning()
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(result).To(BeFalse())
@@ -79,7 +79,7 @@ var _ = Describe("gpexpand_sensor", func() {
 				mock.ExpectQuery(utils.GpexpandTemporaryTableStatusQuery).WillReturnRows(finishedGpexpandPhase2StatusRow)
 				gpexpandSensor := utils.NewGpexpandSensor(memoryfs, connectionPool)
 
-				result, err := gpexpandSensor.IsGpexpandRunning()
+				result, err := gpexpandSensor.IsRunning()
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(result).To(BeFalse())
@@ -91,7 +91,7 @@ var _ = Describe("gpexpand_sensor", func() {
 				mock.ExpectQuery(utils.GpexpandTemporaryTableStatusQuery).WillReturnRows(finishedGpexpandPhase2StatusRow)
 				gpexpandSensor := utils.NewGpexpandSensor(memoryfs, connectionPool)
 
-				result, err := gpexpandSensor.IsGpexpandRunning()
+				result, err := gpexpandSensor.IsRunning()
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(result).To(BeFalse())
@@ -103,7 +103,7 @@ var _ = Describe("gpexpand_sensor", func() {
 				mock.ExpectQuery(utils.GpexpandTemporaryTableStatusQuery).WillReturnRows(finishedGpexpandPhase2StatusRow)
 				gpexpandSensor := utils.NewGpexpandSensor(memoryfs, connectionPool)
 
-				result, err := gpexpandSensor.IsGpexpandRunning()
+				result, err := gpexpandSensor.IsRunning()
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(result).To(BeFalse())
@@ -114,7 +114,7 @@ var _ = Describe("gpexpand_sensor", func() {
 				mock.ExpectQuery(utils.CoordinatorDataDirQuery).WillReturnError(errors.New("query error"))
 				gpexpandSensor := utils.NewGpexpandSensor(memoryfs, connectionPool)
 
-				_, err := gpexpandSensor.IsGpexpandRunning()
+				_, err := gpexpandSensor.IsRunning()
 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(Equal("query error"))
@@ -123,7 +123,7 @@ var _ = Describe("gpexpand_sensor", func() {
 				mock.ExpectQuery(utils.CoordinatorDataDirQuery).WillReturnRows(mddPathRow)
 				gpexpandSensor := utils.NewGpexpandSensor(vfs.Dummy(errors.New("fs error")), connectionPool)
 
-				_, err := gpexpandSensor.IsGpexpandRunning()
+				_, err := gpexpandSensor.IsRunning()
 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(Equal("fs error"))
@@ -132,7 +132,7 @@ var _ = Describe("gpexpand_sensor", func() {
 				connectionPool.DBName = "notThePostgresDatabase"
 				gpexpandSensor := utils.NewGpexpandSensor(memoryfs, connectionPool)
 
-				_, err := gpexpandSensor.IsGpexpandRunning()
+				_, err := gpexpandSensor.IsRunning()
 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(Equal("gpexpand sensor requires a connection to the postgres database"))
@@ -141,7 +141,7 @@ var _ = Describe("gpexpand_sensor", func() {
 				testhelper.SetDBVersion(connectionPool, "5.3.0")
 				gpexpandSensor := utils.NewGpexpandSensor(memoryfs, connectionPool)
 
-				_, err := gpexpandSensor.IsGpexpandRunning()
+				_, err := gpexpandSensor.IsRunning()
 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(Equal("gpexpand sensor requires a connection to Greengage version >= 6"))

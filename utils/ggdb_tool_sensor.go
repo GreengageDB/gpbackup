@@ -18,6 +18,36 @@ type GGDBToolSensor struct {
 	postgresConn *dbconn.DBConn
 }
 
+func (sensor *GGDBToolSensor) SetConnection(conn *dbconn.DBConn) {
+	sensor.postgresConn = conn
+}
+
+func (sensor *GGDBToolSensor) SetFs(myfs vfs.Filesystem) {
+	sensor.fs = myfs
+}
+
+type GGDBToolSensorInterface interface {
+	GetMinGgdbVersion() string
+	IsRunning() (bool, error)
+	SetConnection(*dbconn.DBConn)
+	SetFs(vfs.Filesystem)
+}
+
+func checkExtToolRunning(errMsg string, sensor GGDBToolSensorInterface) {
+	postgresConn := dbconn.NewDBConnFromEnvironment("postgres")
+	postgresConn.MustConnect(1)
+	defer postgresConn.Close()
+	if postgresConn.Version.AtLeast(sensor.GetMinGgdbVersion()) {
+		sensor.SetConnection(postgresConn)
+		sensor.SetFs(vfs.OS())
+		isRunning, err := sensor.IsRunning()
+		gplog.FatalOnError(err)
+		if isRunning {
+			gplog.Fatal(errors.New(errMsg), "")
+		}
+	}
+}
+
 func getCoordinatorDataDir(conn *dbconn.DBConn, sensorName string, minGreengageVersion string) (string, error) {
 	err := validateConnection(conn, sensorName, minGreengageVersion)
 	if err != nil {

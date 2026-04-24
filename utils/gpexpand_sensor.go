@@ -8,7 +8,6 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/blang/vfs"
-	"github.com/pkg/errors"
 )
 
 const (
@@ -27,30 +26,31 @@ type GpexpandSensor struct {
 }
 
 func CheckGpexpandRunning(errMsg string) {
-	postgresConn := dbconn.NewDBConnFromEnvironment("postgres")
-	postgresConn.MustConnect(1)
-	defer postgresConn.Close()
-	if postgresConn.Version.AtLeast("6") {
-		gpexpandSensor := NewGpexpandSensor(vfs.OS(), postgresConn)
-		isGpexpandRunning, err := gpexpandSensor.IsGpexpandRunning()
-		gplog.FatalOnError(err)
-		if isGpexpandRunning {
-			gplog.Fatal(errors.New(errMsg), "")
-		}
-	}
+	checkExtToolRunning(errMsg, NewGpexpandSensorEmpty())
 }
 
-func NewGpexpandSensor(myfs vfs.Filesystem, conn *dbconn.DBConn) GpexpandSensor {
-	return GpexpandSensor{
+func NewGpexpandSensorEmpty() *GpexpandSensor {
+	return &GpexpandSensor{
 		GGDBToolSensor: GGDBToolSensor{
-			fs:           myfs,
-			postgresConn: conn,
+			fs:           nil,
+			postgresConn: nil,
 		},
 	}
 }
 
-func (sensor GpexpandSensor) IsGpexpandRunning() (bool, error) {
-	coordinatorDataDir, err := getCoordinatorDataDir(sensor.postgresConn, "gpexpand", "6")
+func NewGpexpandSensor(myfs vfs.Filesystem, conn *dbconn.DBConn) *GpexpandSensor {
+	sensor := NewGpexpandSensorEmpty()
+	sensor.SetConnection(conn)
+	sensor.SetFs(myfs)
+	return sensor
+}
+
+func (sensor GpexpandSensor) GetMinGgdbVersion() string {
+	return "6"
+}
+
+func (sensor GpexpandSensor) IsRunning() (bool, error) {
+	coordinatorDataDir, err := getCoordinatorDataDir(sensor.postgresConn, "gpexpand", sensor.GetMinGgdbVersion())
 	if err != nil {
 		return false, err
 	}
