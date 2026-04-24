@@ -54,7 +54,7 @@ var _ = Describe("ggrabalance_sensor", func() {
 				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceCheckSchemaQuery)).WillReturnRows(rebalanceSchemaExistenceRows)
 
 				rebalanceLatestStateRows := sqlmock.NewRows([]string{"state"}).AddRow("STATE_EXECUTOR_DONE")
-				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceGetLatesttateQuery)).WillReturnRows(rebalanceLatestStateRows)
+				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceGetLatestStateQuery)).WillReturnRows(rebalanceLatestStateRows)
 
 				ggrebalanceSensor := utils.NewGgrebalanceSensor(memoryfs, connectionPool)
 				result, err := ggrebalanceSensor.IsGgrebalanceRunning()
@@ -82,7 +82,7 @@ var _ = Describe("ggrabalance_sensor", func() {
 				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceCheckSchemaQuery)).WillReturnRows(rebalanceSchemaExistenceRows)
 
 				rebalanceLatestStateRows := sqlmock.NewRows([]string{"state"}).AddRow("STATE_EXECUTOR_STARTED")
-				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceGetLatesttateQuery)).WillReturnRows(rebalanceLatestStateRows)
+				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceGetLatestStateQuery)).WillReturnRows(rebalanceLatestStateRows)
 
 				ggrebalanceSensor := utils.NewGgrebalanceSensor(memoryfs, connectionPool)
 				result, err := ggrebalanceSensor.IsGgrebalanceRunning()
@@ -98,7 +98,7 @@ var _ = Describe("ggrabalance_sensor", func() {
 				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceCheckSchemaQuery)).WillReturnRows(rebalanceSchemaExistenceRows)
 
 				rebalanceLatestStateRows := sqlmock.NewRows([]string{"state"})
-				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceGetLatesttateQuery)).WillReturnRows(rebalanceLatestStateRows)
+				mock.ExpectQuery(regexp.QuoteMeta(utils.GgrebalanceGetLatestStateQuery)).WillReturnRows(rebalanceLatestStateRows)
 
 				ggrebalanceSensor := utils.NewGgrebalanceSensor(memoryfs, connectionPool)
 				result, err := ggrebalanceSensor.IsGgrebalanceRunning()

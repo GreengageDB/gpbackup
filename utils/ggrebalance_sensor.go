@@ -15,8 +15,8 @@ const (
 	BackupPreventedByGgrebalanceMessage  GgrebalanceFailureMessage = `Greengage rebalance currently in process, please re-run gpbackup when the rebalance has completed`
 	RestorePreventedByGgrebalanceMessage GgrebalanceFailureMessage = `Greengage rebalance currently in process.  Once rebalance is complete, it will be possible to restart gprestore, but please note existing backup sets taken with a different cluster configuration may no longer be compatible with the newly rebalanced cluster configuration`
 
-	GgrebalanceCheckSchemaQuery   = "SELECT COUNT(1) AS rebalance_schema_exists FROM pg_namespace WHERE nspname = 'ggrebalance'"
-	GgrebalanceGetLatesttateQuery = "SELECT state FROM ggrebalance.rebalance_status WHERE state_category = 'MAIN' ORDER BY updated DESC LIMIT 1"
+	GgrebalanceCheckSchemaQuery    = "SELECT COUNT(1) AS rebalance_schema_exists FROM pg_namespace WHERE nspname = 'ggrebalance'"
+	GgrebalanceGetLatestStateQuery = "SELECT state FROM ggrebalance.rebalance_status WHERE state_category = 'MAIN' ORDER BY updated DESC LIMIT 1"
 
 	GgrebalancePidFilename = "ggrebalance.pid"
 )
@@ -76,7 +76,7 @@ func (sensor GgrebalanceSensor) IsGgrebalanceRunning() (bool, error) {
 		}
 
 		// and check latest state
-		latestState, err := dbconn.SelectString(sensor.postgresConn, GgrebalanceGetLatesttateQuery)
+		latestState, err := dbconn.SelectString(sensor.postgresConn, GgrebalanceGetLatestStateQuery)
 		if err != nil {
 			gplog.Error(fmt.Sprintf("Error encountered retrieving ggrebalance state status: %v", err))
 			return false, err
