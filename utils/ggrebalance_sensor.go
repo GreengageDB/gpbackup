@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	BackupPreventedByGgrebalanceMessage  GgrebalanceFailureMessage = `Greengage rebalance currently in process, please re-run gpbackup when the rebalance has completed`
-	RestorePreventedByGgrebalanceMessage GgrebalanceFailureMessage = `Greengage rebalance currently in process.  Once rebalance is complete, it will be possible to restart gprestore, but please note existing backup sets taken with a different cluster configuration may no longer be compatible with the newly rebalanced cluster configuration`
+	BackupPreventedByGgrebalanceMessage  = `Greengage rebalance currently in process, please re-run gpbackup when the rebalance has completed`
+	RestorePreventedByGgrebalanceMessage = `Greengage rebalance currently in process.  Once rebalance is complete, it will be possible to restart gprestore, but please note existing backup sets taken with a different cluster configuration may no longer be compatible with the newly rebalanced cluster configuration`
 
 	GgrebalanceCheckSchemaQuery    = "SELECT COUNT(1) AS rebalance_schema_exists FROM pg_namespace WHERE nspname = 'ggrebalance'"
 	GgrebalanceGetLatestStateQuery = "SELECT state FROM ggrebalance.rebalance_status WHERE state_category = 'MAIN' ORDER BY updated DESC LIMIT 1"
@@ -25,9 +25,7 @@ type GgrebalanceSensor struct {
 	GGDBToolSensor
 }
 
-type GgrebalanceFailureMessage string
-
-func CheckGgrebalanceRunning(errMsg GgrebalanceFailureMessage) {
+func CheckGgrebalanceRunning(errMsg string) {
 	postgresConn := dbconn.NewDBConnFromEnvironment("postgres")
 	postgresConn.MustConnect(1)
 	defer postgresConn.Close()
@@ -36,7 +34,7 @@ func CheckGgrebalanceRunning(errMsg GgrebalanceFailureMessage) {
 		isGgrebalanceRunning, err := ggrebalanceSensor.IsGgrebalanceRunning()
 		gplog.FatalOnError(err)
 		if isGgrebalanceRunning {
-			gplog.Fatal(errors.New(string(errMsg)), "")
+			gplog.Fatal(errors.New(errMsg), "")
 		}
 	}
 }

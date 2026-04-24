@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	BackupPreventedByGpexpandMessage GpexpandFailureMessage = `Greengage expansion currently in process, please re-run gpbackup when the expansion has completed`
+	BackupPreventedByGpexpandMessage = `Greengage expansion currently in process, please re-run gpbackup when the expansion has completed`
 
-	RestorePreventedByGpexpandMessage GpexpandFailureMessage = `Greengage expansion currently in process.  Once expansion is complete, it will be possible to restart gprestore, but please note existing backup sets taken with a different cluster configuration may no longer be compatible with the newly expanded cluster configuration`
+	RestorePreventedByGpexpandMessage = `Greengage expansion currently in process.  Once expansion is complete, it will be possible to restart gprestore, but please note existing backup sets taken with a different cluster configuration may no longer be compatible with the newly expanded cluster configuration`
 
 	GpexpandTemporaryTableStatusQuery = `SELECT status FROM gpexpand.status ORDER BY updated DESC LIMIT 1`
 	GpexpandStatusTableExistsQuery    = `select relname from pg_class JOIN pg_namespace on (pg_class.relnamespace = pg_namespace.oid)  where relname = 'status' and pg_namespace.nspname = 'gpexpand'`
@@ -26,9 +26,7 @@ type GpexpandSensor struct {
 	GGDBToolSensor
 }
 
-type GpexpandFailureMessage string
-
-func CheckGpexpandRunning(errMsg GpexpandFailureMessage) {
+func CheckGpexpandRunning(errMsg string) {
 	postgresConn := dbconn.NewDBConnFromEnvironment("postgres")
 	postgresConn.MustConnect(1)
 	defer postgresConn.Close()
@@ -37,7 +35,7 @@ func CheckGpexpandRunning(errMsg GpexpandFailureMessage) {
 		isGpexpandRunning, err := gpexpandSensor.IsGpexpandRunning()
 		gplog.FatalOnError(err)
 		if isGpexpandRunning {
-			gplog.Fatal(errors.New(string(errMsg)), "")
+			gplog.Fatal(errors.New(errMsg), "")
 		}
 	}
 }
