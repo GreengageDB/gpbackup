@@ -8,15 +8,13 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/blang/vfs"
-	"github.com/pkg/errors"
 )
 
 const (
-	BackupPreventedByGpexpandMessage GpexpandFailureMessage = `Greengage expansion currently in process, please re-run gpbackup when the expansion has completed`
+	BackupPreventedByGpexpandMessage = `Greengage expansion currently in process, please re-run gpbackup when the expansion has completed`
 
-	RestorePreventedByGpexpandMessage GpexpandFailureMessage = `Greengage expansion currently in process.  Once expansion is complete, it will be possible to restart gprestore, but please note existing backup sets taken with a different cluster configuration may no longer be compatible with the newly expanded cluster configuration`
+	RestorePreventedByGpexpandMessage = `Greengage expansion currently in process.  Once expansion is complete, it will be possible to restart gprestore, but please note existing backup sets taken with a different cluster configuration may no longer be compatible with the newly expanded cluster configuration`
 
-	CoordinatorDataDirQuery           = `select datadir from gp_segment_configuration where content=-1 and role='p'`
 	GpexpandTemporaryTableStatusQuery = `SELECT status FROM gpexpand.status ORDER BY updated DESC LIMIT 1`
 	GpexpandStatusTableExistsQuery    = `select relname from pg_class JOIN pg_namespace on (pg_class.relnamespace = pg_namespace.oid)  where relname = 'status' and pg_namespace.nspname = 'gpexpand'`
 
@@ -24,42 +22,31 @@ const (
 )
 
 type GpexpandSensor struct {
-	fs           vfs.Filesystem
-	postgresConn *dbconn.DBConn
+	GGDBToolSensor
 }
 
-type GpexpandFailureMessage string
-
-func CheckGpexpandRunning(errMsg GpexpandFailureMessage) {
-	postgresConn := dbconn.NewDBConnFromEnvironment("postgres")
-	postgresConn.MustConnect(1)
-	defer postgresConn.Close()
-	if postgresConn.Version.AtLeast("6") {
-		gpexpandSensor := NewGpexpandSensor(vfs.OS(), postgresConn)
-		isGpexpandRunning, err := gpexpandSensor.IsGpexpandRunning()
-		gplog.FatalOnError(err)
-		if isGpexpandRunning {
-			gplog.Fatal(errors.New(string(errMsg)), "")
-		}
-	}
+func CheckGpexpandRunning(errMsg string) {
+	checkExtToolRunning(errMsg, NewGpexpandSensorEmpty())
 }
 
-func NewGpexpandSensor(myfs vfs.Filesystem, conn *dbconn.DBConn) GpexpandSensor {
-	return GpexpandSensor{
-		fs:           myfs,
-		postgresConn: conn,
-	}
+func NewGpexpandSensorEmpty() GGDBToolSensorInterface {
+	return new(GpexpandSensor)
 }
 
-func (sensor GpexpandSensor) IsGpexpandRunning() (bool, error) {
-	err := validateConnection(sensor.postgresConn)
+func NewGpexpandSensor(myfs vfs.Filesystem, conn *dbconn.DBConn) GGDBToolSensorInterface {
+	sensor := NewGpexpandSensorEmpty()
+	sensor.SetConnection(conn)
+	sensor.SetFs(myfs)
+	return sensor
+}
+
+func (sensor *GpexpandSensor) GetMinGgdbVersion() string {
+	return "6"
+}
+
+func (sensor *GpexpandSensor) IsRunning() (bool, error) {
+	coordinatorDataDir, err := getCoordinatorDataDir(sensor.postgresConn, "gpexpand", sensor.GetMinGgdbVersion())
 	if err != nil {
-		gplog.Error(fmt.Sprintf("Error encountered validating db connection: %v", err))
-		return false, err
-	}
-	coordinatorDataDir, err := dbconn.SelectString(sensor.postgresConn, CoordinatorDataDirQuery)
-	if err != nil {
-		gplog.Error(fmt.Sprintf("Error encountered retrieving data directory: %v", err))
 		return false, err
 	}
 
@@ -103,14 +90,4 @@ func (sensor GpexpandSensor) IsGpexpandRunning() (bool, error) {
 
 	// Stat command returned a "real" error
 	return false, err
-}
-
-func validateConnection(conn *dbconn.DBConn) error {
-	if conn.DBName != "postgres" {
-		return errors.New("gpexpand sensor requires a connection to the postgres database")
-	}
-	if conn.Version.Before("6") {
-		return errors.New("gpexpand sensor requires a connection to Greengage version >= 6")
-	}
-	return nil
 }
