@@ -39,7 +39,7 @@ func NewGgrebalanceSensor(myfs vfs.Filesystem, conn *dbconn.DBConn) GGDBToolSens
 	return sensor
 }
 
-func (sensor GgrebalanceSensor) GetMinGgdbVersion() string {
+func (sensor *GgrebalanceSensor) GetMinGgdbVersion() string {
 	return "7"
 }
 

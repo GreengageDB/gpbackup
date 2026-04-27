@@ -40,7 +40,7 @@ func NewGpexpandSensor(myfs vfs.Filesystem, conn *dbconn.DBConn) GGDBToolSensorI
 	return sensor
 }
 
-func (sensor GpexpandSensor) GetMinGgdbVersion() string {
+func (sensor *GpexpandSensor) GetMinGgdbVersion() string {
 	return "6"
 }
 
