@@ -110,6 +110,9 @@ install :
 		fi; \
 		rm /tmp/seg_hosts
 
+deb :
+	dpkg-buildpackage -us -uc -b
+
 clean :
 		# Build artifacts
 		rm -f $(BIN_DIR)/$(BACKUP) $(BACKUP) $(BIN_DIR)/$(RESTORE) $(RESTORE) $(BIN_DIR)/$(HELPER) $(HELPER)

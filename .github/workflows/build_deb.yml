@@ -1,0 +1,16 @@
+name: build_deb
+
+on:
+  push:
+    branches:
+      - '*'
+  workflow_dispatch:
+
+jobs:
+  build_deb:
+    uses: greengagedb/greengage-ci/.github/workflows/greengage-reusable-deb-native.yml@CI-5748
+    with:
+      go_version: "1.20"
+      artifact_name: gpbackup-deb
+      test_docker: ubuntu:24.04
+      add_greengage_repo: true

@@ -1,0 +1,14 @@
+Source: gpbackup
+Maintainer: Greengage <greengage@greengagedb.org>
+Section: database
+Build-Depends: debhelper (>= 13),
+	build-essential
+Standards-Version: 4.6.0
+
+Package: gpbackup
+Architecture: any
+Depends: ${shlibs:Depends},
+  greengage6 | greengage7
+Description: Greengage Backup and Restore utilities
+ gpbackup and gprestore are Go utilities for performing Greengage Database
+ backups and restores. gpbackup_helper is used with the --single-data-file flag.
