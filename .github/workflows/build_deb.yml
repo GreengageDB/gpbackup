@@ -9,10 +9,10 @@ on:
 
 jobs:
   build_deb:
-    uses: greengagedb/greengage-ci/.github/workflows/greengage-reusable-deb-native.yml@CI-5748
+    uses: greengagedb/greengage-ci/.github/workflows/greengage-reusable-deb-native.yml@v43
     with:
       go_version: "1.20"
-      artifact_name: gpbackup-deb
-      build_command: make deb
-      test_docker: ubuntu:24.04
+      artifact_name: "gpbackup-deb"
+      build_command: "make deb"
+      test_docker: "ubuntu:24.04"
       add_greengage_repo: true
