@@ -1,10 +1,11 @@
-name: build_deb
+name: Build deb
 
 on:
   push:
-    branches:
-      - '*'
-  workflow_dispatch:
+    branches: ['master']
+    tags: ['**']
+  pull_request:
+    branches: ['**']
 
 jobs:
   build_deb:
@@ -12,5 +13,6 @@ jobs:
     with:
       go_version: "1.20"
       artifact_name: gpbackup-deb
+      build_command: make deb
       test_docker: ubuntu:24.04
       add_greengage_repo: true
