@@ -110,6 +110,22 @@ install :
 		fi; \
 		rm /tmp/seg_hosts
 
+# Packaging
+DATE_RFC        := $(shell date -R)
+DISTRO_CODENAME := $(shell lsb_release -sc 2>/dev/null || echo unstable)
+DEB_VERSION     := $(shell echo "$(GIT_VERSION)" | sed 's/^v//')
+DEB_MAINTAINER  := Greengage <greengage@greengagedb.org>
+
+debian/changelog :
+	@echo "=== Generating debian/changelog ==="
+	@printf 'gpbackup (%s) %s; urgency=medium\n\n  * Build from %s\n\n -- %s  %s\n' \
+		"$(DEB_VERSION)" "$(DISTRO_CODENAME)" "$(GIT_VERSION)" "$(DEB_MAINTAINER)" "$(DATE_RFC)" > $@
+
+changelog : debian/changelog
+
+deb : debian/changelog
+	dpkg-buildpackage -us -uc -b
+
 clean :
 		# Build artifacts
 		rm -f $(BIN_DIR)/$(BACKUP) $(BACKUP) $(BIN_DIR)/$(RESTORE) $(RESTORE) $(BIN_DIR)/$(HELPER) $(HELPER)

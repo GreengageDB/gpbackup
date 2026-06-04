@@ -1,0 +1,42 @@
+#!/usr/bin/make -f
+
+DH_VERBOSE = 1
+
+GPBACKUP_HOME ?= /opt/greengagedb/gpbackup
+GPBACKUP_HOME_REL := $(GPBACKUP_HOME:/%=%)
+
+export DH_OPTIONS := $(DH_OPTIONS)
+export DEB_BUILD_OPTIONS = nocheck
+export PATH := /usr/local/go/bin:$(PATH)
+export CGO_ENABLED = 1
+export GOPATH ?= $(HOME)/go
+
+BUILD_DIR := $(CURDIR)/_build
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	@echo "Skipping clean"
+
+override_dh_auto_configure:
+	@echo "=== Generating .install files ==="
+	sed 's|@GPBACKUP_HOME_REL@|$(GPBACKUP_HOME_REL)|g' debian/gpbackup.install.in > debian/gpbackup.install
+
+override_dh_auto_build:
+	@echo "=== Building gpbackup binaries ==="
+	mkdir -p $(BUILD_DIR)
+	$(MAKE) build BIN_DIR=$(BUILD_DIR)
+
+override_dh_auto_install:
+	@echo "=== Installing gpbackup binaries ==="
+	install -D -m 755 $(BUILD_DIR)/gpbackup        $(CURDIR)/debian/tmp/$(GPBACKUP_HOME_REL)/bin/gpbackup
+	install -D -m 755 $(BUILD_DIR)/gprestore       $(CURDIR)/debian/tmp/$(GPBACKUP_HOME_REL)/bin/gprestore
+	install -D -m 755 $(BUILD_DIR)/gpbackup_helper $(CURDIR)/debian/tmp/$(GPBACKUP_HOME_REL)/bin/gpbackup_helper
+
+override_dh_dwz:
+	@echo "Skipping debug symbols compression (not working properly with Golang)"
+
+override_dh_gencontrol:
+	@echo "=== Generating control files ==="
+	dh_gencontrol

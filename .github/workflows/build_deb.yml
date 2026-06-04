@@ -1,0 +1,22 @@
+name: Build deb
+
+on:
+  push:
+    branches: ['master']
+    tags: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  build_deb:
+    strategy:
+      matrix:
+        ubuntu_version: ["22.04", "24.04"]
+    uses: greengagedb/greengage-ci/.github/workflows/greengage-reusable-deb-native.yml@v43
+    with:
+      go_version: "1.20"
+      artifact_name: "gpbackup-deb-ubuntu${{ matrix.ubuntu_version }}"
+      build_command: "make deb"
+      runner: "ubuntu-${{ matrix.ubuntu_version }}"
+      test_docker: "ubuntu:${{ matrix.ubuntu_version }}"
+      add_greengage_repo: true
