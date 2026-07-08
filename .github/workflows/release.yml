@@ -1,4 +1,4 @@
-# .github/workflows/greengage-release.yml
+# .github/workflows/release.yml
 name: GreengageDB gpbackup Release
 
 on:
