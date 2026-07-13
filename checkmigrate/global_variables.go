@@ -1,0 +1,12 @@
+package ggcheckmigrate
+
+/*
+ * Non-flag variables
+ */
+var (
+	version              	string
+)
+
+func GetVersion() string {
+	return version
+}
