@@ -15,7 +15,7 @@ GIT_VERSION := $(shell git describe --tags | perl -pe 's/(.*)-([0-9]*)-(g[0-9a-f
 BACKUP_VERSION_STR=github.com/GreengageDB/gpbackup/backup.version=$(GIT_VERSION)
 RESTORE_VERSION_STR=github.com/GreengageDB/gpbackup/restore.version=$(GIT_VERSION)
 HELPER_VERSION_STR=github.com/GreengageDB/gpbackup/helper.version=$(GIT_VERSION)
-CHECK_MIGRATE_VERSION_STR=github.com/GreengageDB/gpbackup/helper.version=$(GIT_VERSION)
+CHECK_MIGRATE_VERSION_STR=github.com/GreengageDB/gpbackup/checkmigrate.version=$(GIT_VERSION)
 
 # note that /testutils is not a production directory, but has unit tests to validate testing tools
 SUBDIRS_HAS_UNIT=backup/ filepath/ history/ helper/ options/ report/ restore/ toc/ utils/ testutils/
