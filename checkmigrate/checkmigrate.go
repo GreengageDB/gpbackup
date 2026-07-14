@@ -1,4 +1,4 @@
-package ggcheckmigrate
+package checkmigrate
 
 import (
 	"github.com/spf13/cobra"
