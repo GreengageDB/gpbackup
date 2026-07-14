@@ -56,7 +56,7 @@ const (
 	REPORT_DIR            = "report-dir"
 
 	/* 
-	 *	ggcheckmigrate-specific flags and messages
+	 *	ggcheckmigrate-specific flags
 	 */
 	SOURCE_HOST           = "source-host"
 	SOURCE_PORT           = "source-port"
