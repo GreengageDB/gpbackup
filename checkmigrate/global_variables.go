@@ -1,4 +1,4 @@
-package ggcheckmigrate
+package checkmigrate
 
 /*
  * Non-flag variables
