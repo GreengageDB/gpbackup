@@ -1,4 +1,4 @@
-package ggcheckmigrate
+package checkmigrate
 
 import (
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
