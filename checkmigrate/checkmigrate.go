@@ -16,7 +16,7 @@ import (
 func DoInit(cmd *cobra.Command) {
 	CleanupGroup = &sync.WaitGroup{}
 	CleanupGroup.Add(1)
-	gplog.InitializeLogging("gprestore", "")
+	gplog.InitializeLogging("ggcheckmigrate", "")
 	utils.InitializeSignalHandler(DoCleanup, "checkmigrate process", &wasTerminated)
 }
 
@@ -66,7 +66,7 @@ func DoTeardown() {
 	}
 	if wasTerminated.Load() {
 		/*
-		 * Don't print an error if the restore was canceled, as the signal handler
+		 * Don't print an error if the checkmigrate was canceled, as the signal handler
 		 * will take care of cleanup and return codes.  Just wait until the signal
 		 * handler's DoCleanup completes so the main goroutine doesn't exit while
 		 * cleanup is still in progress.
