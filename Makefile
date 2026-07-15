@@ -18,7 +18,7 @@ HELPER_VERSION_STR=github.com/GreengageDB/gpbackup/helper.version=$(GIT_VERSION)
 CHECK_MIGRATE_VERSION_STR=github.com/GreengageDB/gpbackup/checkmigrate.version=$(GIT_VERSION)
 
 # note that /testutils is not a production directory, but has unit tests to validate testing tools
-SUBDIRS_HAS_UNIT=backup/ filepath/ history/ helper/ options/ report/ restore/ toc/ utils/ testutils/
+SUBDIRS_HAS_UNIT=backup/ filepath/ history/ helper/ options/ report/ restore/ checkmigrate/ toc/ utils/ testutils/
 SUBDIRS_ALL=$(SUBDIRS_HAS_UNIT) integration/ end_to_end/
 GOLANG_LINTER=$(GOPATH)/bin/golangci-lint
 GINKGO=$(GOPATH)/bin/ginkgo
