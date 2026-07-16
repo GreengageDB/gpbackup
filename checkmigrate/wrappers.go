@@ -40,13 +40,15 @@ func SetLoggerVerbosity() {
  * Might need to be written.
  */ 
 func CreateConnectionPool() {
-	sourceConnectionPool = dbconn.NewDBConn("postgres", "gpadmin", "/var/run/sock1", 5432)
+	sourceConnectionPool = dbconn.NewDBConn("postgres", "gpadmin", "/tmp", 6000)
+	sourceConnectionPool.MustConnect(1);
 	if !sourceConnectionPool.Version.Is("6") {
 		gplog.Fatal(errors.Errorf(`Source GPDB version %s is not supported. Utility is used only on GPDB %s as source.`, sourceConnectionPool.Version.VersionString, "6"), "")
 	}
 
 	// TODO: Handle this, only if target-host flag is defined
-	targetConnectionPool = dbconn.NewDBConn("postgres", "gpadmin", "/var/cun/sock2", 5432)
+	targetConnectionPool = dbconn.NewDBConn("postgres", "gpadmin", "/tmp", 7000)
+	targetConnectionPool.MustConnect(1);
 	if !targetConnectionPool.Version.Is("7") {
 		gplog.Fatal(errors.Errorf(`Target GPDB version %s is not supported. Utility is used only on GPDB %s as target.`, targetConnectionPool.Version.VersionString, "7"), "")
 	}
