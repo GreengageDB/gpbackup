@@ -152,6 +152,9 @@ func SetCheckMigrateFlagDefaults(flagSet *pflag.FlagSet) {
 	flagSet.StringP(TARGET_NO_PASSWORD, "W","", "The password for the cluster being checked is taken from the .pgpass file (-w for psql)")
 	flagSet.BoolP("help", "?", false, "Help for ggcheckmigrate")
 	flagSet.BoolP("version", "v", false, "Print version number and exit")
+	flagSet.Bool(DEBUG, false, "Print verbose and debug log messages")
+	flagSet.Bool(QUIET, false, "Suppress non-warning, non-error log messages")
+	flagSet.Bool(VERBOSE, false, "Print verbose log messages")
 }
 
 /*
