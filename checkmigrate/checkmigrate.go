@@ -8,7 +8,7 @@ import (
 
 func DoInit(cmd *cobra.Command) {
 	gplog.InitializeLogging("ggcheckmigrate", "")
-	SetCmdFlags(cmd.Flags());
+	SetCmdFlags(cmd.Flags())
 }
 
 /*
@@ -16,8 +16,7 @@ func DoInit(cmd *cobra.Command) {
  * It should only validate; initialization with any sort of side effects should go in DoInit or DoSetup.
  */
 func DoFlagValidation(cmd *cobra.Command) {
-	ValidateFlagCombinations(cmd.Flags());
-	ValidateFlagValues();
+	ValidateFlagCombinations(cmd.Flags())
 }
 
 func DoSetup() {

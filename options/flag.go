@@ -55,18 +55,18 @@ const (
 	NO_INHERITS           = "no-inherits"
 	REPORT_DIR            = "report-dir"
 
-	/* 
+	/*
 	 *	ggcheckmigrate-specific flags
 	 */
-	SOURCE_HOST           = "source-host"
-	SOURCE_PORT           = "source-port"
-	SOURCE_DATABASE       = "source-database"
-	SOURCE_USER           = "source-user"
-	SOURCE_NO_PASSWORD    = "source-no-password"
-	TARGET_HOST           = "target-host"
-	TARGET_PORT           = "target-port"
-	TARGET_USER           = "target-user"
-	TARGET_NO_PASSWORD    = "target-no-password"
+	SOURCE_HOST        = "source-host"
+	SOURCE_PORT        = "source-port"
+	SOURCE_DATABASE    = "source-database"
+	SOURCE_USER        = "source-user"
+	SOURCE_NO_PASSWORD = "source-no-password"
+	TARGET_HOST        = "target-host"
+	TARGET_PORT        = "target-port"
+	TARGET_USER        = "target-user"
+	TARGET_NO_PASSWORD = "target-no-password"
 )
 
 func SetBackupFlagDefaults(flagSet *pflag.FlagSet) {
@@ -141,15 +141,15 @@ func SetRestoreFlagDefaults(flagSet *pflag.FlagSet) {
 }
 
 func SetCheckMigrateFlagDefaults(flagSet *pflag.FlagSet) {
-	flagSet.StringP(SOURCE_HOST, "h","", "The host of the cluster being checked")
-	flagSet.StringP(SOURCE_PORT, "p","", "The port of the cluster being checked")
-	flagSet.StringP(SOURCE_DATABASE, "d","", "The database of the cluster being checked")
-	flagSet.StringP(SOURCE_USER, "u","", "The superuser of the cluster being checked")
-	flagSet.StringP(SOURCE_NO_PASSWORD, "w","", "The password of the cluster being checked is taken from the .pgpass file (-w for psql)")
-	flagSet.StringP(TARGET_HOST, "H","", "The host of the cluster of next version")
-	flagSet.StringP(TARGET_PORT, "P","", "The port of the cluster of next version")
-	flagSet.StringP(TARGET_USER, "U","", "The superuser of the cluster being checked")
-	flagSet.StringP(TARGET_NO_PASSWORD, "W","", "The password for the cluster being checked is taken from the .pgpass file (-w for psql)")
+	flagSet.StringP(SOURCE_HOST, "h", "", "The host of the cluster being checked")
+	flagSet.StringP(SOURCE_PORT, "p", "", "The port of the cluster being checked")
+	flagSet.StringP(SOURCE_DATABASE, "d", "", "The database of the cluster being checked")
+	flagSet.StringP(SOURCE_USER, "u", "", "The superuser of the cluster being checked")
+	flagSet.BoolP(SOURCE_NO_PASSWORD, "w", false, "Never prompt for the source cluster password")
+	flagSet.StringP(TARGET_HOST, "H", "", "The host of the cluster of next version")
+	flagSet.StringP(TARGET_PORT, "P", "", "The port of the cluster of next version")
+	flagSet.StringP(TARGET_USER, "U", "", "The superuser of the cluster being checked")
+	flagSet.BoolP(TARGET_NO_PASSWORD, "W", false, "Never prompt for the target cluster password")
 	flagSet.BoolP("help", "?", false, "Help for ggcheckmigrate")
 	flagSet.BoolP("version", "v", false, "Print version number and exit")
 	flagSet.Bool(DEBUG, false, "Print verbose and debug log messages")
