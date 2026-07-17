@@ -14,10 +14,10 @@ import (
  * Non-flag variables
  */
 var (
-	sourceConnectionPool		*dbconn.DBConn
-	targetConnectionPool		*dbconn.DBConn
-	version             		string
-	wasTerminated       		atomic.Bool
+	sourceConnectionPool *dbconn.DBConn
+	targetConnectionPool *dbconn.DBConn
+	version              string
+	wasTerminated        atomic.Bool
 
 	/*
 	 * Used for synchronizing DoCleanup.  In DoInit() we increment the group
@@ -31,6 +31,10 @@ var (
  * Command-line flags
  */
 var cmdFlags *pflag.FlagSet
+
+func SetCmdFlags(flagSet *pflag.FlagSet) {
+	cmdFlags = flagSet
+}
 
 func GetVersion() string {
 	return version

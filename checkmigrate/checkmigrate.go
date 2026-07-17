@@ -17,6 +17,7 @@ func DoInit(cmd *cobra.Command) {
 	CleanupGroup = &sync.WaitGroup{}
 	CleanupGroup.Add(1)
 	gplog.InitializeLogging("ggcheckmigrate", "")
+	SetCmdFlags(cmd.Flags())
 	utils.InitializeSignalHandler(DoCleanup, "checkmigrate process", &wasTerminated)
 }
 
