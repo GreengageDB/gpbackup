@@ -5,8 +5,8 @@ package main
 import (
 	"os"
 
-	"github.com/GreengageDB/gpbackup/options"
 	. "github.com/GreengageDB/gpbackup/checkmigrate"
+	"github.com/GreengageDB/gpbackup/options"
 	"github.com/spf13/cobra"
 )
 
