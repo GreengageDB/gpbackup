@@ -18,6 +18,7 @@ var (
 	targetConnectionPool *dbconn.DBConn
 	version              string
 	wasTerminated        atomic.Bool
+	cleanupOnce          sync.Once
 
 	/*
 	 * Used for synchronizing DoCleanup.  In DoInit() we increment the group

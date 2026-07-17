@@ -16,6 +16,7 @@ import (
 func DoInit(cmd *cobra.Command) {
 	CleanupGroup = &sync.WaitGroup{}
 	CleanupGroup.Add(1)
+	cleanupOnce = sync.Once{}
 	gplog.InitializeLogging("ggcheckmigrate", "")
 	SetCmdFlags(cmd.Flags())
 	utils.InitializeSignalHandler(DoCleanup, "checkmigrate process", &wasTerminated)
@@ -56,10 +57,10 @@ func DoTeardown() {
 
 	errStr := ""
 	if err := recover(); err != nil {
-		// Check if gplog.Fatal did not cause the panic
-		if gplog.GetErrorCode() != 2 {
+		errorCode := gplog.GetErrorCode()
+		if errorCode < 2 || errorCode > 5 {
 			gplog.Error(fmt.Sprintf("%v: %s", err, debug.Stack()))
-			gplog.SetErrorCode(2)
+			gplog.SetErrorCode(5)
 		} else {
 			errStr = fmt.Sprintf("%+v", err)
 		}
@@ -82,20 +83,22 @@ func DoTeardown() {
 }
 
 func DoCleanup(checkmigrateFailed bool) {
-	defer func() {
-		if err := recover(); err != nil {
-			gplog.Warn("Encountered error during cleanup: %+v", err)
+	cleanupOnce.Do(func() {
+		defer func() {
+			if err := recover(); err != nil {
+				gplog.Warn("Encountered error during cleanup: %+v", err)
+			}
+			gplog.Info("Cleanup complete")
+			CleanupGroup.Done()
+		}()
+
+		gplog.Info("Beginning cleanup")
+
+		if sourceConnectionPool != nil {
+			sourceConnectionPool.Close()
 		}
-		gplog.Info("Cleanup complete")
-		CleanupGroup.Done()
-	}()
-
-	gplog.Info("Beginning cleanup")
-
-	if sourceConnectionPool != nil {
-		sourceConnectionPool.Close()
-	}
-	if targetConnectionPool != nil {
-		targetConnectionPool.Close()
-	}
+		if targetConnectionPool != nil {
+			targetConnectionPool.Close()
+		}
+	})
 }

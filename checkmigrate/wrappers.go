@@ -38,18 +38,28 @@ func SetLoggerVerbosity() {
  *
  * Also, there seem to be no Conn() function to pass a password to it,
  * Might need to be written.
- */ 
+ */
 func CreateConnectionPool() {
 	sourceConnectionPool = dbconn.NewDBConn("postgres", "gpadmin", "/tmp", 6000)
-	sourceConnectionPool.MustConnect(1);
+	err := sourceConnectionPool.Connect(1)
+	if err != nil {
+		gplog.SetErrorCode(5)
+		panic(err)
+	}
 	if !sourceConnectionPool.Version.Is("6") {
-		gplog.Fatal(errors.Errorf(`Source GPDB version %s is not supported. Utility is used only on GPDB %s as source.`, sourceConnectionPool.Version.VersionString, "6"), "")
+		gplog.SetErrorCode(2)
+		panic(errors.Errorf(`Source GPDB version %s is not supported. Utility is used only on GPDB %s as source.`, sourceConnectionPool.Version.VersionString, "6"))
 	}
 
 	// TODO: Handle this, only if target-host flag is defined
 	targetConnectionPool = dbconn.NewDBConn("postgres", "gpadmin", "/tmp", 7000)
-	targetConnectionPool.MustConnect(1);
+	err = targetConnectionPool.Connect(1)
+	if err != nil {
+		gplog.SetErrorCode(5)
+		panic(err)
+	}
 	if !targetConnectionPool.Version.Is("7") {
-		gplog.Fatal(errors.Errorf(`Target GPDB version %s is not supported. Utility is used only on GPDB %s as target.`, targetConnectionPool.Version.VersionString, "7"), "")
+		gplog.SetErrorCode(3)
+		panic(errors.Errorf(`Target GPDB version %s is not supported. Utility is used only on GPDB %s as target.`, targetConnectionPool.Version.VersionString, "7"))
 	}
 }
