@@ -24,8 +24,8 @@ func main() {
 		Args:    cobra.NoArgs,
 		Version: GetVersion(),
 		Run: func(cmd *cobra.Command, args []string) {
-			defer DoTeardown()
 			DoFlagValidation(cmd)
+			defer DoTeardown()
 			DoSetup()
 			DoCheckMigrate()
 		}}
