@@ -22,10 +22,8 @@ func DoInit(cmd *cobra.Command) {
 	utils.InitializeSignalHandler(DoCleanup, "checkmigrate process", &wasTerminated)
 }
 
-/*
- * This function handles argument parsing and validation, e.g. checking that a passed filename exists.
- * It should only validate; initialization with any sort of side effects should go in DoInit or DoSetup.
- */
+// This function handles argument parsing and validation, e.g. checking that a passed filename exists.
+// It should only validate; initialization with any sort of side effects should go in DoInit or DoSetup.
 func DoFlagValidation(cmd *cobra.Command) {
 	ValidateFlagCombinations(cmd.Flags())
 }
@@ -74,12 +72,10 @@ func DoTeardown() {
 		checkmigrateFailed = true
 	}
 	if wasTerminated.Load() {
-		/*
-		 * Don't print an error if the checkmigrate was canceled, as the signal handler
-		 * will take care of cleanup and return codes.  Just wait until the signal
-		 * handler's DoCleanup completes so the main goroutine doesn't exit while
-		 * cleanup is still in progress.
-		 */
+		// Don't print an error if the checkmigrate was canceled, as the signal handler
+		// will take care of cleanup and return codes.  Just wait until the signal
+		// handler's DoCleanup completes so the main goroutine doesn't exit while
+		// cleanup is still in progress.
 		CleanupGroup.Wait()
 		checkmigrateFailed = true
 		return

@@ -8,16 +8,12 @@ import (
 	"github.com/pkg/errors"
 )
 
-/*
- * This file contains wrapper functions that group together functions relating
- * to querying and printing metadata, so that the logic for each object type
- * can all be in one place and backup.go can serve as a high-level look at the
- * overall backup flow.
- */
+// This file contains wrapper functions that group together functions relating
+// to querying and printing metadata, so that the logic for each object type
+// can all be in one place and backup.go can serve as a high-level look at the
+// overall backup flow.
 
-/*
- * Setup and validation wrapper functions
- */
+// Setup and validation wrapper functions
 
 func SetLoggerVerbosity() {
 	gplog.SetLogFileVerbosity(gplog.LOGINFO)
@@ -33,12 +29,10 @@ func SetLoggerVerbosity() {
 	}
 }
 
-/*
- * TODO: Handle source and target flags here and pass them to NewDBConn
- *
- * Also, there seem to be no Conn() function to pass a password to it,
- * Might need to be written.
- */
+// TODO: Handle source and target flags here and pass them to NewDBConn
+//
+// Also, there seem to be no Conn() function to pass a password to it,
+// Might need to be written.
 func CreateConnectionPool() {
 	sourceConnectionPool = dbconn.NewDBConn("postgres", "gpadmin", "/tmp", 6000)
 	err := sourceConnectionPool.Connect(1)

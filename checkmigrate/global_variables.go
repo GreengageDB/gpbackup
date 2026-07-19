@@ -10,9 +10,7 @@ import (
 	"github.com/spf13/pflag"
 )
 
-/*
- * Non-flag variables
- */
+// Non-flag variables
 var (
 	sourceConnectionPool *dbconn.DBConn
 	targetConnectionPool *dbconn.DBConn
@@ -20,22 +18,16 @@ var (
 	wasTerminated        atomic.Bool
 	cleanupOnce          sync.Once
 
-	/*
-	 * Used for synchronizing DoCleanup.  In DoInit() we increment the group
-	 * and then wait for at least one DoCleanup to finish, either in DoTeardown
-	 * or the signal handler.
-	 */
+	// Used for synchronizing DoCleanup.  In DoInit() we increment the group
+	// and then wait for at least one DoCleanup to finish, either in DoTeardown
+	// or the signal handler.
 	CleanupGroup *sync.WaitGroup
 )
 
-/*
- * Command-line flags
- */
+// Command-line flags
 var cmdFlags *pflag.FlagSet
 
-/*
- * Setter functions
- */
+// Setter functions
 func SetCmdFlags(flagSet *pflag.FlagSet) {
 	cmdFlags = flagSet
 	options.SetCheckMigrateFlagDefaults(cmdFlags)
@@ -45,16 +37,12 @@ func SetVersion(v string) {
 	version = v
 }
 
-/*
- * Getter functions
- */
+// Getter functions
 func GetVersion() string {
 	return version
 }
 
-/*
- * Util functions to enable ease of access to global flag values
- */
+// Util functions to enable ease of access to global flag values
 func FlagChanged(flagName string) bool {
 	return cmdFlags.Changed(flagName)
 }
