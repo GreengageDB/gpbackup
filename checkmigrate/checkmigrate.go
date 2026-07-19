@@ -22,12 +22,19 @@ func DoInit(cmd *cobra.Command) {
 	utils.InitializeSignalHandler(DoCleanup, "checkmigrate process", &wasTerminated)
 }
 
+/*
+ * This function handles argument parsing and validation, e.g. checking that a passed filename exists.
+ * It should only validate; initialization with any sort of side effects should go in DoInit or DoSetup.
+ */
+func DoFlagValidation(cmd *cobra.Command) {
+	ValidateFlagCombinations(cmd.Flags())
+}
+
 // This function handles setup that must be done after parsing flags.
 func DoSetup() {
-	// TODO: This one requires parsed flags
-	//SetLoggerVerbosity()
+	SetLoggerVerbosity()
 	gplog.Verbose("CheckMigrate Command: %s", os.Args)
-	gplog.Info("checkmigrate version = %s", GetVersion())
+	gplog.Info("ggcheckmigrate version = %s", GetVersion())
 
 	// TODO: Use flags in CreateConnectionPool
 	//CreateConnectionPool()

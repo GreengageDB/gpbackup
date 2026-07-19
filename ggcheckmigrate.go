@@ -1,3 +1,4 @@
+//go:build ggcheckmigrate
 // +build ggcheckmigrate
 
 package main
@@ -11,20 +12,26 @@ import (
 )
 
 func main() {
+	defer func() {
+		if recover() != nil {
+			os.Exit(4)
+		}
+	}()
+
 	var rootCmd = &cobra.Command{
 		Use:     "ggcheckmigrate",
 		Short:   "ggcheckmigrate is the utility to check migration ability for Greengage",
 		Args:    cobra.NoArgs,
 		Version: GetVersion(),
 		Run: func(cmd *cobra.Command, args []string) {
+			DoFlagValidation(cmd)
 			defer DoTeardown()
-			//DoFlagValidation(cmd)
 			DoSetup()
 			DoCheckMigrate()
 		}}
 	rootCmd.SetArgs(options.HandleSingleDashes(os.Args[1:]))
 	DoInit(rootCmd)
 	if err := rootCmd.Execute(); err != nil {
-		os.Exit(2)
+		os.Exit(4)
 	}
 }
