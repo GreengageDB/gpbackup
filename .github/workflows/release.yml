@@ -17,7 +17,7 @@ jobs:
         - target_os: ubuntu
           target_os_version: 24.04
           extensions:  deb ddeb
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       actions: read
