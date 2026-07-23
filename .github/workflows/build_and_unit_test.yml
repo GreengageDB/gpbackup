@@ -14,7 +14,7 @@ concurrency:
 jobs:
 
   build_and_unit_test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v2
       with:
@@ -48,7 +48,7 @@ jobs:
 
   build_and_test:
     name: Regression tests on Greengage ${{ matrix.gg_version }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
