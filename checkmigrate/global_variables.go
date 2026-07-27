@@ -18,6 +18,8 @@ var (
 	wasTerminated        atomic.Bool
 	cleanupOnce          sync.Once
 
+	scrapeDbNames		 bool
+
 	// Used for synchronizing DoCleanup.  In DoInit() we increment the group
 	// and then wait for at least one DoCleanup to finish, either in DoTeardown
 	// or the signal handler.

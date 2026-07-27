@@ -141,13 +141,13 @@ func SetRestoreFlagDefaults(flagSet *pflag.FlagSet) {
 }
 
 func SetCheckMigrateFlagDefaults(flagSet *pflag.FlagSet) {
-	flagSet.StringP(SOURCE_HOST, "h", "", "The host of the cluster being checked")
-	flagSet.StringP(SOURCE_PORT, "p", "", "The port of the cluster being checked")
+	flagSet.StringP(SOURCE_HOST, "h", "/tmp", "The host of the cluster being checked")
+	flagSet.IntP(SOURCE_PORT, "p", 0, "The port of the cluster being checked")
 	flagSet.StringP(SOURCE_DATABASE, "d", "", "The database of the cluster being checked")
 	flagSet.StringP(SOURCE_USER, "u", "", "The superuser of the cluster being checked")
 	flagSet.BoolP(SOURCE_NO_PASSWORD, "w", false, "Never prompt for the source cluster password")
 	flagSet.StringP(TARGET_HOST, "H", "", "The host of the cluster of next version")
-	flagSet.StringP(TARGET_PORT, "P", "", "The port of the cluster of next version")
+	flagSet.IntP(TARGET_PORT, "P", 0, "The port of the cluster of next version")
 	flagSet.StringP(TARGET_USER, "U", "", "The superuser of the cluster being checked")
 	flagSet.BoolP(TARGET_NO_PASSWORD, "W", false, "Never prompt for the target cluster password")
 	flagSet.BoolP("help", "?", false, "Help for ggcheckmigrate")
