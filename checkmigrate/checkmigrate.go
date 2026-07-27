@@ -38,7 +38,14 @@ func DoSetup() {
 }
 
 func DoCheckMigrate() {
-
+	hasFindings, err := runMigrationChecks(sourceConnectionPool, targetConnectionPool)
+	if err != nil {
+		gplog.SetErrorCode(5)
+		panic(err)
+	}
+	if hasFindings {
+		gplog.SetErrorCode(1)
+	}
 }
 
 func DoTeardown() {
