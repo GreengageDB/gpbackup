@@ -4,7 +4,6 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gpbackup/options"
 
@@ -32,10 +31,6 @@ func SetLoggerVerbosity() {
 	}
 }
 
-// TODO: Handle password flags
-//
-// Make two connections for future checks.
-//
 // We kind of replicate NewDBConnFromEnvironment(), but as we have
 // host/port/user flags we need to do their checking and assignment here.
 func CreateConnectionPool() {
@@ -69,12 +64,8 @@ func CreateConnectionPool() {
 		}
 	}
 
-	sourceConnectionPool = dbconn.NewDBConn(sourceDb, sourceUser, sourceHost, sourcePort)
-	err := sourceConnectionPool.Connect(1)
-	if err != nil {
-		gplog.SetErrorCode(5)
-		panic(err)
-	}
+	sourceConnectionPool = createDBConn(sourceDb, sourceUser, sourceHost, sourcePort)
+	sourceConnectionPool.MustConnect(1)
 	if !sourceConnectionPool.Version.Is("6") {
 		gplog.SetErrorCode(2)
 		panic(errors.Errorf(`Source GPDB version %s is not supported. Utility is used only on GPDB %s as source.`, sourceConnectionPool.Version.VersionString, "6"))
@@ -92,15 +83,13 @@ func CreateConnectionPool() {
 		}
 	}
 
-	// TBD with architect
-	// Right now, consider creating connection to the target cluster if both flags are provied.
+	// Сreate connection to the target cluster only if both flags are provied.
+	if (targetHost != "" || targetPort != 0) && !(targetHost != "" && targetPort != 0) {
+		panic(errors.Errorf("Both -H and -P options need to be provided to check target cluster."))
+	}
 	if targetHost != "" && targetPort != 0 {
-		targetConnectionPool = dbconn.NewDBConn(targetDb, targetUser, targetHost, targetPort)
-		err = targetConnectionPool.Connect(1)
-		if err != nil {
-			gplog.SetErrorCode(5)
-			panic(err)
-		}
+		targetConnectionPool = createDBConn(targetDb, targetUser, targetHost, targetPort)
+		targetConnectionPool.MustConnect(1)
 		if !targetConnectionPool.Version.Is("7") {
 			gplog.SetErrorCode(3)
 			panic(errors.Errorf(`Target GPDB version %s is not supported. Utility is used only on GPDB %s as target.`, targetConnectionPool.Version.VersionString, "7"))
