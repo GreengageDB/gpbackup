@@ -1127,6 +1127,30 @@ var _ = Describe("backup and restore end to end tests", func() {
 				`SELECT count(*) FROM pg_statistic WHERE starelid='schema3.foo3'::regclass::oid;`)
 			Expect(actualStatisticCount).To(Equal("1"))
 		})
+		It("runs gprestore with --redirect-schema and table with subpartition template", func() {
+			skipIfOldBackupVersionBefore("1.17.0")
+			testhelper.AssertQueryRuns(restoreConn,
+				"DROP SCHEMA IF EXISTS schema3 CASCADE; CREATE SCHEMA schema3;")
+			defer testhelper.AssertQueryRuns(restoreConn,
+				"DROP SCHEMA schema3 CASCADE")
+			testhelper.AssertQueryRuns(backupConn,
+				"CREATE SCHEMA foo")
+			defer testhelper.AssertQueryRuns(backupConn,
+				"DROP SCHEMA foo CASCADE")
+			testhelper.AssertQueryRuns(backupConn,
+				"CREATE TABLE foo.foo (id int, id2 int, id3 int) PARTITION BY RANGE (id) SUBPARTITION BY LIST (id) SUBPARTITION TEMPLATE (SUBPARTITION a VALUES (1), SUBPARTITION b VALUES (2), DEFAULT SUBPARTITION c) SUBPARTITION BY LIST (id2) SUBPARTITION TEMPLATE (SUBPARTITION d VALUES (3), subpartition e values(4), DEFAULT SUBPARTITION f) SUBPARTITION BY LIST (id3) SUBPARTITION TEMPLATE (SUBPARTITION g VALUES(5), SUBPARTITION h VALUES(6), DEFAULT SUBPARTITION i) (START (1) END (10) EVERY (5));")
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--include-table", "foo.foo",
+				"--redirect-db", "restoredb",
+				"--redirect-schema", "schema3")
+
+			assertRelationsCreatedInSchema(restoreConn, "schema3", 1)
+			assertDataRestored(restoreConn, map[string]int{"schema3.foo": 0})
+		})
 		It("runs gprestore with --redirect-schema and multiple included schemas", func() {
 			skipIfOldBackupVersionBefore("1.17.0")
 			testhelper.AssertQueryRuns(restoreConn,
