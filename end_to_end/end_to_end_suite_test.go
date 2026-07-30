@@ -1166,7 +1166,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 				"--redirect-db", "restoredb",
 				"--redirect-schema", "schema3")
 
-			assertRelationsCreatedInSchema(restoreConn, "schema3", 8)
+			assertRelationsCreatedInSchema(restoreConn, "schema3", 16)
 			assertDataRestored(restoreConn, map[string]int{"schema3.foo": 0})
 		})
 		It("runs gprestore with --redirect-schema and multiple included schemas", func() {
