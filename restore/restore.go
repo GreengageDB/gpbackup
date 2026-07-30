@@ -446,7 +446,7 @@ func editStatementsRedirectSchema(statements []toc.StatementWithType, redirectSc
 		// which will have schema qualified tables.
 		// Also don't set replaced, as otherwise we won't change CREATE TABLE schema.
 		if statements[i].ObjectType == toc.OBJ_TABLE && strings.Contains(statement, "SET SUBPARTITION TEMPLATE") {
-			statement = alterPartitionRE.ReplaceAllString(statement, fmt.Sprintf("$1 %[1]s$3$4$5", redirectSchema))
+			statement = alterPartitionRE.ReplaceAllString(statement, fmt.Sprintf("$1 %[1]s$3 $4$5", redirectSchema))
 		}
 
 		// ALTER TABLE schema.root ATTACH PARTITION schema.leaf needs two schema replacements
