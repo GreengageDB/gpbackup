@@ -1138,7 +1138,25 @@ var _ = Describe("backup and restore end to end tests", func() {
 			defer testhelper.AssertQueryRuns(backupConn,
 				"DROP SCHEMA foo CASCADE")
 			testhelper.AssertQueryRuns(backupConn,
-				"CREATE TABLE foo.foo (id int, id2 int, id3 int) PARTITION BY RANGE (id) SUBPARTITION BY LIST (id) SUBPARTITION TEMPLATE (SUBPARTITION a VALUES (1), SUBPARTITION b VALUES (2), DEFAULT SUBPARTITION c) SUBPARTITION BY LIST (id2) SUBPARTITION TEMPLATE (SUBPARTITION d VALUES (3), subpartition e values(4), DEFAULT SUBPARTITION f) SUBPARTITION BY LIST (id3) SUBPARTITION TEMPLATE (SUBPARTITION g VALUES(5), SUBPARTITION h VALUES(6), DEFAULT SUBPARTITION i) (START (1) END (10) EVERY (5));")
+				`CREATE TABLE foo.foo (id int, id2 int, id3 int)
+					PARTITION BY RANGE (id) 
+						SUBPARTITION BY LIST (id) 
+							SUBPARTITION TEMPLATE (
+								SUBPARTITION a VALUES (1), 
+								DEFAULT SUBPARTITION b
+							) 
+							SUBPARTITION BY LIST (id2) 
+								SUBPARTITION TEMPLATE (
+									SUBPARTITION c VALUES (2), 
+									DEFAULT SUBPARTITION d
+									) 
+									SUBPARTITION BY LIST (id3) 
+										SUBPARTITION TEMPLATE (
+											SUBPARTITION e VALUES(3), 
+											DEFAULT SUBPARTITION f)
+					(
+						START (1) END (10) EVERY (10)
+					);`)
 
 			output := gpbackup(gpbackupPath, backupHelperPath)
 			timestamp := getBackupTimestamp(string(output))
@@ -1148,7 +1166,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 				"--redirect-db", "restoredb",
 				"--redirect-schema", "schema3")
 
-			assertRelationsCreatedInSchema(restoreConn, "schema3", 1)
+			assertRelationsCreatedInSchema(restoreConn, "schema3", 8)
 			assertDataRestored(restoreConn, map[string]int{"schema3.foo": 0})
 		})
 		It("runs gprestore with --redirect-schema and multiple included schemas", func() {
