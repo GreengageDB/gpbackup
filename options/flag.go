@@ -62,11 +62,9 @@ const (
 	SOURCE_PORT        = "source-port"
 	SOURCE_DATABASE    = "source-database"
 	SOURCE_USER        = "source-user"
-	SOURCE_NO_PASSWORD = "source-no-password"
 	TARGET_HOST        = "target-host"
 	TARGET_PORT        = "target-port"
 	TARGET_USER        = "target-user"
-	TARGET_NO_PASSWORD = "target-no-password"
 )
 
 func SetBackupFlagDefaults(flagSet *pflag.FlagSet) {
@@ -145,11 +143,9 @@ func SetCheckMigrateFlagDefaults(flagSet *pflag.FlagSet) {
 	flagSet.IntP(SOURCE_PORT, "p", 0, "The port of the cluster being checked")
 	flagSet.StringP(SOURCE_DATABASE, "d", "", "The database of the cluster being checked")
 	flagSet.StringP(SOURCE_USER, "u", "", "The superuser of the cluster being checked")
-	flagSet.BoolP(SOURCE_NO_PASSWORD, "w", false, "Never prompt for the source cluster password")
 	flagSet.StringP(TARGET_HOST, "H", "", "The host of the cluster of next version")
 	flagSet.IntP(TARGET_PORT, "P", 0, "The port of the cluster of next version")
 	flagSet.StringP(TARGET_USER, "U", "", "The superuser of the cluster being checked")
-	flagSet.BoolP(TARGET_NO_PASSWORD, "W", false, "Never prompt for the target cluster password")
 	flagSet.BoolP("help", "?", false, "Help for ggcheckmigrate")
 	flagSet.BoolP("version", "v", false, "Print version number and exit")
 	flagSet.Bool(DEBUG, false, "Print verbose and debug log messages")
