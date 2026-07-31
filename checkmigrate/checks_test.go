@@ -42,12 +42,14 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		name:        "plpython2 functions",
 		check:       checkPlpython2DependentFunctions,
 		query:       plpython2DependentFunctionQuery,
-		columns:     []string{"schema_name", "object_name"},
-		rows:        [][]driver.Value{{"analytics", "forecast"}, {"public", "legacy_python"}},
+		columns:     []string{"schema_name", "object_name", "identity_arguments"},
+		rows:        [][]driver.Value{{"analytics", "forecast", "integer"}, {"public", "legacy_python", "text, integer"}},
 		problemText: "plpython functions which rely on Python 2",
 		expectedObjects: []string{
 			`object "forecast" of type "function" in schema "analytics"`,
 			`object "legacy_python" of type "function" in schema "public"`,
+			`identity arguments are \"integer\"`,
+			`identity arguments are \"text, integer\"`,
 		},
 	},
 	{
@@ -114,12 +116,14 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		name:        "restricted EXECUTE ON functions",
 		check:       checkRestrictedExecuteOnFunctions,
 		query:       restrictedExecuteOnFunctionQuery,
-		columns:     []string{"schema_name", "object_name"},
-		rows:        [][]driver.Value{{"public", "master_function"}, {"analytics", "segment_function"}},
+		columns:     []string{"schema_name", "object_name", "identity_arguments"},
+		rows:        [][]driver.Value{{"public", "master_function", "integer"}, {"analytics", "segment_function", "text, integer"}},
 		problemText: "not set-returning functions with MASTER, ALL SEGMENTS or INITPLAN EXECUTE ON",
 		expectedObjects: []string{
 			`object "master_function" of type "function" in schema "public"`,
 			`object "segment_function" of type "function" in schema "analytics"`,
+			`identity arguments are \"integer\"`,
+			`identity arguments are \"text, integer\"`,
 		},
 	},
 	{
@@ -358,6 +362,90 @@ func TestDoCheckMigrateReturnsZeroForCleanSource(t *testing.T) {
 	}
 	if len(stderr.Contents()) != 0 {
 		t.Fatalf("The clean run printed %q", stderr.Contents())
+	}
+}
+
+func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
+	connection, mock, stderr := setupCheckTest(t)
+	connection.DBName = "postgres"
+	connection.User = "source_user"
+	connection.Host = "source_host"
+	connection.Port = 6000
+	applicationConnection, applicationMock := testhelper.CreateMockDBConn()
+	testhelper.ExpectVersionQuery(applicationMock, "6.0.0")
+	t.Cleanup(applicationConnection.Close)
+	t.Cleanup(func() {
+		if err := applicationMock.ExpectationsWereMet(); err != nil {
+			t.Errorf("The application database SQL expectations were not met with %v", err)
+		}
+	})
+	sourceConnectionPool = connection
+	targetConnectionPool = nil
+	scrapeDbNames = true
+	originalCreateDBConn := createDBConn
+	createDBConn = func(dbName, username, host string, port int) *dbconn.DBConn {
+		applicationConnection.DBName = dbName
+		applicationConnection.User = username
+		applicationConnection.Host = host
+		applicationConnection.Port = port
+
+		return applicationConnection
+	}
+	t.Cleanup(func() {
+		sourceConnectionPool = nil
+		scrapeDbNames = false
+		createDBConn = originalCreateDBConn
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta(sourceDatabaseNamesQuery)).WillReturnRows(
+		sqlmock.NewRows([]string{"database_name"}).AddRow("postgres").AddRow("application"),
+	)
+	expectMigrationTransaction(mock)
+	expectAllSourceChecksEmpty(mock)
+	mock.ExpectRollback()
+
+	expectMigrationTransaction(applicationMock)
+	firstCheck := sourceCheckTestCases[0]
+	applicationMock.ExpectQuery(regexp.QuoteMeta(firstCheck.query)).WillReturnRows(rowsForCheck(firstCheck, true))
+	for _, testCase := range sourceCheckTestCases[1:] {
+		applicationMock.ExpectQuery(regexp.QuoteMeta(testCase.query)).WillReturnRows(rowsForCheck(testCase, false))
+	}
+	applicationMock.ExpectRollback()
+
+	if recoveredValue := callDoCheckMigrate(); recoveredValue != nil {
+		t.Fatalf("DoCheckMigrate panicked with %v", recoveredValue)
+	}
+	if gplog.GetErrorCode() != 1 {
+		t.Fatalf("The multi-database run returned exit code %d", gplog.GetErrorCode())
+	}
+	if !strings.Contains(string(stderr.Contents()), `Database "application"`) {
+		t.Fatalf("The multi-database run did not print the application database in %q", stderr.Contents())
+	}
+	if applicationConnection.DBName != "application" ||
+		applicationConnection.User != connection.User ||
+		applicationConnection.Host != connection.Host ||
+		applicationConnection.Port != connection.Port {
+		t.Fatalf("The application connection did not reuse source connection parameters")
+	}
+}
+
+func TestDoCheckMigrateReportsDatabaseEnumerationFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	sourceConnectionPool = connection
+	targetConnectionPool = nil
+	scrapeDbNames = true
+	t.Cleanup(func() {
+		sourceConnectionPool = nil
+		scrapeDbNames = false
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta(sourceDatabaseNamesQuery)).WillReturnError(errors.New("database enumeration failed"))
+
+	if recoveredValue := callDoCheckMigrate(); recoveredValue == nil {
+		t.Fatal("DoCheckMigrate did not panic for a database enumeration failure")
+	}
+	if gplog.GetErrorCode() != 5 {
+		t.Fatalf("The database enumeration failure returned exit code %d", gplog.GetErrorCode())
 	}
 }
 

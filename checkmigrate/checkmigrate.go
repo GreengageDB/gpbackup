@@ -38,11 +38,45 @@ func DoSetup() {
 }
 
 func DoCheckMigrate() {
-	hasFindings, err := runMigrationChecks(sourceConnectionPool, targetConnectionPool)
-	if err != nil {
+	if sourceConnectionPool == nil {
 		gplog.SetErrorCode(5)
-		panic(err)
+		panic(fmt.Errorf("The source connection is not initialized"))
 	}
+
+	databaseNames := []databaseNameResult{{DatabaseName: sourceConnectionPool.DBName}}
+	if scrapeDbNames {
+		databaseNames = make([]databaseNameResult, 0)
+		if err := sourceConnectionPool.Select(&databaseNames, sourceDatabaseNamesQuery); err != nil {
+			gplog.SetErrorCode(5)
+			panic(err)
+		}
+	}
+
+	hasFindings := false
+	for _, database := range databaseNames {
+		sourceConnection := sourceConnectionPool
+		shouldCloseConnection := false
+		if database.DatabaseName != sourceConnectionPool.DBName {
+			sourceConnection = createDBConn(database.DatabaseName, sourceConnectionPool.User, sourceConnectionPool.Host, sourceConnectionPool.Port)
+			if err := sourceConnection.Connect(1); err != nil {
+				sourceConnection.Close()
+				gplog.SetErrorCode(5)
+				panic(err)
+			}
+			shouldCloseConnection = true
+		}
+
+		hasDatabaseFindings, err := runMigrationChecks(sourceConnection, targetConnectionPool)
+		if shouldCloseConnection {
+			sourceConnection.Close()
+		}
+		if err != nil {
+			gplog.SetErrorCode(5)
+			panic(err)
+		}
+		hasFindings = hasFindings || hasDatabaseFindings
+	}
+
 	if hasFindings {
 		gplog.SetErrorCode(1)
 	}

@@ -1,4 +1,6 @@
-SELECT n.nspname::text AS schema_name, p.proname::text AS object_name
+SELECT n.nspname::text AS schema_name,
+       p.proname::text AS object_name,
+       pg_catalog.pg_get_function_identity_arguments(p.oid)::text AS identity_arguments
 FROM pg_catalog.pg_proc p
 JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
 JOIN pg_catalog.pg_language l ON l.oid = p.prolang

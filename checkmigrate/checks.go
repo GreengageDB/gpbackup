@@ -13,6 +13,9 @@ import (
 //go:embed sql/migration_check_setup.sql
 var migrationCheckSetupQuery string
 
+//go:embed sql/source_database_names.sql
+var sourceDatabaseNamesQuery string
+
 //go:embed sql/multi_column_list_partitions.sql
 var multiColumnListPartitionQuery string
 
@@ -52,6 +55,16 @@ var statementTriggerQuery string
 type namedObjectResult struct {
 	SchemaName string `db:"schema_name"`
 	ObjectName string `db:"object_name"`
+}
+
+type databaseNameResult struct {
+	DatabaseName string `db:"database_name"`
+}
+
+type functionResult struct {
+	SchemaName        string `db:"schema_name"`
+	ObjectName        string `db:"object_name"`
+	IdentityArguments string `db:"identity_arguments"`
 }
 
 type viewResult struct {
@@ -224,7 +237,7 @@ func checkMultiColumnListPartitions(connection *dbconn.DBConn) (bool, error) {
 }
 
 func checkPlpython2DependentFunctions(connection *dbconn.DBConn) (bool, error) {
-	results := make([]namedObjectResult, 0)
+	results := make([]functionResult, 0)
 	if err := connection.Select(&results, plpython2DependentFunctionQuery); err != nil {
 		return false, err
 	}
@@ -235,7 +248,8 @@ func checkPlpython2DependentFunctions(connection *dbconn.DBConn) (bool, error) {
 	var output strings.Builder
 	output.WriteString("Your installation contains plpython functions which rely on Python 2. These functions must be updated to use Python 3 or dropped before migration.\n")
 	for _, result := range results {
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.ObjectName, "function", result.SchemaName, "The function depends on plpython2")
+		detail := fmt.Sprintf("The function depends on plpython2. The identity arguments are %q", result.IdentityArguments)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.ObjectName, "function", result.SchemaName, detail)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
@@ -352,7 +366,7 @@ func checkMissingAOOptions(connection *dbconn.DBConn) (bool, error) {
 }
 
 func checkRestrictedExecuteOnFunctions(connection *dbconn.DBConn) (bool, error) {
-	results := make([]namedObjectResult, 0)
+	results := make([]functionResult, 0)
 	if err := connection.Select(&results, restrictedExecuteOnFunctionQuery); err != nil {
 		return false, err
 	}
@@ -363,7 +377,8 @@ func checkRestrictedExecuteOnFunctions(connection *dbconn.DBConn) (bool, error) 
 	var output strings.Builder
 	output.WriteString("Your cluster contains not set-returning functions with MASTER, ALL SEGMENTS or INITPLAN EXECUTE ON.\nYou need to make the function set-returning or change EXECUTE ON to ANY.\nList of functions with the specified problem:\n")
 	for _, result := range results {
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.ObjectName, "function", result.SchemaName, "The function uses a restricted EXECUTE ON location")
+		detail := fmt.Sprintf("The function uses a restricted EXECUTE ON location. The identity arguments are %q", result.IdentityArguments)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.ObjectName, "function", result.SchemaName, detail)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
