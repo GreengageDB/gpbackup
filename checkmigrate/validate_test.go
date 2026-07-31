@@ -36,9 +36,18 @@ var _ = Describe("checkmigrate/validate tests", func() {
 				}
 			},
 
+			Entry("minimum source port", "--source-port 1", true),
+			Entry("maximum source port", "--source-port 65535", true),
+			Entry("zero source port", "--source-port 0", false),
+			Entry("negative source port", "--source-port -1", false),
+			Entry("source port above maximum", "--source-port 65536", false),
 			Entry("target host and port", "--target-host localhost --target-port 7000", true),
 			Entry("target host without port", "--target-host localhost", false),
 			Entry("target port without host", "--target-port 7000", false),
+			Entry("target user without host and port", "--target-user gpadmin", false),
+			Entry("zero target port", "--target-host localhost --target-port 0", false),
+			Entry("negative target port", "--target-host localhost --target-port -1", false),
+			Entry("target port above maximum", "--target-host localhost --target-port 65536", false),
 			Entry("debug flag", "--debug", true),
 			Entry("quiet flag", "--quiet", true),
 			Entry("verbose flag", "--verbose", true),

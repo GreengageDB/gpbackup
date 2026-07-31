@@ -73,7 +73,7 @@ func CreateConnectionPool() {
 	}
 	if !sourceConnectionPool.Version.Is("6") {
 		gplog.SetErrorCode(2)
-		panic(errors.Errorf(`Source GPDB version %s is not supported. Utility is used only on GPDB %s as source.`, sourceConnectionPool.Version.VersionString, "6"))
+		panic(errors.New("This utility can only check for migrate from Greengage version 6"))
 	}
 
 	targetHost := options.MustGetFlagString(cmdFlags, options.TARGET_HOST)
@@ -96,7 +96,7 @@ func CreateConnectionPool() {
 		}
 		if !targetConnectionPool.Version.Is("7") {
 			gplog.SetErrorCode(3)
-			panic(errors.Errorf(`Target GPDB version %s is not supported. Utility is used only on GPDB %s as target.`, targetConnectionPool.Version.VersionString, "7"))
+			panic(errors.New("This utility can only check for migrate from Greengage version 6 to Greengage version 7"))
 		}
 	}
 }

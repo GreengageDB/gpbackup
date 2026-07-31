@@ -119,6 +119,19 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 			Expect(gplog.GetErrorCode()).To(Equal(5))
 		})
 
+		It("returns the documented error for an invalid source version", func() {
+			invalidSource, invalidSourceMock := testhelper.CreateMockDBConn()
+			testhelper.ExpectVersionQuery(invalidSourceMock, "5.0.0")
+			DeferCleanup(invalidSource.Close)
+			checkmigrate.SetCreateDBConn(func(dbName, username, host string, port int) *dbconn.DBConn {
+				return invalidSource
+			})
+
+			Expect(checkmigrate.CreateConnectionPool).To(PanicWith(MatchError("This utility can only check for migrate from Greengage version 6")))
+			Expect(gplog.GetErrorCode()).To(Equal(2))
+			Expect(invalidSourceMock.ExpectationsWereMet()).To(Succeed())
+		})
+
 		It("successfully creates both source and target connections when target-host and target-port are provided", func() {
 			_ = cmdFlags.Set(options.TARGET_HOST, "localhost")
 			_ = cmdFlags.Set(options.TARGET_PORT, "7000")
@@ -170,6 +183,29 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 			Expect(checkmigrate.CreateConnectionPool).To(Panic())
 			Expect(gplog.GetErrorCode()).To(Equal(5))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
+		})
+
+		It("returns the documented error for an invalid target version", func() {
+			invalidTarget, invalidTargetMock := testhelper.CreateMockDBConn()
+			testhelper.ExpectVersionQuery(invalidTargetMock, "8.0.0")
+			DeferCleanup(invalidTarget.Close)
+			_ = cmdFlags.Set(options.TARGET_HOST, "localhost")
+			_ = cmdFlags.Set(options.TARGET_PORT, "7000")
+
+			connectionCount := 0
+			checkmigrate.SetCreateDBConn(func(dbName, username, host string, port int) *dbconn.DBConn {
+				connectionCount++
+				if connectionCount == 1 {
+					return mockSource
+				}
+
+				return invalidTarget
+			})
+
+			Expect(checkmigrate.CreateConnectionPool).To(PanicWith(MatchError("This utility can only check for migrate from Greengage version 6 to Greengage version 7")))
+			Expect(gplog.GetErrorCode()).To(Equal(3))
+			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
+			Expect(invalidTargetMock.ExpectationsWereMet()).To(Succeed())
 		})
 	})
 })
