@@ -36,12 +36,9 @@ var _ = Describe("checkmigrate/validate tests", func() {
 				}
 			},
 
-			Entry("source no-password long flag", "--source-no-password", true),
-			Entry("source no-password short flag", "-w", true),
-			Entry("target no-password long flag", "--target-no-password", true),
-			Entry("target no-password short flag", "-W", true),
-			Entry("both no-password long flags", "--source-no-password --target-no-password", true),
-			Entry("both no-password short flags", "-w -W", true),
+			Entry("target host and port", "--target-host localhost --target-port 7000", true),
+			Entry("target host without port", "--target-host localhost", false),
+			Entry("target port without host", "--target-port 7000", false),
 			Entry("debug flag", "--debug", true),
 			Entry("quiet flag", "--quiet", true),
 			Entry("verbose flag", "--verbose", true),

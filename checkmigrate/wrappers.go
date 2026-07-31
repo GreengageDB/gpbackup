@@ -43,12 +43,14 @@ func CreateConnectionPool() {
 	if sourcePort == 0 {
 		sourcePort = 5432
 		if envPort := os.Getenv("PGPORT"); envPort != "" {
-			envPortInt, _ := strconv.Atoi(envPort)
-			sourcePort = envPortInt
+			envPortInt, conversionError := strconv.Atoi(envPort)
+			if conversionError == nil {
+				sourcePort = envPortInt
+			}
 		}
 	}
 
-	// We will need to check for all DBs if sourceDB not specified, 
+	// We will need to check for all DBs if sourceDB not specified,
 	// but use postgres for initial connection.
 	scrapeDbNames = false
 	if sourceDb == "" {
@@ -65,7 +67,10 @@ func CreateConnectionPool() {
 	}
 
 	sourceConnectionPool = createDBConn(sourceDb, sourceUser, sourceHost, sourcePort)
-	sourceConnectionPool.MustConnect(1)
+	if connectionError := sourceConnectionPool.Connect(1); connectionError != nil {
+		gplog.SetErrorCode(5)
+		panic(connectionError)
+	}
 	if !sourceConnectionPool.Version.Is("6") {
 		gplog.SetErrorCode(2)
 		panic(errors.Errorf(`Source GPDB version %s is not supported. Utility is used only on GPDB %s as source.`, sourceConnectionPool.Version.VersionString, "6"))
@@ -73,7 +78,7 @@ func CreateConnectionPool() {
 
 	targetHost := options.MustGetFlagString(cmdFlags, options.TARGET_HOST)
 	targetPort := options.MustGetFlagInt(cmdFlags, options.TARGET_PORT)
-	targetDb := "postgres" // TBD
+	targetDb := "postgres"
 	targetUser := options.MustGetFlagString(cmdFlags, options.TARGET_USER)
 
 	if targetUser == "" {
@@ -83,13 +88,12 @@ func CreateConnectionPool() {
 		}
 	}
 
-	// Сreate connection to the target cluster only if both flags are provied.
-	if (targetHost != "" || targetPort != 0) && !(targetHost != "" && targetPort != 0) {
-		panic(errors.Errorf("Both -H and -P options need to be provided to check target cluster."))
-	}
 	if targetHost != "" && targetPort != 0 {
 		targetConnectionPool = createDBConn(targetDb, targetUser, targetHost, targetPort)
-		targetConnectionPool.MustConnect(1)
+		if connectionError := targetConnectionPool.Connect(1); connectionError != nil {
+			gplog.SetErrorCode(5)
+			panic(connectionError)
+		}
 		if !targetConnectionPool.Version.Is("7") {
 			gplog.SetErrorCode(3)
 			panic(errors.Errorf(`Target GPDB version %s is not supported. Utility is used only on GPDB %s as target.`, targetConnectionPool.Version.VersionString, "7"))
