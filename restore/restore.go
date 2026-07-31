@@ -415,7 +415,7 @@ func editStatementsRedirectSchema(statements []toc.StatementWithType, redirectSc
 	// This expression matches a GRANT or REVOKE statement on any object and captures the old schema name
 	permissionsRE := regexp.MustCompile(fmt.Sprintf(`(?m)(^(?:REVOKE|GRANT) .+ ON .+?) (%s)((\..+)? (?:FROM|TO) .+)`, schemaMatch))
 	// This expression matches an ALTER PARTITION ... SET SUBPARTITION TEMPLATE statement and captures old schema name
-	alterPartitionRE := regexp.MustCompile(fmt.Sprintf(`(ALTER TABLE(?: ONLY)?) (%s)(\..+) (ALTER PARTITION (?:.+) )*(\nSET SUBPARTITION TEMPLATE)`, schemaMatch))
+	alterPartitionRE := regexp.MustCompile(fmt.Sprintf(`(ALTER TABLE(?: ONLY)?) (%s)(\..+?) ((?:ALTER PARTITION (?:.+?) )*?)(\nSET SUBPARTITION TEMPLATE)`, schemaMatch))
 	// This expression matches an ATTACH PARTITION statement and captures both the parent and child schema names
 	attachRE := regexp.MustCompile(fmt.Sprintf(`(ALTER TABLE(?: ONLY)?) (%[1]s)(\..+ ATTACH PARTITION) (%[1]s)(\..+)`, schemaMatch))
 	// This expression matches a '<schema>.<table>'::regclass::oid expression.
