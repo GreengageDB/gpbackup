@@ -52,19 +52,19 @@ var _ = Describe("restore internal tests", func() {
 		},
 		{ // 1 level SET SUBPARTITION TEMPLATE
 			Schema: "foo", Name: "foo", ObjectType: toc.OBJ_TABLE,
-			Statement: "\n\nALTER TABLE foo.foo\nSET SUBPARTITION TEMPLATE \n          (\n          SUBPARTITION a VALUES(1) WITH (tablename='foo'),\n          SUBPARTITION b VALUES(2) WITH (tablename='foo'),\n          DEFAULT SUBPARTITION c  WITH (tablename='foo')\n          );\n",
+			Statement: "\n\nALTER TABLE foo.foo\nSET SUBPARTITION TEMPLATE \n(\nSUBPARTITION a VALUES(1) WITH (tablename='foo'),\nSUBPARTITION b VALUES(2) WITH (tablename='foo'),\nDEFAULT SUBPARTITION c  WITH (tablename='foo')\n);\n",
 		},
 		{ // 2 level SET SUBPARTITION TEMPLATE with partition name
 			Schema: "foo", Name: "foo", ObjectType: toc.OBJ_TABLE,
-			Statement: "\n\nALTER TABLE foo.foo ALTER PARTITION a \nSET SUBPARTITION TEMPLATE \n          (\n          SUBPARTITION d VALUES(3) WITH (tablename='foo'),\n          DEFAULT SUBPARTITION e  WITH (tablename='foo')\n          );\n",
+			Statement: "\n\nALTER TABLE foo.foo ALTER PARTITION a \nSET SUBPARTITION TEMPLATE \n(\nSUBPARTITION d VALUES(3) WITH (tablename='foo'),\nDEFAULT SUBPARTITION e  WITH (tablename='foo')\n);\n",
 		},
 		{ // 2 level SET SUBPARTITION TEMPLATE with FOR (RANK)
 			Schema: "foo", Name: "foo", ObjectType: toc.OBJ_TABLE,
-			Statement: "\n\nALTER TABLE foo.foo ALTER PARTITION FOR (RANK(1)) \nSET SUBPARTITION TEMPLATE \n          (\n          SUBPARTITION d VALUES(3) WITH (tablename='foo'),\n          DEFAULT SUBPARTITION e  WITH (tablename='foo')\n          );\n",
+			Statement: "\n\nALTER TABLE foo.foo ALTER PARTITION FOR (RANK(1)) \nSET SUBPARTITION TEMPLATE \n(\nSUBPARTITION d VALUES(3) WITH (tablename='foo'),\nDEFAULT SUBPARTITION e  WITH (tablename='foo')\n);\n",
 		},
 		{ // 3 level SET SUBPARTITION TEMPLATE
 			Schema: "foo", Name: "foo", ObjectType: toc.OBJ_TABLE,
-			Statement: "\n\nALTER TABLE foo.foo ALTER PARTITION a ALTER PARTITION b \nSET SUBPARTITION TEMPLATE \n          (\n          SUBPARTITION d VALUES(3) WITH (tablename='foo'),\n          DEFAULT SUBPARTITION e  WITH (tablename='foo')\n          );\n",
+			Statement: "\n\nALTER TABLE foo.foo ALTER PARTITION a ALTER PARTITION b \nSET SUBPARTITION TEMPLATE \n(\nSUBPARTITION d VALUES(3) WITH (tablename='foo'),\nDEFAULT SUBPARTITION e  WITH (tablename='foo')\n);\n",
 		},
 		{ // ALTER TABLE ... ATTACH PARTITION statement
 			Schema: "public", Name: "foopart_p1", ObjectType: toc.OBJ_TABLE, ReferenceObject: "public.foopart",
@@ -184,19 +184,19 @@ var _ = Describe("restore internal tests", func() {
 				},
 				{
 					Schema: "foo2", Name: "foo", ObjectType: toc.OBJ_TABLE,
-					Statement: "\n\nALTER TABLE foo2.foo\nSET SUBPARTITION TEMPLATE \n          (\n          SUBPARTITION a VALUES(1) WITH (tablename='foo'),\n          SUBPARTITION b VALUES(2) WITH (tablename='foo'),\n          DEFAULT SUBPARTITION c  WITH (tablename='foo')\n          );\n",
+					Statement: "\n\nALTER TABLE foo2.foo\nSET SUBPARTITION TEMPLATE \n(\nSUBPARTITION a VALUES(1) WITH (tablename='foo'),\nSUBPARTITION b VALUES(2) WITH (tablename='foo'),\nDEFAULT SUBPARTITION c  WITH (tablename='foo')\n);\n",
 				},
 				{
 					Schema: "foo2", Name: "foo", ObjectType: toc.OBJ_TABLE,
-					Statement: "\n\nALTER TABLE foo2.foo ALTER PARTITION a \nSET SUBPARTITION TEMPLATE \n          (\n          SUBPARTITION d VALUES(3) WITH (tablename='foo'),\n          DEFAULT SUBPARTITION e  WITH (tablename='foo')\n          );\n",
+					Statement: "\n\nALTER TABLE foo2.foo ALTER PARTITION a \nSET SUBPARTITION TEMPLATE \n(\nSUBPARTITION d VALUES(3) WITH (tablename='foo'),\nDEFAULT SUBPARTITION e  WITH (tablename='foo')\n);\n",
 				},
 				{
 					Schema: "foo2", Name: "foo", ObjectType: toc.OBJ_TABLE,
-					Statement: "\n\nALTER TABLE foo2.foo ALTER PARTITION FOR (RANK(1)) \nSET SUBPARTITION TEMPLATE \n          (\n          SUBPARTITION d VALUES(3) WITH (tablename='foo'),\n          DEFAULT SUBPARTITION e  WITH (tablename='foo')\n          );\n",
+					Statement: "\n\nALTER TABLE foo2.foo ALTER PARTITION FOR (RANK(1)) \nSET SUBPARTITION TEMPLATE \n(\nSUBPARTITION d VALUES(3) WITH (tablename='foo'),\nDEFAULT SUBPARTITION e  WITH (tablename='foo')\n);\n",
 				},
 				{
 					Schema: "foo2", Name: "foo", ObjectType: toc.OBJ_TABLE,
-					Statement: "\n\nALTER TABLE foo2.foo ALTER PARTITION a ALTER PARTITION b \nSET SUBPARTITION TEMPLATE \n          (\n          SUBPARTITION d VALUES(3) WITH (tablename='foo'),\n          DEFAULT SUBPARTITION e  WITH (tablename='foo')\n          );\n",
+					Statement: "\n\nALTER TABLE foo2.foo ALTER PARTITION a ALTER PARTITION b \nSET SUBPARTITION TEMPLATE \n(\nSUBPARTITION d VALUES(3) WITH (tablename='foo'),\nDEFAULT SUBPARTITION e  WITH (tablename='foo')\n);\n",
 				},
 				{ // ALTER TABLE ... ATTACH PARTITION statement
 					Schema: "foo2", Name: "foopart_p1", ObjectType: toc.OBJ_TABLE, ReferenceObject: "foo2.foopart",
