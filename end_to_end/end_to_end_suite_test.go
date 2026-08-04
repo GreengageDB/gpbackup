@@ -1139,20 +1139,20 @@ var _ = Describe("backup and restore end to end tests", func() {
 				"DROP SCHEMA foo CASCADE")
 			testhelper.AssertQueryRuns(backupConn,
 				`CREATE TABLE foo.foo (id int, id2 int, id3 int)
-					PARTITION BY RANGE (id) 
-						SUBPARTITION BY LIST (id) 
+					PARTITION BY RANGE (id)
+						SUBPARTITION BY LIST (id)
 							SUBPARTITION TEMPLATE (
-								SUBPARTITION a VALUES (1), 
+								SUBPARTITION a VALUES (1),
 								DEFAULT SUBPARTITION b
-							) 
-							SUBPARTITION BY LIST (id2) 
+							)
+							SUBPARTITION BY LIST (id2)
 								SUBPARTITION TEMPLATE (
-									SUBPARTITION c VALUES (2), 
+									SUBPARTITION c VALUES (2),
 									DEFAULT SUBPARTITION d
-									) 
-									SUBPARTITION BY LIST (id3) 
+									)
+									SUBPARTITION BY LIST (id3)
 										SUBPARTITION TEMPLATE (
-											SUBPARTITION e VALUES(3), 
+											SUBPARTITION e VALUES(3),
 											DEFAULT SUBPARTITION f)
 					(
 						START (1) END (10) EVERY (10)
