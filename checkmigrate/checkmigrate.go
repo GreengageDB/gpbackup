@@ -34,8 +34,7 @@ func DoSetup() {
 	gplog.Verbose("CheckMigrate Command: %s", os.Args)
 	gplog.Info("ggcheckmigrate version = %s", GetVersion())
 
-	// TODO: Use flags in CreateConnectionPool
-	//CreateConnectionPool()
+	CreateConnectionPool()
 }
 
 func DoCheckMigrate() {
