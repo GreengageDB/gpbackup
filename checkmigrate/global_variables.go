@@ -18,6 +18,11 @@ var (
 	wasTerminated        atomic.Bool
 	cleanupOnce          sync.Once
 
+	scrapeDbNames bool
+
+	// Used for mocking purposes
+	createDBConn = dbconn.NewDBConn
+
 	// Used for synchronizing DoCleanup.  In DoInit() we increment the group
 	// and then wait for at least one DoCleanup to finish, either in DoTeardown
 	// or the signal handler.
@@ -37,9 +42,32 @@ func SetVersion(v string) {
 	version = v
 }
 
+func SetCreateDBConn(f func(dbName, username, host string, port int) *dbconn.DBConn) {
+	createDBConn = f
+}
+
 // Getter functions
 func GetVersion() string {
 	return version
+}
+
+func GetSourceConnectionPool() *dbconn.DBConn {
+	return sourceConnectionPool
+}
+
+func GetTargetConnectionPool() *dbconn.DBConn {
+	return targetConnectionPool
+}
+
+func GetScrapeDbNames() bool {
+	return scrapeDbNames
+}
+
+// ResetGlobalState() clears the global variables before each test
+func ResetGlobalState() {
+	sourceConnectionPool = nil
+	targetConnectionPool = nil
+	scrapeDbNames = false
 }
 
 // Util functions to enable ease of access to global flag values
