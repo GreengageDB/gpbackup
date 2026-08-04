@@ -58,13 +58,13 @@ const (
 	/*
 	 *	ggcheckmigrate-specific flags
 	 */
-	SOURCE_HOST        = "source-host"
-	SOURCE_PORT        = "source-port"
-	SOURCE_DATABASE    = "source-database"
-	SOURCE_USER        = "source-user"
-	TARGET_HOST        = "target-host"
-	TARGET_PORT        = "target-port"
-	TARGET_USER        = "target-user"
+	SOURCE_HOST     = "source-host"
+	SOURCE_PORT     = "source-port"
+	SOURCE_DATABASE = "source-database"
+	SOURCE_USER     = "source-user"
+	TARGET_HOST     = "target-host"
+	TARGET_PORT     = "target-port"
+	TARGET_USER     = "target-user"
 )
 
 func SetBackupFlagDefaults(flagSet *pflag.FlagSet) {
@@ -140,7 +140,7 @@ func SetRestoreFlagDefaults(flagSet *pflag.FlagSet) {
 
 func SetCheckMigrateFlagDefaults(flagSet *pflag.FlagSet) {
 	flagSet.StringP(SOURCE_HOST, "h", "/tmp", "The host of the cluster being checked")
-	flagSet.IntP(SOURCE_PORT, "p", 0, "The port of the cluster being checked")
+	flagSet.IntP(SOURCE_PORT, "p", 5432, "The port of the cluster being checked")
 	flagSet.StringP(SOURCE_DATABASE, "d", "", "The database of the cluster being checked")
 	flagSet.StringP(SOURCE_USER, "u", "", "The superuser of the cluster being checked")
 	flagSet.StringP(TARGET_HOST, "H", "", "The host of the cluster of next version")

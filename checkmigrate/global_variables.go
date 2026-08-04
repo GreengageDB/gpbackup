@@ -18,7 +18,7 @@ var (
 	wasTerminated        atomic.Bool
 	cleanupOnce          sync.Once
 
-	scrapeDbNames		 bool
+	scrapeDbNames bool
 
 	// Used for mocking purposes
 	createDBConn = dbconn.NewDBConn

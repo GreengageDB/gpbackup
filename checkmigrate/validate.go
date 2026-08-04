@@ -21,7 +21,7 @@ func ValidateFlagCombinations(flags *pflag.FlagSet) {
 	hasTargetHost := flags.Changed(options.TARGET_HOST)
 	hasTargetPort := flags.Changed(options.TARGET_PORT)
 	hasTargetUser := flags.Changed(options.TARGET_USER)
-	if hasTargetHost != hasTargetPort || hasTargetUser && !hasTargetHost {
+	if hasTargetHost != hasTargetPort || (hasTargetUser && !hasTargetHost) {
 		gplog.Fatal(errors.New("Both -H and -P options need to be provided to check target cluster"), "")
 	}
 	if hasTargetHost {

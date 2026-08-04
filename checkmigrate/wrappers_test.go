@@ -94,6 +94,21 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 		})
 
+		It("uses the source-port flag when PGPORT is also set", func() {
+			GinkgoT().Setenv("PGPORT", "6000")
+			_ = cmdFlags.Set(options.SOURCE_PORT, "7000")
+
+			checkmigrate.SetCreateDBConn(func(dbName, username, host string, port int) *dbconn.DBConn {
+				mockSource.Port = port
+				return mockSource
+			})
+
+			checkmigrate.CreateConnectionPool()
+
+			Expect(checkmigrate.GetSourceConnectionPool().Port).To(Equal(7000))
+			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
+		})
+
 		It("uses port 5432 if PGPORT is invalid", func() {
 			GinkgoT().Setenv("PGPORT", "invalid")
 
@@ -202,7 +217,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return invalidTarget
 			})
 
-			Expect(checkmigrate.CreateConnectionPool).To(PanicWith(MatchError("This utility can only check for migrate from Greengage version 6 to Greengage version 7")))
+			Expect(checkmigrate.CreateConnectionPool).To(PanicWith(MatchError("This utility can only check for migrate to Greengage version 7")))
 			Expect(gplog.GetErrorCode()).To(Equal(3))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 			Expect(invalidTargetMock.ExpectationsWereMet()).To(Succeed())

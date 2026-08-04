@@ -39,14 +39,10 @@ func CreateConnectionPool() {
 	sourceDb := options.MustGetFlagString(cmdFlags, options.SOURCE_DATABASE)
 	sourceUser := options.MustGetFlagString(cmdFlags, options.SOURCE_USER)
 
-	//If port is not passed, grab PGPORT (if defined), else use 5432
-	if sourcePort == 0 {
-		sourcePort = 5432
-		if envPort := os.Getenv("PGPORT"); envPort != "" {
-			envPortInt, conversionError := strconv.Atoi(envPort)
-			if conversionError == nil {
-				sourcePort = envPortInt
-			}
+	if envPort := os.Getenv("PGPORT"); !cmdFlags.Changed(options.SOURCE_PORT) && envPort != "" {
+		envPortInt, conversionError := strconv.Atoi(envPort)
+		if conversionError == nil {
+			sourcePort = envPortInt
 		}
 	}
 
@@ -96,7 +92,7 @@ func CreateConnectionPool() {
 		}
 		if !targetConnectionPool.Version.Is("7") {
 			gplog.SetErrorCode(3)
-			panic(errors.New("This utility can only check for migrate from Greengage version 6 to Greengage version 7"))
+			panic(errors.New("This utility can only check for migrate to Greengage version 7"))
 		}
 	}
 }

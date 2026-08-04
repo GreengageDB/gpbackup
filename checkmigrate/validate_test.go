@@ -45,6 +45,8 @@ var _ = Describe("checkmigrate/validate tests", func() {
 			Entry("target host without port", "--target-host localhost", false),
 			Entry("target port without host", "--target-port 7000", false),
 			Entry("target user without host and port", "--target-user gpadmin", false),
+			Entry("target user with host but without port", "--target-user gpadmin --target-host localhost", false),
+			Entry("target user without host but with port", "--target-user gpadmin --target-port 7000", false),
 			Entry("zero target port", "--target-host localhost --target-port 0", false),
 			Entry("negative target port", "--target-host localhost --target-port -1", false),
 			Entry("target port above maximum", "--target-host localhost --target-port 65536", false),
