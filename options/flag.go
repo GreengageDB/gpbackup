@@ -54,6 +54,17 @@ const (
 	RESIZE_CLUSTER        = "resize-cluster"
 	NO_INHERITS           = "no-inherits"
 	REPORT_DIR            = "report-dir"
+
+	/*
+	 *	ggcheckmigrate-specific flags
+	 */
+	SOURCE_HOST     = "source-host"
+	SOURCE_PORT     = "source-port"
+	SOURCE_DATABASE = "source-database"
+	SOURCE_USER     = "source-user"
+	TARGET_HOST     = "target-host"
+	TARGET_PORT     = "target-port"
+	TARGET_USER     = "target-user"
 )
 
 func SetBackupFlagDefaults(flagSet *pflag.FlagSet) {
@@ -125,6 +136,21 @@ func SetRestoreFlagDefaults(flagSet *pflag.FlagSet) {
 	flagSet.Bool(RESIZE_CLUSTER, false, "Restore a backup taken on a cluster with more or fewer segments than the cluster to which it will be restored")
 	flagSet.String(REPORT_DIR, "", "The absolute path of the directory to which restore report and error tables will be written")
 	_ = flagSet.MarkHidden(LEAF_PARTITION_DATA)
+}
+
+func SetCheckMigrateFlagDefaults(flagSet *pflag.FlagSet) {
+	flagSet.StringP(SOURCE_HOST, "h", "/tmp", "The host of the cluster being checked")
+	flagSet.IntP(SOURCE_PORT, "p", 5432, "The port of the cluster being checked")
+	flagSet.StringP(SOURCE_DATABASE, "d", "", "The database of the cluster being checked")
+	flagSet.StringP(SOURCE_USER, "u", "", "The superuser of the cluster being checked")
+	flagSet.StringP(TARGET_HOST, "H", "", "The host of the cluster of next version")
+	flagSet.IntP(TARGET_PORT, "P", 0, "The port of the cluster of next version")
+	flagSet.StringP(TARGET_USER, "U", "", "The superuser of the cluster being checked")
+	flagSet.BoolP("help", "?", false, "Help for ggcheckmigrate")
+	flagSet.BoolP("version", "v", false, "Print version number and exit")
+	flagSet.Bool(DEBUG, false, "Print verbose and debug log messages")
+	flagSet.Bool(QUIET, false, "Suppress non-warning, non-error log messages")
+	flagSet.Bool(VERBOSE, false, "Print verbose log messages")
 }
 
 /*

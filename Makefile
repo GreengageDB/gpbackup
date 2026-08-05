@@ -8,15 +8,17 @@ endif
 BACKUP=gpbackup
 RESTORE=gprestore
 HELPER=gpbackup_helper
+CHECKMIGRATE=ggcheckmigrate
 BIN_DIR=$(shell echo $${GOPATH:-~/go} | awk -F':' '{ print $$1 "/bin"}')
 GINKGO_FLAGS := -r --keep-going --randomize-suites --randomize-all --no-color
 GIT_VERSION := $(shell git describe --tags | perl -pe 's/(.*)-([0-9]*)-(g[0-9a-f]*)/\1+dev.\2.\3/')
 BACKUP_VERSION_STR=github.com/GreengageDB/gpbackup/backup.version=$(GIT_VERSION)
 RESTORE_VERSION_STR=github.com/GreengageDB/gpbackup/restore.version=$(GIT_VERSION)
 HELPER_VERSION_STR=github.com/GreengageDB/gpbackup/helper.version=$(GIT_VERSION)
+CHECK_MIGRATE_VERSION_STR=github.com/GreengageDB/gpbackup/checkmigrate.version=$(GIT_VERSION)
 
 # note that /testutils is not a production directory, but has unit tests to validate testing tools
-SUBDIRS_HAS_UNIT=backup/ filepath/ history/ helper/ options/ report/ restore/ toc/ utils/ testutils/
+SUBDIRS_HAS_UNIT=backup/ filepath/ history/ helper/ options/ report/ restore/ checkmigrate/ toc/ utils/ testutils/
 SUBDIRS_ALL=$(SUBDIRS_HAS_UNIT) integration/ end_to_end/
 GOLANG_LINTER=$(GOPATH)/bin/golangci-lint
 GINKGO=$(GOPATH)/bin/ginkgo
@@ -81,20 +83,23 @@ coverage :
 build : $(GOSQLITE)
 		CGO_ENABLED=1 $(GO_BUILD) -tags '$(BACKUP)' -o $(BIN_DIR)/$(BACKUP) --ldflags '-X $(BACKUP_VERSION_STR)'
 		CGO_ENABLED=1 $(GO_BUILD) -tags '$(RESTORE)' -o $(BIN_DIR)/$(RESTORE) --ldflags '-X $(RESTORE_VERSION_STR)'
+		CGO_ENABLED=1 $(GO_BUILD) -tags '$(CHECKMIGRATE)' -o $(BIN_DIR)/$(CHECKMIGRATE) --ldflags '-X $(CHECK_MIGRATE_VERSION_STR)'
 		CGO_ENABLED=1 $(GO_BUILD) -tags '$(HELPER)' -o $(BIN_DIR)/$(HELPER) --ldflags '-X $(HELPER_VERSION_STR)'
 
 debug :
 		CGO_ENABLED=1 $(GO_BUILD) -tags '$(BACKUP)' -o $(BIN_DIR)/$(BACKUP) -ldflags "-X $(BACKUP_VERSION_STR)" $(DEBUG)
 		CGO_ENABLED=1 $(GO_BUILD) -tags '$(RESTORE)' -o $(BIN_DIR)/$(RESTORE) -ldflags "-X $(RESTORE_VERSION_STR)" $(DEBUG)
+		CGO_ENABLED=1 $(GO_BUILD) -tags '$(CHECKMIGRATE)' -o $(BIN_DIR)/$(CHECKMIGRATE) -ldflags "-X $(CHECK_MIGRATE_VERSION_STR)" $(DEBUG)
 		CGO_ENABLED=1 $(GO_BUILD) -tags '$(HELPER)' -o $(BIN_DIR)/$(HELPER) -ldflags "-X $(HELPER_VERSION_STR)" $(DEBUG)
 
 build_linux :
 		env GOOS=linux GOARCH=amd64 $(GO_BUILD) -tags '$(BACKUP)' -o $(BACKUP) -ldflags "-X $(BACKUP_VERSION_STR)"
 		env GOOS=linux GOARCH=amd64 $(GO_BUILD) -tags '$(RESTORE)' -o $(RESTORE) -ldflags "-X $(RESTORE_VERSION_STR)"
+		env GOOS=linux GOARCH=amd64 $(GO_BUILD) -tags '$(CHECKMIGRATE)' -o $(CHECKMIGRATE) -ldflags "-X $(CHECK_MIGRATE_VERSION_STR)"
 		env GOOS=linux GOARCH=amd64 $(GO_BUILD) -tags '$(HELPER)' -o $(HELPER) -ldflags "-X $(HELPER_VERSION_STR)"
 
 install :
-		cp $(BIN_DIR)/$(BACKUP) $(BIN_DIR)/$(RESTORE) $(GPHOME)/bin
+		cp $(BIN_DIR)/$(BACKUP) $(BIN_DIR)/$(RESTORE) $(BIN_DIR)/$(CHECKMIGRATE) $(GPHOME)/bin
 		@psql -X -t -d template1 -c 'select distinct hostname from gp_segment_configuration where content != -1' > /tmp/seg_hosts 2>/dev/null; \
 		if [ $$? -eq 0 ]; then \
 			$(COPYUTIL) -f /tmp/seg_hosts $(helper_path) =:$(GPHOME)/bin/$(HELPER); \
@@ -128,7 +133,7 @@ deb : debian/changelog
 
 clean :
 		# Build artifacts
-		rm -f $(BIN_DIR)/$(BACKUP) $(BACKUP) $(BIN_DIR)/$(RESTORE) $(RESTORE) $(BIN_DIR)/$(HELPER) $(HELPER)
+		rm -f $(BIN_DIR)/$(BACKUP) $(BACKUP) $(BIN_DIR)/$(RESTORE) $(RESTORE) $(BIN_DIR)/$(HELPER) $(BIN_DIR)/$(CHECKMIGRATE) $(HELPER)
 		# Test artifacts
 		rm -rf /tmp/go-build* /tmp/gexec_artifacts* /tmp/ginkgo*
 		docker stop s3-minio # stop minio before removing its data directories
