@@ -1,10 +1,10 @@
 package checkmigrate
 
 import (
-	"os"
 	"strconv"
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
+	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gpbackup/options"
 
 	"github.com/pkg/errors"
@@ -39,7 +39,7 @@ func CreateConnectionPool() {
 	sourceDb := options.MustGetFlagString(cmdFlags, options.SOURCE_DATABASE)
 	sourceUser := options.MustGetFlagString(cmdFlags, options.SOURCE_USER)
 
-	if envPort := os.Getenv("PGPORT"); !cmdFlags.Changed(options.SOURCE_PORT) && envPort != "" {
+	if envPort := operating.System.Getenv("PGPORT"); !cmdFlags.Changed(options.SOURCE_PORT) && envPort != "" {
 		envPortInt, conversionError := strconv.Atoi(envPort)
 		if conversionError == nil {
 			sourcePort = envPortInt
@@ -48,16 +48,16 @@ func CreateConnectionPool() {
 
 	// We will need to check for all DBs if sourceDB not specified,
 	// but use postgres for initial connection.
-	scrapeDbNames = false
+	shouldScrapeDatabaseNames = false
 	if sourceDb == "" {
 		sourceDb = "postgres"
-		scrapeDbNames = true
+		shouldScrapeDatabaseNames = true
 	}
 
 	// Try using PGUSER first, then USER
 	if sourceUser == "" {
-		sourceUser = os.Getenv("USER")
-		if envUser := os.Getenv("PGUSER"); envUser != "" {
+		sourceUser = operating.System.Getenv("USER")
+		if envUser := operating.System.Getenv("PGUSER"); envUser != "" {
 			sourceUser = envUser
 		}
 	}
@@ -71,6 +71,10 @@ func CreateConnectionPool() {
 		gplog.SetErrorCode(2)
 		panic(errors.New("This utility can only check for migrate from Greengage version 6"))
 	}
+	if sourceConnectionPool.Version.Before("6.27.1") {
+		gplog.SetErrorCode(2)
+		panic(errors.New("This utility requires Greengage version 6.27.1 or newer"))
+	}
 
 	targetHost := options.MustGetFlagString(cmdFlags, options.TARGET_HOST)
 	targetPort := options.MustGetFlagInt(cmdFlags, options.TARGET_PORT)
@@ -78,8 +82,8 @@ func CreateConnectionPool() {
 	targetUser := options.MustGetFlagString(cmdFlags, options.TARGET_USER)
 
 	if targetUser == "" {
-		targetUser = os.Getenv("USER")
-		if envUser := os.Getenv("PGUSER"); envUser != "" {
+		targetUser = operating.System.Getenv("USER")
+		if envUser := operating.System.Getenv("PGUSER"); envUser != "" {
 			targetUser = envUser
 		}
 	}

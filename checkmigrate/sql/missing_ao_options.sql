@@ -11,4 +11,7 @@ JOIN pg_catalog.pg_class child_relation ON child_relation.relnamespace = child_n
 JOIN unnest(parent_relation.reloptions) po ON true
 LEFT JOIN unnest(child_relation.reloptions) co ON split_part(po, '=', 1) = split_part(co, '=', 1)
 WHERE co IS NULL
+  AND parent_relation.relstorage IN ('a', 'c')
+  AND split_part(po, '=', 1) IN ('appendonly', 'appendoptimized', 'orientation',
+                                 'compresstype', 'compresslevel', 'blocksize', 'checksum')
 ORDER BY p.schemaname, p.tablename, p.partitionschemaname, p.partitiontablename, po;

@@ -15,3 +15,20 @@ docker run --rm -it --sysctl 'kernel.sem=500 1024000 200 4096' gpbackup:test7x b
 **NOTE**:
 Running all tests requires 11-13 GB, not including the size of the repository
 itself, the Docker image, and the Docker container.
+
+## How to run the migration checks
+
+Start Greengage 6 and Greengage 7 clusters with reachable TCP endpoints. Run the fixture harness with the following environment variables.
+
+```bash
+GGCHECKMIGRATE_SOURCE_HOST=127.0.0.1 \
+GGCHECKMIGRATE_SOURCE_PORT=26000 \
+GGCHECKMIGRATE_SOURCE_USER=gpadmin \
+GGCHECKMIGRATE_TARGET_HOST=127.0.0.1 \
+GGCHECKMIGRATE_TARGET_PORT=27000 \
+GGCHECKMIGRATE_TARGET_USER=gpadmin \
+GGCHECKMIGRATE_BINARY="$GOPATH/bin/ggcheckmigrate" \
+ci/scripts/test-ggcheckmigrate.bash
+```
+
+The source and target credentials can be stored in `.pgpass`.

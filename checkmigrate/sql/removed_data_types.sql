@@ -1,5 +1,5 @@
 SELECT nspname::text AS schema_name, relname::text AS object_name, attname::text AS column_name
-FROM __ggcheckmigrate_tmp.data_type_checks(
+FROM pg_temp.data_type_checks(
     ARRAY[
         'pg_catalog.abstime'::regtype,
         'pg_catalog.unknown'::regtype,

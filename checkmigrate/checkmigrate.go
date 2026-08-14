@@ -1,6 +1,7 @@
 package checkmigrate
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime/debug"
@@ -40,56 +41,94 @@ func DoSetup() {
 func DoCheckMigrate() {
 	if sourceConnectionPool == nil {
 		gplog.SetErrorCode(5)
-		panic(fmt.Errorf("The source connection is not initialized"))
+		panic(errors.New("source connection is not initialized"))
 	}
 
 	databaseNames := []databaseNameResult{{DatabaseName: sourceConnectionPool.DBName}}
-	if scrapeDbNames {
+	if shouldScrapeDatabaseNames {
 		databaseNames = make([]databaseNameResult, 0)
-		if err := sourceConnectionPool.Select(&databaseNames, sourceDatabaseNamesQuery); err != nil {
+		if queryError := sourceConnectionPool.Select(&databaseNames, sourceDatabaseNamesQuery); queryError != nil {
 			gplog.SetErrorCode(5)
-			panic(err)
+			panic(queryError)
 		}
 	}
 
-	hasFindings := false
+	databaseCount := len(databaseNames)
+	checkedDatabaseCount := 0
+	skippedDatabaseCount := 0
+	completedCheckCount := 0
+	failedCheckCount := 0
+	findingCount := 0
+	hasExecutionError := false
+
+	resourceGroupFindingCount, resourceGroupError := checkResourceGroups(sourceConnectionPool)
+	if resourceGroupError != nil {
+		failedCheckCount++
+		hasExecutionError = true
+		gplog.Error("Cluster failed check %q with %v", "resource groups", resourceGroupError)
+	} else {
+		completedCheckCount++
+		findingCount += resourceGroupFindingCount
+	}
+
 	for _, database := range databaseNames {
 		sourceConnection := sourceConnectionPool
 		shouldCloseConnection := false
 		if database.DatabaseName != sourceConnectionPool.DBName {
 			sourceConnection = createDBConn(database.DatabaseName, sourceConnectionPool.User, sourceConnectionPool.Host, sourceConnectionPool.Port)
-			if err := sourceConnection.Connect(1); err != nil {
+			if connectError := sourceConnection.Connect(1); connectError != nil {
 				sourceConnection.Close()
-				gplog.SetErrorCode(5)
-				panic(err)
+				skippedDatabaseCount++
+				hasExecutionError = true
+				gplog.Error("Database %q could not be checked because its connection failed with %v", database.DatabaseName, connectError)
+
+				continue
 			}
 			shouldCloseConnection = true
 		}
 
-		hasDatabaseFindings, err := runMigrationChecks(sourceConnection, targetConnectionPool)
+		databaseSummary := runMigrationChecks(sourceConnection, targetConnectionPool)
 		if shouldCloseConnection {
 			sourceConnection.Close()
 		}
-		if err != nil {
-			gplog.SetErrorCode(5)
-			panic(err)
+		if databaseSummary.databaseError != nil {
+			hasExecutionError = true
+			gplog.Error("Database %q could not complete its checks with %v", database.DatabaseName, databaseSummary.databaseError)
 		}
-		hasFindings = hasFindings || hasDatabaseFindings
+		if databaseSummary.completedCheckCount > 0 {
+			checkedDatabaseCount++
+		} else {
+			skippedDatabaseCount++
+		}
+		completedCheckCount += databaseSummary.completedCheckCount
+		failedCheckCount += databaseSummary.failedCheckCount
+		findingCount += databaseSummary.findingCount
+		if databaseSummary.failedCheckCount > 0 {
+			hasExecutionError = true
+		}
 	}
 
-	if hasFindings {
+	summaryShellVerbosity := gplog.LOGINFO
+	if findingCount > 0 || hasExecutionError {
+		summaryShellVerbosity = gplog.LOGERROR
+	}
+	gplog.Custom(gplog.LOGINFO, summaryShellVerbosity, "Summary contains %d databases, %d checked databases, %d skipped databases, %d completed checks, %d failed checks, and %d findings", databaseCount, checkedDatabaseCount, skippedDatabaseCount, completedCheckCount, failedCheckCount, findingCount)
+
+	if hasExecutionError {
+		gplog.SetErrorCode(5)
+	} else if findingCount > 0 {
 		gplog.SetErrorCode(1)
 	}
 }
 
 func DoTeardown() {
-	checkmigrateFailed := false
+	didCheckmigrateFail := false
 	defer func() {
 		// If the checkmigrate was terminated, the signal handler will handle cleanup
 		if wasTerminated.Load() {
 			CleanupGroup.Wait()
 		} else {
-			DoCleanup(checkmigrateFailed)
+			DoCleanup(didCheckmigrateFail)
 		}
 
 		errorCode := gplog.GetErrorCode()
@@ -109,7 +148,7 @@ func DoTeardown() {
 		} else {
 			errStr = fmt.Sprintf("%+v", err)
 		}
-		checkmigrateFailed = true
+		didCheckmigrateFail = true
 	}
 	if wasTerminated.Load() {
 		// Don't print an error if the checkmigrate was canceled, as the signal handler
@@ -117,7 +156,7 @@ func DoTeardown() {
 		// handler's DoCleanup completes so the main goroutine doesn't exit while
 		// cleanup is still in progress.
 		CleanupGroup.Wait()
-		checkmigrateFailed = true
+		didCheckmigrateFail = true
 		return
 	}
 	if errStr != "" {
@@ -125,7 +164,7 @@ func DoTeardown() {
 	}
 }
 
-func DoCleanup(checkmigrateFailed bool) {
+func DoCleanup(didCheckmigrateFail bool) {
 	cleanupOnce.Do(func() {
 		defer func() {
 			if err := recover(); err != nil {

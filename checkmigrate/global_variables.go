@@ -18,7 +18,7 @@ var (
 	wasTerminated        atomic.Bool
 	cleanupOnce          sync.Once
 
-	scrapeDbNames bool
+	shouldScrapeDatabaseNames bool
 
 	// Used for mocking purposes
 	createDBConn = dbconn.NewDBConn
@@ -59,15 +59,15 @@ func GetTargetConnectionPool() *dbconn.DBConn {
 	return targetConnectionPool
 }
 
-func GetScrapeDbNames() bool {
-	return scrapeDbNames
+func GetShouldScrapeDatabaseNames() bool {
+	return shouldScrapeDatabaseNames
 }
 
 // ResetGlobalState() clears the global variables before each test
 func ResetGlobalState() {
 	sourceConnectionPool = nil
 	targetConnectionPool = nil
-	scrapeDbNames = false
+	shouldScrapeDatabaseNames = false
 }
 
 // Util functions to enable ease of access to global flag values

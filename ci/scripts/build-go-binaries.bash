@@ -22,6 +22,12 @@ if [[ "gpbackup version ${version}" != "$(${GOPATH}/bin/gpbackup --version)" ]];
   exit 1
 fi
 
+if [[ "ggcheckmigrate version ${version}" != "$(${GOPATH}/bin/ggcheckmigrate --version)" ]]; then
+  echo "unexpected difference in version recorded for ggcheckmigrate: expected ${version} to be same as:"
+  ${GOPATH}/bin/ggcheckmigrate --version
+  exit 1
+fi
+
 # Build s3 plugin
 pushd ${GOPATH}/src/github.com/greenplum-db/gpbackup-s3-plugin
   make depend build unit
@@ -52,6 +58,7 @@ fi
 cp ${GOPATH}/bin/gpbackup go_components/
 cp ${GOPATH}/bin/gpbackup_helper go_components/
 cp ${GOPATH}/bin/gprestore go_components/
+cp ${GOPATH}/bin/ggcheckmigrate go_components/
 cp ${GOPATH}/bin/gpbackup_s3_plugin go_components/
 cp ${GOPATH}/bin/gpbackup_manager go_components/
 cd go_components && tar cfz go_components.tar.gz *

@@ -75,6 +75,9 @@ else
     gppkg -i /tmp/untarred/gpbackup*gp\${GPDB_VERSION}*${OS}*.gppkg
 fi
 
+command -v ggcheckmigrate
+ggcheckmigrate --version
+
 # Get the GPDB version to use for the unit tests
 export TEST_GPDB_VERSION=\$(echo \$out | sed -n 's/.*Greenplum Database \([0-9].[0-9]\+.[0-9]\+\).*/\1/p')
 
@@ -86,4 +89,3 @@ SCRIPT
 
 chmod +x /tmp/run_tests.bash
 su - gpadmin "/tmp/run_tests.bash"
-

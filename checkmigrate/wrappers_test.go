@@ -29,9 +29,9 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 		BeforeEach(func() {
 			mockSource, sourceMock = testhelper.CreateMockDBConn()
 			mockTarget, targetMock = testhelper.CreateMockDBConn()
-			testhelper.SetDBVersion(mockSource, "6.0.0")
+			testhelper.SetDBVersion(mockSource, "6.27.1")
 			testhelper.SetDBVersion(mockTarget, "7.0.0")
-			testhelper.ExpectVersionQuery(sourceMock, "6.0.0")
+			testhelper.ExpectVersionQuery(sourceMock, "6.27.1")
 			testhelper.ExpectVersionQuery(targetMock, "7.0.0")
 			checkmigrate.ResetGlobalState()
 			cmdFlags = pflag.NewFlagSet("checkmigrate", pflag.ContinueOnError)
@@ -52,7 +52,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 			}
 		})
 
-		It("defaults to port 5432, postgres db, and scrapeDbNames=true when no flags/envs are set", func() {
+		It("defaults to port 5432, postgres db, and shouldScrapeDatabaseNames=true when no flags/envs are set", func() {
 			GinkgoT().Setenv("USER", "test_os_user")
 
 			checkmigrate.SetCreateDBConn(func(dbName, username, host string, port int) *dbconn.DBConn {
@@ -70,7 +70,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 			Expect(sourcePool.Port).To(Equal(5432))
 			Expect(sourcePool.DBName).To(Equal("postgres"))
 			Expect(sourcePool.User).To(Equal("test_os_user"))
-			Expect(checkmigrate.GetScrapeDbNames()).To(BeTrue())
+			Expect(checkmigrate.GetShouldScrapeDatabaseNames()).To(BeTrue())
 
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 		})
@@ -145,6 +145,19 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 			Expect(checkmigrate.CreateConnectionPool).To(PanicWith(MatchError("This utility can only check for migrate from Greengage version 6")))
 			Expect(gplog.GetErrorCode()).To(Equal(2))
 			Expect(invalidSourceMock.ExpectationsWereMet()).To(Succeed())
+		})
+
+		It("returns the source version error below version 6.27.1", func() {
+			oldSource, oldSourceMock := testhelper.CreateMockDBConn()
+			testhelper.ExpectVersionQuery(oldSourceMock, "6.27.0")
+			DeferCleanup(oldSource.Close)
+			checkmigrate.SetCreateDBConn(func(dbName, username, host string, port int) *dbconn.DBConn {
+				return oldSource
+			})
+
+			Expect(checkmigrate.CreateConnectionPool).To(PanicWith(MatchError("This utility requires Greengage version 6.27.1 or newer")))
+			Expect(gplog.GetErrorCode()).To(Equal(2))
+			Expect(oldSourceMock.ExpectationsWereMet()).To(Succeed())
 		})
 
 		It("successfully creates both source and target connections when target-host and target-port are provided", func() {

@@ -2,6 +2,7 @@ package checkmigrate
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -51,6 +52,21 @@ var incompatibleRangePartitionQuery string
 
 //go:embed sql/statement_triggers.sql
 var statementTriggerQuery string
+
+//go:embed sql/removed_extensions.sql
+var removedExtensionQuery string
+
+//go:embed sql/arenadata_toolkit_schema.sql
+var arenadataToolkitSchemaQuery string
+
+//go:embed sql/resource_groups.sql
+var resourceGroupQuery string
+
+//go:embed sql/system_object_dependencies.sql
+var systemObjectDependencyQuery string
+
+//go:embed sql/deep_partition_templates.sql
+var deepPartitionTemplateQuery string
 
 type namedObjectResult struct {
 	SchemaName string `db:"schema_name"`
@@ -108,366 +124,493 @@ type statementTriggerResult struct {
 }
 
 type requiredLibraryResult struct {
-	LibraryName string `db:"library_name"`
+	SchemaName        string `db:"schema_name"`
+	ObjectName        string `db:"object_name"`
+	IdentityArguments string `db:"identity_arguments"`
+	LibraryName       string `db:"library_name"`
 }
 
-func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbconn.DBConn) (hasFindings bool, returnError error) {
+type resourceGroupResult struct {
+	ObjectName string `db:"object_name"`
+}
+
+type systemObjectDependencyResult struct {
+	SchemaName       string `db:"schema_name"`
+	ObjectName       string `db:"object_name"`
+	RelationKind     string `db:"relation_kind"`
+	ReferencedObject string `db:"referenced_object"`
+}
+
+var relationKindLabels = map[string]string{
+	"v": "view",
+	"m": "materialized view",
+	"f": "function",
+}
+
+type migrationCheck struct {
+	name            string
+	isSetupRequired bool
+	doRunCheck      func(*dbconn.DBConn) (int, error)
+}
+
+type migrationCheckSummary struct {
+	completedCheckCount int
+	failedCheckCount    int
+	findingCount        int
+	databaseError       error
+}
+
+func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbconn.DBConn) (summary migrationCheckSummary) {
 	if sourceConnection == nil {
-		return false, fmt.Errorf("The source connection is not initialized")
-	}
+		summary.failedCheckCount++
+		summary.databaseError = errors.New("source connection is not initialized")
 
-	beginError := sourceConnection.Begin()
-	if len(sourceConnection.Tx) > 0 && sourceConnection.Tx[0] != nil {
-		defer func() {
-			rollbackError := sourceConnection.Rollback()
-			if rollbackError == nil {
-				return
-			}
-			if returnError != nil {
-				returnError = fmt.Errorf("%v. The source transaction rollback failed with %w", returnError, rollbackError)
-				return
-			}
+		return summary
+	}
+	if beginError := sourceConnection.Begin(); beginError != nil {
+		summary.databaseError = beginError
 
-			returnError = fmt.Errorf("The source transaction rollback failed with %w", rollbackError)
-		}()
+		return summary
 	}
-	if beginError != nil {
-		return false, beginError
-	}
+	defer func() {
+		rollbackError := sourceConnection.Rollback()
+		if rollbackError == nil {
+			return
+		}
+		if summary.databaseError != nil {
+			gplog.Error("Database %q failed transaction rollback with %v", sourceConnection.DBName, rollbackError)
+
+			return
+		}
+		summary.databaseError = fmt.Errorf("source transaction rollback failed with %w", rollbackError)
+	}()
 
 	if targetConnection != nil {
-		hasCheckFindings, checkError := checkRequiredLibraries(sourceConnection, targetConnection)
+		if _, savepointError := sourceConnection.Exec("SAVEPOINT ggcheckmigrate_libraries"); savepointError != nil {
+			summary.databaseError = fmt.Errorf("required libraries savepoint failed with %w", savepointError)
+
+			return summary
+		}
+		findingCount, checkError := checkRequiredLibraries(sourceConnection, targetConnection)
+		if checkError == nil {
+			summary.completedCheckCount++
+			summary.findingCount += findingCount
+		} else {
+			summary.failedCheckCount++
+			gplog.Error("Database %q failed check %q with %v", sourceConnection.DBName, "required libraries", checkError)
+			if _, recoveryError := sourceConnection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_libraries"); recoveryError != nil {
+				summary.databaseError = fmt.Errorf("required libraries check failed with %v and savepoint recovery failed with %w", checkError, recoveryError)
+
+				return summary
+			}
+		}
+		_, _ = sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_libraries")
+	}
+
+	if _, savepointError := sourceConnection.Exec("SAVEPOINT ggcheckmigrate_setup"); savepointError != nil {
+		summary.databaseError = fmt.Errorf("migration check setup savepoint failed with %w", savepointError)
+
+		return summary
+	}
+	_, setupError := sourceConnection.Exec(migrationCheckSetupQuery)
+	hasSupport := setupError == nil
+	if setupError != nil {
+		_, recoveryError := sourceConnection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_setup")
+		if recoveryError != nil {
+			summary.databaseError = fmt.Errorf("migration check setup failed with %v and savepoint recovery failed with %w", setupError, recoveryError)
+
+			return summary
+		}
+		gplog.Error("Database %q failed migration check setup with %v", sourceConnection.DBName, setupError)
+	}
+	_, _ = sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_setup")
+
+	checks := []migrationCheck{
+		{name: "multi-column LIST partitions", doRunCheck: checkMultiColumnListPartitions},
+		{name: "PL/Python 2 functions", doRunCheck: checkPlpython2DependentFunctions},
+		{name: "views with removed operators", isSetupRequired: true, doRunCheck: checkViewsWithRemovedOperators},
+		{name: "views with removed functions", isSetupRequired: true, doRunCheck: checkViewsWithRemovedFunctions},
+		{name: "views with removed types", isSetupRequired: true, doRunCheck: checkViewsWithRemovedTypes},
+		{name: "removed data types", isSetupRequired: true, doRunCheck: checkRemovedDataTypes},
+		{name: "missing AO options", doRunCheck: checkMissingAOOptions},
+		{name: "restricted EXECUTE ON functions", doRunCheck: checkRestrictedExecuteOnFunctions},
+		{name: "incomplete partition indexes", doRunCheck: checkIncompletePartitionIndexes},
+		{name: "incompatible range partitions", doRunCheck: checkIncompatibleRangePartitions},
+		{name: "statement triggers", doRunCheck: checkStatementTriggers},
+		{name: "removed extensions", doRunCheck: checkRemovedExtensions},
+		{name: "arenadata_toolkit schema", doRunCheck: checkArenadataToolkitSchema},
+		{name: "system object dependencies", doRunCheck: checkSystemObjectDependencies},
+		{name: "deep partition templates", doRunCheck: checkDeepPartitionTemplates},
+	}
+
+	for _, check := range checks {
+		if check.isSetupRequired && !hasSupport {
+			summary.failedCheckCount++
+			gplog.Error("Database %q skipped check %q because migration check setup is unavailable", sourceConnection.DBName, check.name)
+
+			continue
+		}
+
+		if _, savepointError := sourceConnection.Exec("SAVEPOINT ggcheckmigrate_check"); savepointError != nil {
+			summary.databaseError = fmt.Errorf("check %q savepoint failed with %w", check.name, savepointError)
+
+			return summary
+		}
+		findingCount, checkError := check.doRunCheck(sourceConnection)
 		if checkError != nil {
-			return false, checkError
+			summary.failedCheckCount++
+			gplog.Error("Database %q failed check %q with %v", sourceConnection.DBName, check.name, checkError)
+			if _, recoveryError := sourceConnection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_check"); recoveryError != nil {
+				summary.databaseError = fmt.Errorf("check %q failed with %v and savepoint recovery failed with %w", check.name, checkError, recoveryError)
+
+				return summary
+			}
+			_, _ = sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check")
+			continue
 		}
-		hasFindings = hasFindings || hasCheckFindings
+
+		_, _ = sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check")
+		summary.completedCheckCount++
+		summary.findingCount += findingCount
 	}
 
-	_, returnError = sourceConnection.Exec(migrationCheckSetupQuery)
-	if returnError != nil {
-		return false, returnError
-	}
-
-	hasCheckFindings, returnError := checkMultiColumnListPartitions(sourceConnection)
-	if returnError != nil {
-		return false, returnError
-	}
-	hasFindings = hasFindings || hasCheckFindings
-
-	hasCheckFindings, returnError = checkPlpython2DependentFunctions(sourceConnection)
-	if returnError != nil {
-		return false, returnError
-	}
-	hasFindings = hasFindings || hasCheckFindings
-
-	hasCheckFindings, returnError = checkViewsWithRemovedOperators(sourceConnection)
-	if returnError != nil {
-		return false, returnError
-	}
-	hasFindings = hasFindings || hasCheckFindings
-
-	hasCheckFindings, returnError = checkViewsWithRemovedFunctions(sourceConnection)
-	if returnError != nil {
-		return false, returnError
-	}
-	hasFindings = hasFindings || hasCheckFindings
-
-	hasCheckFindings, returnError = checkViewsWithRemovedTypes(sourceConnection)
-	if returnError != nil {
-		return false, returnError
-	}
-	hasFindings = hasFindings || hasCheckFindings
-
-	hasCheckFindings, returnError = checkRemovedDataTypes(sourceConnection)
-	if returnError != nil {
-		return false, returnError
-	}
-	hasFindings = hasFindings || hasCheckFindings
-
-	hasCheckFindings, returnError = checkMissingAOOptions(sourceConnection)
-	if returnError != nil {
-		return false, returnError
-	}
-	hasFindings = hasFindings || hasCheckFindings
-
-	hasCheckFindings, returnError = checkRestrictedExecuteOnFunctions(sourceConnection)
-	if returnError != nil {
-		return false, returnError
-	}
-	hasFindings = hasFindings || hasCheckFindings
-
-	hasCheckFindings, returnError = checkIncompletePartitionIndexes(sourceConnection)
-	if returnError != nil {
-		return false, returnError
-	}
-	hasFindings = hasFindings || hasCheckFindings
-
-	hasCheckFindings, returnError = checkIncompatibleRangePartitions(sourceConnection)
-	if returnError != nil {
-		return false, returnError
-	}
-	hasFindings = hasFindings || hasCheckFindings
-
-	hasCheckFindings, returnError = checkStatementTriggers(sourceConnection)
-	if returnError != nil {
-		return false, returnError
-	}
-	hasFindings = hasFindings || hasCheckFindings
-
-	return hasFindings, nil
+	return summary
 }
 
-func checkMultiColumnListPartitions(connection *dbconn.DBConn) (bool, error) {
+func checkMultiColumnListPartitions(connection *dbconn.DBConn) (int, error) {
 	results := make([]namedObjectResult, 0)
-	if err := connection.Select(&results, multiColumnListPartitionQuery); err != nil {
-		return false, err
+	if queryError := connection.Select(&results, multiColumnListPartitionQuery); queryError != nil {
+		return 0, queryError
 	}
 	if len(results) == 0 {
-		return false, nil
+		return 0, nil
 	}
 
 	var output strings.Builder
-	output.WriteString("Your installation contains partitioned tables with a LIST partition key containing multiple columns, which is not supported anymore. Consider modifying the partition key to use a single column or dropping the tables.\n")
+	output.WriteString("Your cluster contains partitioned tables with a LIST partition key containing multiple columns. Modify the partition key to use one column or drop the affected tables.\n")
 	for _, result := range results {
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.ObjectName, "partitioned table", result.SchemaName, "The LIST partition key contains multiple columns")
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The LIST partition key contains multiple columns.\n", connection.DBName, result.ObjectName, "partitioned table", result.SchemaName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
-	return true, nil
+	return len(results), nil
 }
 
-func checkPlpython2DependentFunctions(connection *dbconn.DBConn) (bool, error) {
+func checkPlpython2DependentFunctions(connection *dbconn.DBConn) (int, error) {
 	results := make([]functionResult, 0)
-	if err := connection.Select(&results, plpython2DependentFunctionQuery); err != nil {
-		return false, err
+	if queryError := connection.Select(&results, plpython2DependentFunctionQuery); queryError != nil {
+		return 0, queryError
 	}
 	if len(results) == 0 {
-		return false, nil
+		return 0, nil
 	}
 
 	var output strings.Builder
-	output.WriteString("Your installation contains plpython functions which rely on Python 2. These functions must be updated to use Python 3 or dropped before migration.\n")
+	output.WriteString("Your cluster contains PL/Python functions that rely on Python 2. Update the functions to use Python 3 or drop them before migration.\n")
 	for _, result := range results {
-		detail := fmt.Sprintf("The function depends on plpython2. The identity arguments are %q", result.IdentityArguments)
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.ObjectName, "function", result.SchemaName, detail)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The function depends on plpython2 and its identity arguments are %q.\n", connection.DBName, result.ObjectName, "function", result.SchemaName, result.IdentityArguments)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
-	return true, nil
+	return len(results), nil
 }
 
-func checkViewsWithRemovedOperators(connection *dbconn.DBConn) (bool, error) {
+func checkViewsWithRemovedOperators(connection *dbconn.DBConn) (int, error) {
 	results := make([]viewResult, 0)
-	if err := connection.Select(&results, removedOperatorViewQuery); err != nil {
-		return false, err
+	if queryError := connection.Select(&results, removedOperatorViewQuery); queryError != nil {
+		return 0, queryError
 	}
 	if len(results) == 0 {
-		return false, nil
+		return 0, nil
 	}
 
 	var output strings.Builder
-	output.WriteString("Your installation contains views using removed operators. These operators are no longer present in the target version. These views must be updated to use supported operators or removed before migration.\n")
+	output.WriteString("Your cluster contains views that use removed operators. Update the views to use supported operators or remove them before migration.\n")
 	for _, result := range results {
-		objectType := "view"
-		if result.RelationKind == "m" {
-			objectType = "materialized view"
-		}
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.ObjectName, objectType, result.SchemaName, "The view uses a removed operator")
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view uses a removed operator.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
-	return true, nil
+	return len(results), nil
 }
 
-func checkViewsWithRemovedFunctions(connection *dbconn.DBConn) (bool, error) {
+func checkViewsWithRemovedFunctions(connection *dbconn.DBConn) (int, error) {
 	results := make([]viewResult, 0)
-	if err := connection.Select(&results, removedFunctionViewQuery); err != nil {
-		return false, err
+	if queryError := connection.Select(&results, removedFunctionViewQuery); queryError != nil {
+		return 0, queryError
 	}
 	if len(results) == 0 {
-		return false, nil
+		return 0, nil
 	}
 
 	var output strings.Builder
-	output.WriteString("Your installation contains views using removed functions. These functions are no longer present in the target version. These views must be updated to use supported functions or removed before migration.\n")
+	output.WriteString("Your cluster contains views that use removed functions. Update the views to use supported functions or remove them before migration.\n")
 	for _, result := range results {
-		objectType := "view"
-		if result.RelationKind == "m" {
-			objectType = "materialized view"
-		}
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.ObjectName, objectType, result.SchemaName, "The view uses a removed function")
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view uses a removed function.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
-	return true, nil
+	return len(results), nil
 }
 
-func checkViewsWithRemovedTypes(connection *dbconn.DBConn) (bool, error) {
+func checkViewsWithRemovedTypes(connection *dbconn.DBConn) (int, error) {
 	results := make([]viewResult, 0)
-	if err := connection.Select(&results, removedTypeViewQuery); err != nil {
-		return false, err
+	if queryError := connection.Select(&results, removedTypeViewQuery); queryError != nil {
+		return 0, queryError
 	}
 	if len(results) == 0 {
-		return false, nil
+		return 0, nil
 	}
 
 	var output strings.Builder
-	output.WriteString("Your installation contains views using removed types. These types are no longer present in the target version. These views must be updated to use supported types or removed before migration.\n")
+	output.WriteString("Your cluster contains views that use removed types. Update the views to use supported types or remove them before migration.\n")
 	for _, result := range results {
-		objectType := "view"
-		if result.RelationKind == "m" {
-			objectType = "materialized view"
-		}
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.ObjectName, objectType, result.SchemaName, "The view uses a removed type")
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view uses a removed type.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
-	return true, nil
+	return len(results), nil
 }
 
-func checkRemovedDataTypes(connection *dbconn.DBConn) (bool, error) {
+func checkRemovedDataTypes(connection *dbconn.DBConn) (int, error) {
 	results := make([]removedDataTypeResult, 0)
-	if err := connection.Select(&results, removedDataTypeQuery); err != nil {
-		return false, err
+	if queryError := connection.Select(&results, removedDataTypeQuery); queryError != nil {
+		return 0, queryError
 	}
 	if len(results) == 0 {
-		return false, nil
+		return 0, nil
 	}
 
 	var output strings.Builder
 	output.WriteString("Your cluster contains user columns that depend on the removed abstime, reltime, tinterval, or unknown data types. Convert each column to a supported type or drop the affected column.\n")
 	for _, result := range results {
-		detail := fmt.Sprintf("Relation %q contains the affected column", result.ObjectName)
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.ColumnName, "column", result.SchemaName, detail)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. Relation %q contains the affected column.\n", connection.DBName, result.ColumnName, "column", result.SchemaName, result.ObjectName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
-	return true, nil
+	return len(results), nil
 }
 
-func checkMissingAOOptions(connection *dbconn.DBConn) (bool, error) {
+func checkMissingAOOptions(connection *dbconn.DBConn) (int, error) {
 	results := make([]missingAOOptionResult, 0)
-	if err := connection.Select(&results, missingAOOptionQuery); err != nil {
-		return false, err
+	if queryError := connection.Select(&results, missingAOOptionQuery); queryError != nil {
+		return 0, queryError
 	}
 	if len(results) == 0 {
-		return false, nil
+		return 0, nil
 	}
 
 	var output strings.Builder
-	output.WriteString("Your cluster contains partitioned tables with child partitions, which do not have the parent table's settings defined.\nIn version 7, they will be inherited from the parent table instead of being taken by default.\nYou can recreate following tables with defined setting.\nList of partitioned tables, partitions, and settings with the specified problem:\n")
+	output.WriteString("Your cluster contains child partitions that do not define the parent table settings. Version 7 inherits these settings from the parent table. Recreate the affected tables with explicit settings.\n")
 	for _, result := range results {
-		detail := fmt.Sprintf("Parent table %q in schema %q defines option %q", result.ParentName, result.ParentSchema, result.ParentOption)
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.ChildName, "partition", result.ChildSchema, detail)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. Parent table %q in schema %q defines option %q.\n", connection.DBName, result.ChildName, "partition", result.ChildSchema, result.ParentName, result.ParentSchema, result.ParentOption)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
-	return true, nil
+	return len(results), nil
 }
 
-func checkRestrictedExecuteOnFunctions(connection *dbconn.DBConn) (bool, error) {
+func checkRestrictedExecuteOnFunctions(connection *dbconn.DBConn) (int, error) {
 	results := make([]functionResult, 0)
-	if err := connection.Select(&results, restrictedExecuteOnFunctionQuery); err != nil {
-		return false, err
+	if queryError := connection.Select(&results, restrictedExecuteOnFunctionQuery); queryError != nil {
+		return 0, queryError
 	}
 	if len(results) == 0 {
-		return false, nil
+		return 0, nil
 	}
 
 	var output strings.Builder
-	output.WriteString("Your cluster contains not set-returning functions with MASTER, ALL SEGMENTS or INITPLAN EXECUTE ON.\nYou need to make the function set-returning or change EXECUTE ON to ANY.\nList of functions with the specified problem:\n")
+	output.WriteString("Your cluster contains functions that are not set-returning and use MASTER, ALL SEGMENTS, or INITPLAN EXECUTE ON. Make each function set-returning or change EXECUTE ON to ANY.\n")
 	for _, result := range results {
-		detail := fmt.Sprintf("The function uses a restricted EXECUTE ON location. The identity arguments are %q", result.IdentityArguments)
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.ObjectName, "function", result.SchemaName, detail)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The function uses a restricted EXECUTE ON location and its identity arguments are %q.\n", connection.DBName, result.ObjectName, "function", result.SchemaName, result.IdentityArguments)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
-	return true, nil
+	return len(results), nil
 }
 
-func checkIncompletePartitionIndexes(connection *dbconn.DBConn) (bool, error) {
+func checkIncompletePartitionIndexes(connection *dbconn.DBConn) (int, error) {
 	results := make([]incompletePartitionIndexResult, 0)
-	if err := connection.Select(&results, incompletePartitionIndexQuery); err != nil {
-		return false, err
+	if queryError := connection.Select(&results, incompletePartitionIndexQuery); queryError != nil {
+		return 0, queryError
 	}
 	if len(results) == 0 {
-		return false, nil
+		return 0, nil
 	}
 
 	var output strings.Builder
-	output.WriteString("Your cluster contains partitioned tables with unique indexes, which do not have all partition keys.\nIn version 7, unique index on partitioned table must include all partitioning keys.\nYou can recreate following indexes with all partitioning keys.\nList of partitioned tables and indexes with the specified problem:\n")
+	output.WriteString("Your cluster contains partitioned tables with unique indexes that omit partition keys. Version 7 requires every partition key in each unique index. Recreate the affected indexes with every partition key.\n")
 	for _, result := range results {
-		detail := fmt.Sprintf("Partitioned table %q owns the index", result.TableName)
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.IndexName, "index", result.SchemaName, detail)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. Partitioned table %q owns the index.\n", connection.DBName, result.IndexName, "index", result.SchemaName, result.TableName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
-	return true, nil
+	return len(results), nil
 }
 
-func checkIncompatibleRangePartitions(connection *dbconn.DBConn) (bool, error) {
+func checkIncompatibleRangePartitions(connection *dbconn.DBConn) (int, error) {
 	results := make([]incompatibleRangePartitionResult, 0)
-	if err := connection.Select(&results, incompatibleRangePartitionQuery); err != nil {
-		return false, err
+	if queryError := connection.Select(&results, incompatibleRangePartitionQuery); queryError != nil {
+		return 0, queryError
 	}
 	if len(results) == 0 {
-		return false, nil
+		return 0, nil
 	}
 
 	var output strings.Builder
-	output.WriteString("In version 7, range partitions don't support `START EXCLUSIVE` or `END INCLUSIVE` for columns with float, numeric, or text types.\nYou can recreate following tables without `START EXCLUSIVE` and `END INCLUSIVE`.\nList of partitioned tables with the specified problem:\n")
+	output.WriteString("Your cluster contains range partitions that use START EXCLUSIVE or END INCLUSIVE boundaries on float, numeric, or text columns. Version 7 does not support these boundaries. Recreate the affected tables without them.\n")
 	for _, result := range results {
-		detail := fmt.Sprintf("Parent table %q in schema %q uses key type %q", result.TableName, result.ParentSchema, result.TypeName)
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.PartitionName, "partition", result.PartitionSchema, detail)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. Parent table %q in schema %q uses key type %q.\n", connection.DBName, result.PartitionName, "partition", result.PartitionSchema, result.TableName, result.ParentSchema, result.TypeName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
-	return true, nil
+	return len(results), nil
 }
 
-func checkStatementTriggers(connection *dbconn.DBConn) (bool, error) {
+func checkStatementTriggers(connection *dbconn.DBConn) (int, error) {
 	results := make([]statementTriggerResult, 0)
-	if err := connection.Select(&results, statementTriggerQuery); err != nil {
-		return false, err
+	if queryError := connection.Select(&results, statementTriggerQuery); queryError != nil {
+		return 0, queryError
 	}
 	if len(results) == 0 {
-		return false, nil
+		return 0, nil
 	}
 
 	var output strings.Builder
-	output.WriteString("In version 7, statements triggers are not supported.\nYou can use row triggers.\nList of triggers with the specified problem:\n")
+	output.WriteString("Your cluster contains statement triggers. Version 7 does not support them. Replace the affected triggers with row triggers.\n")
 	for _, result := range results {
-		detail := fmt.Sprintf("Table %q owns the trigger", result.TableName)
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The detail is %q.\n", connection.DBName, result.TriggerName, "trigger", result.SchemaName, detail)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. Table %q owns the trigger.\n", connection.DBName, result.TriggerName, "trigger", result.SchemaName, result.TableName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
-	return true, nil
+	return len(results), nil
 }
 
-func checkRequiredLibraries(sourceConnection *dbconn.DBConn, targetConnection *dbconn.DBConn) (bool, error) {
+func checkRequiredLibraries(sourceConnection *dbconn.DBConn, targetConnection *dbconn.DBConn) (int, error) {
 	results := make([]requiredLibraryResult, 0)
-	if err := sourceConnection.Select(&results, requiredLibraryQuery); err != nil {
-		return false, err
+	if queryError := sourceConnection.Select(&results, requiredLibraryQuery); queryError != nil {
+		return 0, queryError
 	}
 
-	missingLibraries := make([]string, 0)
+	isLibraryMissingByName := make(map[string]bool)
+	missingFunctions := make([]requiredLibraryResult, 0)
 	for _, result := range results {
-		loadQuery := fmt.Sprintf("LOAD '%s'", utils.EscapeSingleQuotes(result.LibraryName))
-		if _, err := targetConnection.Exec(loadQuery); err != nil {
-			missingLibraries = append(missingLibraries, result.LibraryName)
+		isMissing, wasChecked := isLibraryMissingByName[result.LibraryName]
+		if !wasChecked {
+			loadQuery := fmt.Sprintf("LOAD '%s'", utils.EscapeSingleQuotes(result.LibraryName))
+			_, loadError := targetConnection.Exec(loadQuery)
+			isMissing = loadError != nil
+			isLibraryMissingByName[result.LibraryName] = isMissing
+		}
+		if isMissing {
+			missingFunctions = append(missingFunctions, result)
 		}
 	}
-	if len(missingLibraries) == 0 {
-		return false, nil
+	if len(missingFunctions) == 0 {
+		return 0, nil
 	}
 
 	var output strings.Builder
-	output.WriteString("Your cluster references loadable libraries that are missing from the new cluster.\nYou can add these libraries to the new installation, or remove the functions using them from the old installation.\nA list of problems libraries are:\n")
-	for _, libraryName := range missingLibraries {
-		fmt.Fprintf(&output, "Database %q requires object %q of type %q. The detail is %q.\n", sourceConnection.DBName, libraryName, "library", "The target cluster could not load the library")
+	output.WriteString("Your cluster contains functions that require libraries missing from the target cluster. Add the libraries to the target cluster or remove the affected functions from the source cluster.\n")
+	for _, result := range missingFunctions {
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The function has identity arguments %q and requires library %q.\n", sourceConnection.DBName, result.ObjectName, "function", result.SchemaName, result.IdentityArguments, result.LibraryName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
-	return true, nil
+	return len(missingFunctions), nil
+}
+
+func checkRemovedExtensions(connection *dbconn.DBConn) (int, error) {
+	results := make([]namedObjectResult, 0)
+	if queryError := connection.Select(&results, removedExtensionQuery); queryError != nil {
+		return 0, queryError
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	var output strings.Builder
+	output.WriteString("Your cluster contains extensions that are absent from version 7 because their functionality moved into the server. Drop the affected extensions before running gpbackup.\n")
+	for _, result := range results {
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The extension must be dropped before migration.\n", connection.DBName, result.ObjectName, "extension", result.SchemaName)
+	}
+	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
+
+	return len(results), nil
+}
+
+func checkArenadataToolkitSchema(connection *dbconn.DBConn) (int, error) {
+	results := make([]namedObjectResult, 0)
+	if queryError := connection.Select(&results, arenadataToolkitSchemaQuery); queryError != nil {
+		return 0, queryError
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	var output strings.Builder
+	output.WriteString("Your cluster contains the arenadata_toolkit schema. Exclude this schema from the backup with --exclude-schema arenadata_toolkit.\n")
+	for _, result := range results {
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. Version 7 provides a different schema definition.\n", connection.DBName, result.ObjectName, "schema", result.SchemaName)
+	}
+	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
+
+	return len(results), nil
+}
+
+func checkResourceGroups(connection *dbconn.DBConn) (int, error) {
+	results := make([]resourceGroupResult, 0)
+	if queryError := connection.Select(&results, resourceGroupQuery); queryError != nil {
+		return 0, queryError
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	var output strings.Builder
+	output.WriteString("Your cluster contains resource groups whose settings changed in version 7. Run gpbackup with --without-globals and recreate global objects on the target cluster.\n")
+	for _, result := range results {
+		fmt.Fprintf(&output, "The cluster contains object %q of type %q. The resource group requires version 7 settings.\n", result.ObjectName, "resource group")
+	}
+	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
+
+	return len(results), nil
+}
+
+func checkSystemObjectDependencies(connection *dbconn.DBConn) (int, error) {
+	results := make([]systemObjectDependencyResult, 0)
+	if queryError := connection.Select(&results, systemObjectDependencyQuery); queryError != nil {
+		return 0, queryError
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	var output strings.Builder
+	output.WriteString("Your cluster contains user objects that reference system relations. Review each definition against the version 7 system catalog.\n")
+	for _, result := range results {
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The object references %q.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName, result.ReferencedObject)
+	}
+	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
+
+	return len(results), nil
+}
+
+func checkDeepPartitionTemplates(connection *dbconn.DBConn) (int, error) {
+	results := make([]namedObjectResult, 0)
+	if queryError := connection.Select(&results, deepPartitionTemplateQuery); queryError != nil {
+		return 0, queryError
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	var output strings.Builder
+	output.WriteString("Your cluster contains subpartition templates deeper than the second partition level. Save and remove these templates before backup, then recreate them with version 7 syntax.\n")
+	for _, result := range results {
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The table has a deep subpartition template.\n", connection.DBName, result.ObjectName, "partitioned table", result.SchemaName)
+	}
+	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
+
+	return len(results), nil
 }
