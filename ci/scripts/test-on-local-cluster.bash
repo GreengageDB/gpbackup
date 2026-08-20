@@ -77,6 +77,13 @@ fi
 
 command -v ggcheckmigrate
 ggcheckmigrate --version
+if [[ \${GPDB_VERSION} == 6 ]]; then
+    GGCHECKMIGRATE_SOURCE_HOST=127.0.0.1 \\
+    GGCHECKMIGRATE_SOURCE_PORT="\${PGPORT}" \\
+    GGCHECKMIGRATE_SOURCE_USER=gpadmin \\
+    GGCHECKMIGRATE_BINARY=ggcheckmigrate \\
+    \${GOPATH}/src/github.com/greenplum-db/gpbackup/ci/scripts/test-ggcheckmigrate.bash
+fi
 
 # Get the GPDB version to use for the unit tests
 export TEST_GPDB_VERSION=\$(echo \$out | sed -n 's/.*Greenplum Database \([0-9].[0-9]\+.[0-9]\+\).*/\1/p')

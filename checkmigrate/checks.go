@@ -14,6 +14,12 @@ import (
 //go:embed sql/migration_check_setup.sql
 var migrationCheckSetupQuery string
 
+//go:embed sql/migration_check_setup_catalog.sql
+var migrationCheckSetupCatalogQuery string
+
+//go:embed sql/migration_check_setup_types.sql
+var migrationCheckSetupTypesQuery string
+
 //go:embed sql/source_database_names.sql
 var sourceDatabaseNamesQuery string
 
@@ -191,17 +197,115 @@ var relationKindLabels = map[string]string{
 	"f": "function",
 }
 
-type migrationCheck struct {
-	name            string
-	isSetupRequired bool
-	doRunCheck      func(*dbconn.DBConn) (int, error)
+func getRelationKindLabel(relationKind string) string {
+	label, isKnown := relationKindLabels[relationKind]
+	if isKnown {
+		return label
+	}
+
+	return relationKind
 }
 
+type migrationCheck struct {
+	name               string
+	requiredCapability string
+	doRunCheck         func(*dbconn.DBConn) (int, error)
+}
+
+const (
+	migrationSupportCapability = "migration support functions"
+	catalogSupportCapability   = "catalog support functions"
+	dataTypeSupportCapability  = "data type support function"
+)
+
 type migrationCheckSummary struct {
-	completedCheckCount int
-	failedCheckCount    int
-	findingCount        int
-	databaseError       error
+	completedCheckCount   int
+	failedCheckCount      int
+	unavailableCheckCount int
+	findingCount          int
+	databaseError         error
+}
+
+func beginMigrationTransaction(connection *dbconn.DBConn) error {
+	beginError := connection.Begin()
+	if beginError == nil {
+		return nil
+	}
+	if len(connection.Tx) == 0 || connection.Tx[0] == nil {
+		return beginError
+	}
+
+	rollbackError := connection.Rollback()
+	if rollbackError != nil {
+		return fmt.Errorf("%v and transaction rollback failed with %w", beginError, rollbackError)
+	}
+
+	return beginError
+}
+
+func runMigrationCheckPlan(connection *dbconn.DBConn, checks []migrationCheck) (summary migrationCheckSummary) {
+	for _, check := range checks {
+		gplog.Debug("Database %q is starting check %q", connection.DBName, check.name)
+		if _, savepointError := connection.Exec("SAVEPOINT ggcheckmigrate_check"); savepointError != nil {
+			summary.databaseError = fmt.Errorf("check %q savepoint failed with %w", check.name, savepointError)
+
+			return summary
+		}
+		findingCount, checkError := check.doRunCheck(connection)
+		if checkError != nil {
+			summary.failedCheckCount++
+			gplog.Error("Database %q failed check %q with %v", connection.DBName, check.name, checkError)
+			if _, recoveryError := connection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_check"); recoveryError != nil {
+				summary.databaseError = fmt.Errorf("check %q failed with %v and savepoint recovery failed with %w", check.name, checkError, recoveryError)
+
+				return summary
+			}
+			summary.findingCount += findingCount
+			if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
+				summary.databaseError = fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError)
+
+				return summary
+			}
+			gplog.Debug("Database %q completed check %q with an execution failure", connection.DBName, check.name)
+
+			continue
+		}
+
+		summary.findingCount += findingCount
+		if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
+			summary.failedCheckCount++
+			summary.databaseError = fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError)
+
+			return summary
+		}
+		summary.completedCheckCount++
+		gplog.Debug("Database %q completed check %q with %d findings", connection.DBName, check.name, findingCount)
+	}
+
+	return summary
+}
+
+func runClusterChecks(sourceConnection *dbconn.DBConn, checks []migrationCheck) (summary migrationCheckSummary) {
+	if beginError := beginMigrationTransaction(sourceConnection); beginError != nil {
+		summary.databaseError = beginError
+		summary.failedCheckCount = len(checks)
+
+		return summary
+	}
+	defer func() {
+		rollbackError := sourceConnection.Rollback()
+		if rollbackError == nil {
+			return
+		}
+		if summary.databaseError != nil {
+			gplog.Error("Cluster transaction rollback failed with %v", rollbackError)
+
+			return
+		}
+		summary.databaseError = fmt.Errorf("cluster transaction rollback failed with %w", rollbackError)
+	}()
+
+	return runMigrationCheckPlan(sourceConnection, checks)
 }
 
 func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbconn.DBConn) (summary migrationCheckSummary) {
@@ -211,7 +315,7 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 
 		return summary
 	}
-	if beginError := sourceConnection.Begin(); beginError != nil {
+	if beginError := beginMigrationTransaction(sourceConnection); beginError != nil {
 		summary.databaseError = beginError
 
 		return summary
@@ -264,38 +368,50 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 		}
 	}
 
-	if _, savepointError := sourceConnection.Exec("SAVEPOINT ggcheckmigrate_setup"); savepointError != nil {
-		summary.databaseError = fmt.Errorf("migration check setup savepoint failed with %w", savepointError)
-
-		return summary
+	setupQueries := []struct {
+		capability string
+		query      string
+	}{
+		{capability: migrationSupportCapability, query: migrationCheckSetupQuery},
+		{capability: catalogSupportCapability, query: migrationCheckSetupCatalogQuery},
+		{capability: dataTypeSupportCapability, query: migrationCheckSetupTypesQuery},
 	}
-	_, setupError := sourceConnection.Exec(migrationCheckSetupQuery)
-	hasSupport := setupError == nil
-	if setupError != nil {
-		_, recoveryError := sourceConnection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_setup")
-		if recoveryError != nil {
-			summary.databaseError = fmt.Errorf("migration check setup failed with %v and savepoint recovery failed with %w", setupError, recoveryError)
+	availableCapabilities := make(map[string]bool, len(setupQueries))
+	for _, setup := range setupQueries {
+		if _, savepointError := sourceConnection.Exec("SAVEPOINT ggcheckmigrate_setup"); savepointError != nil {
+			summary.databaseError = fmt.Errorf("%s setup savepoint failed with %w", setup.capability, savepointError)
 
 			return summary
 		}
-		gplog.Error("Database %q failed migration check setup with %v", sourceConnection.DBName, setupError)
-	}
-	if _, releaseError := sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_setup"); releaseError != nil {
-		summary.databaseError = fmt.Errorf("migration check setup savepoint release failed with %w", releaseError)
+		_, setupError := sourceConnection.Exec(setup.query)
+		if setupError != nil {
+			_, recoveryError := sourceConnection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_setup")
+			if recoveryError != nil {
+				summary.databaseError = fmt.Errorf("%s setup failed with %v and savepoint recovery failed with %w", setup.capability, setupError, recoveryError)
 
-		return summary
+				return summary
+			}
+			gplog.Error("Database %q could not provide %s because setup failed with %v", sourceConnection.DBName, setup.capability, setupError)
+		} else {
+			availableCapabilities[setup.capability] = true
+		}
+		if _, releaseError := sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_setup"); releaseError != nil {
+			summary.databaseError = fmt.Errorf("%s setup savepoint release failed with %w", setup.capability, releaseError)
+
+			return summary
+		}
 	}
 
 	checks := []migrationCheck{
 		{name: "multi-column LIST partitions", doRunCheck: checkMultiColumnListPartitions},
 		{name: "PL/Python 2 functions", doRunCheck: checkPlpython2DependentFunctions},
-		{name: "views with removed operators", isSetupRequired: true, doRunCheck: checkViewsWithRemovedOperators},
-		{name: "views with removed functions", isSetupRequired: true, doRunCheck: checkViewsWithRemovedFunctions},
-		{name: "views with removed types", isSetupRequired: true, doRunCheck: checkViewsWithRemovedTypes},
-		{name: "views with changed function signatures", isSetupRequired: true, doRunCheck: checkViewsWithChangedFunctionSignatures},
-		{name: "views with removed catalog columns", isSetupRequired: true, doRunCheck: checkViewsWithRemovedCatalogColumns},
-		{name: "views with removed catalog relations", isSetupRequired: true, doRunCheck: checkViewsWithRemovedCatalogRelations},
-		{name: "removed data types", isSetupRequired: true, doRunCheck: checkRemovedDataTypes},
+		{name: "views with removed operators", requiredCapability: migrationSupportCapability, doRunCheck: checkViewsWithRemovedOperators},
+		{name: "views with removed functions", requiredCapability: migrationSupportCapability, doRunCheck: checkViewsWithRemovedFunctions},
+		{name: "views with removed types", requiredCapability: migrationSupportCapability, doRunCheck: checkViewsWithRemovedTypes},
+		{name: "views with changed function signatures", requiredCapability: migrationSupportCapability, doRunCheck: checkViewsWithChangedFunctionSignatures},
+		{name: "views with removed catalog columns", requiredCapability: catalogSupportCapability, doRunCheck: checkViewsWithRemovedCatalogColumns},
+		{name: "views with removed catalog relations", requiredCapability: catalogSupportCapability, doRunCheck: checkViewsWithRemovedCatalogRelations},
+		{name: "removed data types", requiredCapability: dataTypeSupportCapability, doRunCheck: checkRemovedDataTypes},
 		{name: "missing AO options", doRunCheck: checkMissingAOOptions},
 		{name: "restricted EXECUTE ON functions", doRunCheck: checkRestrictedExecuteOnFunctions},
 		{name: "incomplete partition indexes", doRunCheck: checkIncompletePartitionIndexes},
@@ -310,9 +426,9 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 	}
 
 	for _, check := range checks {
-		if check.isSetupRequired && !hasSupport {
-			summary.failedCheckCount++
-			gplog.Error("Database %q skipped check %q because migration check setup is unavailable", sourceConnection.DBName, check.name)
+		if check.requiredCapability != "" && !availableCapabilities[check.requiredCapability] {
+			summary.unavailableCheckCount++
+			gplog.Error("Database %q skipped check %q because %s is unavailable", sourceConnection.DBName, check.name, check.requiredCapability)
 
 			continue
 		}
@@ -406,7 +522,7 @@ func checkViewsWithRemovedOperators(connection *dbconn.DBConn) (int, error) {
 	var output strings.Builder
 	output.WriteString("Your cluster contains views that use removed operators. Update the views to use supported operators or remove them before migration.\n")
 	for _, result := range results {
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view uses a removed operator.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view uses a removed operator.\n", connection.DBName, result.ObjectName, getRelationKindLabel(result.RelationKind), result.SchemaName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
@@ -425,7 +541,7 @@ func checkViewsWithRemovedFunctions(connection *dbconn.DBConn) (int, error) {
 	var output strings.Builder
 	output.WriteString("Your cluster contains views that use removed functions. Update the views to use supported functions or remove them before migration.\n")
 	for _, result := range results {
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view uses a removed function.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view uses a removed function.\n", connection.DBName, result.ObjectName, getRelationKindLabel(result.RelationKind), result.SchemaName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
@@ -444,7 +560,7 @@ func checkViewsWithRemovedTypes(connection *dbconn.DBConn) (int, error) {
 	var output strings.Builder
 	output.WriteString("Your cluster contains views that use removed types. Update the views to use supported types or remove them before migration.\n")
 	for _, result := range results {
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view uses a removed type.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view uses a removed type.\n", connection.DBName, result.ObjectName, getRelationKindLabel(result.RelationKind), result.SchemaName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
@@ -463,7 +579,7 @@ func checkViewsWithChangedFunctionSignatures(connection *dbconn.DBConn) (int, er
 	var output strings.Builder
 	output.WriteString("Your cluster contains views that call functions whose signatures changed in version 7. Recreate the views with compatible function calls before migration.\n")
 	for _, result := range results {
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view calls a function with a changed signature.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view calls a function with a changed signature.\n", connection.DBName, result.ObjectName, getRelationKindLabel(result.RelationKind), result.SchemaName)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
@@ -482,7 +598,7 @@ func checkViewsWithRemovedCatalogColumns(connection *dbconn.DBConn) (int, error)
 	var output strings.Builder
 	output.WriteString("Your cluster contains views that reference system columns removed from version 7. Update or remove the views before migration.\n")
 	for _, result := range results {
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view references removed columns %q.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName, result.RemovedColumns)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view references removed columns %q.\n", connection.DBName, result.ObjectName, getRelationKindLabel(result.RelationKind), result.SchemaName, result.RemovedColumns)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
@@ -501,7 +617,7 @@ func checkViewsWithRemovedCatalogRelations(connection *dbconn.DBConn) (int, erro
 	var output strings.Builder
 	output.WriteString("Your cluster contains views that reference system relations removed from version 7. Update or remove the views before migration.\n")
 	for _, result := range results {
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view references removed relations %q.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName, result.RemovedRelations)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view references removed relations %q.\n", connection.DBName, result.ObjectName, getRelationKindLabel(result.RelationKind), result.SchemaName, result.RemovedRelations)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
@@ -725,7 +841,7 @@ func checkSystemObjectDependencies(connection *dbconn.DBConn) (int, error) {
 	var output strings.Builder
 	output.WriteString("Your cluster contains user objects that reference system relations. Review each definition against the version 7 system catalog.\n")
 	for _, result := range results {
-		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The object references %q.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName, result.ReferencedObject)
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The object references %q.\n", connection.DBName, result.ObjectName, getRelationKindLabel(result.RelationKind), result.SchemaName, result.ReferencedObject)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 

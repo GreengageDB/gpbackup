@@ -332,15 +332,31 @@ func expectAllSourceChecksEmpty(mock sqlmock.Sqlmock) {
 func expectMigrationTransaction(mock sqlmock.Sqlmock) {
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	for _, setupQuery := range []string{migrationCheckSetupQuery, migrationCheckSetupCatalogQuery, migrationCheckSetupTypesQuery} {
+		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(regexp.QuoteMeta(setupQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	}
 }
 
 func expectClusterChecksEmpty(mock sqlmock.Sqlmock) {
-	mock.ExpectQuery(regexp.QuoteMeta(resourceGroupQuery)).WillReturnRows(sqlmock.NewRows([]string{"object_name"}))
-	mock.ExpectQuery(regexp.QuoteMeta(incompatibleStorageOptionQuery)).WillReturnRows(sqlmock.NewRows([]string{"database_name", "role_name", "setting", "option_name"}))
-	mock.ExpectQuery(regexp.QuoteMeta(removedGUCSettingQuery)).WillReturnRows(sqlmock.NewRows([]string{"database_name", "role_name", "guc_name", "setting"}))
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
+	for _, query := range []string{resourceGroupQuery, incompatibleStorageOptionQuery, removedGUCSettingQuery} {
+		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+		var columns []string
+		switch query {
+		case resourceGroupQuery:
+			columns = []string{"object_name"}
+		case incompatibleStorageOptionQuery:
+			columns = []string{"database_name", "role_name", "setting", "option_name"}
+		default:
+			columns = []string{"database_name", "role_name", "guc_name", "setting"}
+		}
+		mock.ExpectQuery(regexp.QuoteMeta(query)).WillReturnRows(sqlmock.NewRows(columns))
+		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	mock.ExpectRollback()
 }
 
 func callDoCheckMigrate() interface{} {
@@ -492,12 +508,15 @@ func TestPlpythonCheckUsesLanguageHandler(t *testing.T) {
 	}
 }
 
-func TestSourceDatabaseEnumerationExcludesTemplateZero(t *testing.T) {
-	if !strings.Contains(sourceDatabaseNamesQuery, "datname <> 'template0'") {
-		t.Fatal("The source database enumeration does not exclude template0")
+func TestUnknownRelationKindUsesCatalogCode(t *testing.T) {
+	if actualLabel := getRelationKindLabel("x"); actualLabel != "x" {
+		t.Fatalf("The unknown relation kind label is %q", actualLabel)
 	}
-	if strings.Contains(sourceDatabaseNamesQuery, "template1") {
-		t.Fatal("The source database enumeration excludes template1")
+}
+
+func TestSourceDatabaseEnumerationExcludesTemplateDatabases(t *testing.T) {
+	if !strings.Contains(sourceDatabaseNamesQuery, "NOT datistemplate") {
+		t.Fatal("The source database enumeration does not exclude template databases")
 	}
 }
 
@@ -511,7 +530,7 @@ func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 		changedFunctionSignatureViewQuery,
 		removedCatalogColumnViewQuery,
 		removedCatalogRelationViewQuery,
-		migrationCheckSetupQuery,
+		migrationCheckSetupTypesQuery,
 		requiredLibraryQuery,
 		missingAOOptionQuery,
 		restrictedExecuteOnFunctionQuery,
@@ -620,6 +639,12 @@ func TestDoCheckMigrateChecksRequiredLibrariesBeforeSourceChecks(t *testing.T) {
 	sourceMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 	sourceMock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
 	sourceMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	sourceMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	sourceMock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupCatalogQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+	sourceMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	sourceMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	sourceMock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupTypesQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+	sourceMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 	expectAllSourceChecksEmpty(sourceMock)
 	sourceMock.ExpectRollback()
 
@@ -726,7 +751,7 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 	if strings.Count(output, "Summary contains") != 1 {
 		t.Fatalf("The multi-database run printed an unexpected summary count in %q", output)
 	}
-	if !strings.Contains(output, "Summary contains 2 databases, 2 checked databases, 0 skipped databases, 43 completed checks, 0 failed checks, and 2 findings") {
+	if !strings.Contains(output, "Summary contains 2 enumerated databases, 2 checked databases, 0 unreachable databases, 0 unavailable databases, 3 completed cluster checks, 0 failed cluster checks, 40 completed database checks, 0 failed database checks, 0 unavailable database checks, and 2 findings") {
 		t.Fatalf("The multi-database run printed an unexpected summary in %q", output)
 	}
 	if applicationConnection.DBName != "application" ||
@@ -876,6 +901,39 @@ func TestDoCheckMigrateOverridesFindingWithQueryFailure(t *testing.T) {
 	}
 }
 
+func TestRunMigrationChecksRollsBackAfterIsolationFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnError(errors.New("isolation failed"))
+	mock.ExpectRollback()
+
+	summary := runMigrationChecks(connection, nil)
+	if summary.databaseError == nil || !strings.Contains(summary.databaseError.Error(), "isolation failed") {
+		t.Fatalf("The isolation failure was not reported: %v", summary.databaseError)
+	}
+	if connection.Tx[0] != nil {
+		t.Fatal("The failed transaction remained installed")
+	}
+}
+
+func TestRunClusterChecksRollsBackAfterIsolationFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnError(errors.New("isolation failed"))
+	mock.ExpectRollback()
+
+	summary := runClusterChecks(connection, []migrationCheck{{name: "cluster check", doRunCheck: checkResourceGroups}})
+	if summary.databaseError == nil || !strings.Contains(summary.databaseError.Error(), "isolation failed") {
+		t.Fatalf("The cluster isolation failure was not reported: %v", summary.databaseError)
+	}
+	if summary.failedCheckCount != 1 {
+		t.Fatalf("The cluster isolation failure completed %d checks", summary.failedCheckCount)
+	}
+	if connection.Tx[0] != nil {
+		t.Fatal("The failed cluster transaction remained installed")
+	}
+}
+
 func TestDoCheckMigrateReportsRollbackFailure(t *testing.T) {
 	connection, mock, _ := setupCheckTest(t)
 	sourceConnectionPool = connection
@@ -898,7 +956,7 @@ func TestDoCheckMigrateReportsRollbackFailure(t *testing.T) {
 }
 
 func TestDoCheckMigrateContinuesAfterDatabaseConnectionFailure(t *testing.T) {
-	connection, mock, _ := setupCheckTest(t)
+	connection, mock, stderr := setupCheckTest(t)
 	connection.DBName = "postgres"
 	connection.User = "source_user"
 	connection.Host = "source_host"
@@ -944,5 +1002,9 @@ func TestDoCheckMigrateContinuesAfterDatabaseConnectionFailure(t *testing.T) {
 	}
 	if gplog.GetErrorCode() != 5 {
 		t.Fatalf("The partial run returned exit code %d", gplog.GetErrorCode())
+	}
+	output := string(stderr.Contents())
+	if !strings.Contains(output, "Summary contains 2 enumerated databases, 1 checked databases, 1 unreachable databases, 0 unavailable databases, 3 completed cluster checks, 0 failed cluster checks, 20 completed database checks, 0 failed database checks, 0 unavailable database checks, and 0 findings") {
+		t.Fatalf("The partial run printed an unexpected summary in %q", output)
 	}
 }

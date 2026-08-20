@@ -141,7 +141,7 @@ func SetRestoreFlagDefaults(flagSet *pflag.FlagSet) {
 func SetCheckMigrateFlagDefaults(flagSet *pflag.FlagSet) {
 	flagSet.StringP(SOURCE_HOST, "h", "/tmp", "The host of the cluster being checked")
 	flagSet.IntP(SOURCE_PORT, "p", 5432, "The port of the cluster being checked")
-	flagSet.StringP(SOURCE_DATABASE, "d", "", "The database of the cluster being checked, or all connectable databases when omitted. The postgres or template1 database must be connectable for database enumeration")
+	flagSet.StringP(SOURCE_DATABASE, "d", "", "The database of the cluster being checked, or all connectable non-template databases when omitted. The postgres or template1 database must be connectable for database enumeration")
 	flagSet.StringP(SOURCE_USER, "u", "", "The superuser of the cluster being checked")
 	flagSet.StringP(TARGET_HOST, "H", "", "The host of the cluster of next version")
 	flagSet.IntP(TARGET_PORT, "P", 0, "The port of the cluster of next version")

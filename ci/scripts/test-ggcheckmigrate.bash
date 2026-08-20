@@ -107,7 +107,7 @@ all_database_command=(
 if [[ ${all_database_exit_code} -gt 1 ]]; then
   fail_with_output "The check of all connectable databases" "0 or 1" "${all_database_exit_code}"
 fi
-if ! grep -Eq 'Summary contains ([2-9]|[1-9][0-9]+) databases' "${output_path}"; then
+if ! grep -Eq 'Summary contains ([2-9]|[1-9][0-9]+) enumerated databases' "${output_path}"; then
   echo "The all-database summary does not include multiple databases" >&2
   cat "${output_path}" >&2
   exit 1

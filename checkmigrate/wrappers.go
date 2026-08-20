@@ -42,10 +42,10 @@ func CreateConnectionPool() {
 	sourceDb := options.MustGetFlagString(cmdFlags, options.SOURCE_DATABASE)
 	sourceUser := options.MustGetFlagString(cmdFlags, options.SOURCE_USER)
 
-	if envPort := operating.System.Getenv("PGPORT"); !cmdFlags.Changed(options.SOURCE_PORT) && envPort != "" {
-		envPortInt, conversionError := strconv.Atoi(envPort)
+	if environmentPort := operating.System.Getenv("PGPORT"); !cmdFlags.Changed(options.SOURCE_PORT) && environmentPort != "" {
+		parsedPort, conversionError := strconv.Atoi(environmentPort)
 		if conversionError == nil {
-			sourcePort = envPortInt
+			sourcePort = parsedPort
 		}
 	}
 

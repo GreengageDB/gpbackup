@@ -55,11 +55,15 @@ func DoCheckMigrate() {
 		gplog.Debug("Completed source database enumeration with %d databases", len(databaseNames))
 	}
 
-	databaseCount := len(databaseNames)
+	enumeratedDatabaseCount := len(databaseNames)
 	checkedDatabaseCount := 0
-	skippedDatabaseCount := 0
-	completedCheckCount := 0
-	failedCheckCount := 0
+	unreachableDatabaseCount := 0
+	unavailableDatabaseCount := 0
+	completedClusterCheckCount := 0
+	failedClusterCheckCount := 0
+	completedDatabaseCheckCount := 0
+	failedDatabaseCheckCount := 0
+	unavailableDatabaseCheckCount := 0
 	findingCount := 0
 	hasExecutionError := false
 
@@ -68,19 +72,16 @@ func DoCheckMigrate() {
 		{name: "incompatible storage options", doRunCheck: checkIncompatibleStorageOptions},
 		{name: "removed GUC settings", doRunCheck: checkRemovedGUCSettings},
 	}
-	for _, check := range clusterChecks {
-		gplog.Debug("Starting cluster check %q", check.name)
-		clusterFindingCount, checkError := check.doRunCheck(sourceConnectionPool)
-		if checkError != nil {
-			failedCheckCount++
-			hasExecutionError = true
-			gplog.Error("Cluster failed check %q with %v", check.name, checkError)
-
-			continue
-		}
-		completedCheckCount++
-		findingCount += clusterFindingCount
-		gplog.Debug("Completed cluster check %q with %d findings", check.name, clusterFindingCount)
+	clusterSummary := runClusterChecks(sourceConnectionPool, clusterChecks)
+	completedClusterCheckCount = clusterSummary.completedCheckCount
+	failedClusterCheckCount = clusterSummary.failedCheckCount
+	findingCount += clusterSummary.findingCount
+	if clusterSummary.failedCheckCount > 0 {
+		hasExecutionError = true
+	}
+	if clusterSummary.databaseError != nil {
+		hasExecutionError = true
+		gplog.Error("Cluster checks could not complete with %v", clusterSummary.databaseError)
 	}
 
 	for _, database := range databaseNames {
@@ -91,7 +92,7 @@ func DoCheckMigrate() {
 			sourceConnection = createDBConn(database.DatabaseName, sourceConnectionPool.User, sourceConnectionPool.Host, sourceConnectionPool.Port)
 			if connectError := sourceConnection.Connect(1); connectError != nil {
 				sourceConnection.Close()
-				skippedDatabaseCount++
+				unreachableDatabaseCount++
 				hasExecutionError = true
 				gplog.Error("Database %q could not be checked because its connection failed with %v", database.DatabaseName, connectError)
 				gplog.Debug("Completed checks for database %q with a connection failure", database.DatabaseName)
@@ -112,22 +113,23 @@ func DoCheckMigrate() {
 		if databaseSummary.completedCheckCount > 0 {
 			checkedDatabaseCount++
 		} else {
-			skippedDatabaseCount++
+			unavailableDatabaseCount++
 		}
-		completedCheckCount += databaseSummary.completedCheckCount
-		failedCheckCount += databaseSummary.failedCheckCount
+		completedDatabaseCheckCount += databaseSummary.completedCheckCount
+		failedDatabaseCheckCount += databaseSummary.failedCheckCount
+		unavailableDatabaseCheckCount += databaseSummary.unavailableCheckCount
 		findingCount += databaseSummary.findingCount
-		if databaseSummary.failedCheckCount > 0 {
+		if databaseSummary.failedCheckCount > 0 || databaseSummary.unavailableCheckCount > 0 {
 			hasExecutionError = true
 		}
-		gplog.Debug("Completed checks for database %q with %d completed checks, %d failed checks, and %d findings", database.DatabaseName, databaseSummary.completedCheckCount, databaseSummary.failedCheckCount, databaseSummary.findingCount)
+		gplog.Debug("Completed checks for database %q with %d completed checks, %d failed checks, %d unavailable checks, and %d findings", database.DatabaseName, databaseSummary.completedCheckCount, databaseSummary.failedCheckCount, databaseSummary.unavailableCheckCount, databaseSummary.findingCount)
 	}
 
 	summaryShellVerbosity := gplog.LOGINFO
 	if findingCount > 0 || hasExecutionError {
 		summaryShellVerbosity = gplog.LOGERROR
 	}
-	gplog.Custom(gplog.LOGINFO, summaryShellVerbosity, "Summary contains %d databases, %d checked databases, %d skipped databases, %d completed checks, %d failed checks, and %d findings", databaseCount, checkedDatabaseCount, skippedDatabaseCount, completedCheckCount, failedCheckCount, findingCount)
+	gplog.Custom(gplog.LOGINFO, summaryShellVerbosity, "Summary contains %d enumerated databases, %d checked databases, %d unreachable databases, %d unavailable databases, %d completed cluster checks, %d failed cluster checks, %d completed database checks, %d failed database checks, %d unavailable database checks, and %d findings", enumeratedDatabaseCount, checkedDatabaseCount, unreachableDatabaseCount, unavailableDatabaseCount, completedClusterCheckCount, failedClusterCheckCount, completedDatabaseCheckCount, failedDatabaseCheckCount, unavailableDatabaseCheckCount, findingCount)
 
 	if hasExecutionError {
 		gplog.SetErrorCode(5)
