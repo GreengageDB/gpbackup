@@ -4,6 +4,8 @@ on:
   push:
     branches: [ master ]
   pull_request:
+    branches: [ master ]
+  workflow_dispatch:
 
 # Concurrency control to cancel previous runs on new push to same PR/branch
 concurrency:
