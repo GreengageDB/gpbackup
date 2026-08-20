@@ -1,61 +1,56 @@
-WITH RECURSIVE user_views AS (
+WITH RECURSIVE system_relations AS (
+    SELECT c.relname::text AS object_name,
+           pg_catalog.format('%I.%I', n.nspname, c.relname)::text AS referenced_object
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname IN ('pg_catalog', 'gp_toolkit')
+      AND c.relkind IN ('r', 'v', 'm')
+), user_views AS (
     SELECT c.oid,
            n.nspname::text AS schema_name,
            c.relname::text AS object_name,
-           c.relkind::text AS relation_kind
+           c.relkind::text AS relation_kind,
+           pg_catalog.pg_get_viewdef(c.oid, true)::text AS definition
     FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relkind IN ('v', 'm')
       AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'gp_toolkit')
       AND n.nspname !~ '^pg_temp_'
       AND n.nspname !~ '^pg_toast_temp_'
-), relation_dependencies AS (
+), direct_relation_findings AS (
     SELECT v.oid,
            v.schema_name,
            v.object_name,
            v.relation_kind,
-           dependency.refobjid AS referenced_oid,
-           ARRAY[v.oid, dependency.refobjid] AS dependency_path
+           relation.referenced_object
     FROM user_views v
-    JOIN pg_catalog.pg_rewrite rewrite_rule
-      ON rewrite_rule.ev_class = v.oid
-     AND rewrite_rule.rulename = '_RETURN'
-    JOIN pg_catalog.pg_depend dependency
-      ON dependency.classid = 'pg_catalog.pg_rewrite'::pg_catalog.regclass
-     AND dependency.objid = rewrite_rule.oid
-     AND dependency.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
-     AND dependency.deptype = 'n'
-    WHERE dependency.refobjid <> v.oid
-    UNION ALL
-    SELECT dependency.oid,
-           dependency.schema_name,
-           dependency.object_name,
-           dependency.relation_kind,
-           referenced_dependency.refobjid AS referenced_oid,
-           dependency.dependency_path || ARRAY[referenced_dependency.refobjid]
-    FROM relation_dependencies dependency
-    JOIN pg_catalog.pg_class referenced_relation
-      ON referenced_relation.oid = dependency.referenced_oid
-     AND referenced_relation.relkind IN ('v', 'm')
-    JOIN pg_catalog.pg_rewrite rewrite_rule
-      ON rewrite_rule.ev_class = referenced_relation.oid
-     AND rewrite_rule.rulename = '_RETURN'
-    JOIN pg_catalog.pg_depend referenced_dependency
-      ON referenced_dependency.classid = 'pg_catalog.pg_rewrite'::pg_catalog.regclass
-     AND referenced_dependency.objid = rewrite_rule.oid
-     AND referenced_dependency.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
-     AND referenced_dependency.deptype = 'n'
-    WHERE NOT referenced_dependency.refobjid = ANY(dependency.dependency_path)
+    JOIN system_relations relation
+      ON v.definition ~* (
+          '(^|[^A-Za-z_0-9$])' || relation.object_name || '([^A-Za-z_0-9$]|$)'
+      )
 ), relation_findings AS (
-    SELECT dependency.schema_name,
-           dependency.object_name,
-           dependency.relation_kind,
-           pg_catalog.format('%I.%I', referenced_namespace.nspname, referenced_relation.relname)::text AS referenced_object
-    FROM relation_dependencies dependency
-    JOIN pg_catalog.pg_class referenced_relation ON referenced_relation.oid = dependency.referenced_oid
-    JOIN pg_catalog.pg_namespace referenced_namespace ON referenced_namespace.oid = referenced_relation.relnamespace
-    WHERE referenced_namespace.nspname IN ('pg_catalog', 'gp_toolkit')
-      AND referenced_relation.relkind IN ('r', 'v', 'm')
+    SELECT oid,
+           schema_name,
+           object_name,
+           relation_kind,
+           referenced_object
+    FROM direct_relation_findings
+    UNION
+    SELECT dependent_view.oid,
+           dependent_view.schema_name,
+           dependent_view.object_name,
+           dependent_view.relation_kind,
+           dependency.referenced_object
+    FROM relation_findings dependency
+    JOIN pg_catalog.pg_depend catalog_dependency
+      ON catalog_dependency.classid = 'pg_catalog.pg_rewrite'::pg_catalog.regclass
+     AND catalog_dependency.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
+     AND catalog_dependency.refobjid = dependency.oid
+     AND catalog_dependency.deptype = 'n'
+    JOIN pg_catalog.pg_rewrite rewrite_rule
+      ON rewrite_rule.oid = catalog_dependency.objid
+     AND rewrite_rule.rulename = '_RETURN'
+    JOIN user_views dependent_view ON dependent_view.oid = rewrite_rule.ev_class
 ), function_dependencies AS (
     SELECT p.oid,
            n.nspname::text AS schema_name,

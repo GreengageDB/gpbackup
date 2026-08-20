@@ -4,7 +4,6 @@ on:
   push:
     branches: [ master ]
   pull_request:
-    branches: [ master ]
 
 # Concurrency control to cancel previous runs on new push to same PR/branch
 concurrency:
@@ -105,3 +104,132 @@ jobs:
           --sysctl 'kernel.sem=500 1024000 200 4096'
           gpbackup:test
           bash /home/gpadmin/go/src/github.com/GreengageDB/gpbackup/ci/scripts/run_gpbackup_tests.bash
+
+  checkmigrate_integration:
+    name: Check migration between Greengage 6 and Greengage 7
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clean Up Disk Space
+        run: |
+          sudo rm -rf /usr/lib/jvm
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/share/swift
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: tree:0
+          submodules: 'recursive'
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          version: latest
+
+      - name: Build the Greengage 6 source image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: gpbackup:checkmigrate-source
+          build-args: |
+            GGDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb6_ubuntu:latest
+
+      - name: Build the Greengage 7 target image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: gpbackup:checkmigrate-target
+          build-args: |
+            GGDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb7_ubuntu:latest
+
+      - name: Start the source and target clusters
+        run: |
+          docker network create ggcheckmigrate
+          docker run --rm -d \
+            --name ggcheckmigrate-source \
+            --hostname ggcheckmigrate-source \
+            --network ggcheckmigrate \
+            --sysctl 'kernel.sem=500 1024000 200 4096' \
+            gpbackup:checkmigrate-source \
+            sleep infinity
+          docker run --rm -d \
+            --name ggcheckmigrate-target \
+            --hostname ggcheckmigrate-target \
+            --network ggcheckmigrate \
+            --sysctl 'kernel.sem=500 1024000 200 4096' \
+            gpbackup:checkmigrate-target \
+            sleep infinity
+          docker exec ggcheckmigrate-source bash -lc '
+            . /etc/os-release
+            export TEST_OS=${ID}
+            source /home/gpadmin/gpdb_src/concourse/scripts/common.bash
+            install_and_configure_gpdb
+            /home/gpadmin/gpdb_src/concourse/scripts/setup_gpadmin_user.bash
+            make_cluster
+          '
+          docker exec ggcheckmigrate-target bash -lc '
+            . /etc/os-release
+            export TEST_OS=${ID}
+            source /home/gpadmin/gpdb_src/concourse/scripts/common.bash
+            install_and_configure_gpdb
+            /home/gpadmin/gpdb_src/concourse/scripts/setup_gpadmin_user.bash
+            make_cluster
+          '
+
+      - name: Build and run the migration checks
+        run: |
+          docker exec ggcheckmigrate-source bash -lc '
+            wget https://golang.org/dl/go1.20.5.linux-amd64.tar.gz -q -O - | tar -C /opt -xz
+          '
+          docker exec --user gpadmin ggcheckmigrate-source bash -lc '
+            source /usr/local/greengage-db-devel/greengage_path.sh
+            source /home/gpadmin/gpdb_src/gpAux/gpdemo/gpdemo-env.sh
+            PATH=/opt/go/bin:${PATH} GOPATH=/home/gpadmin/go make depend build -C /home/gpadmin/go/src/github.com/GreengageDB/gpbackup
+          '
+          source_port=$(docker exec --user gpadmin ggcheckmigrate-source bash -lc '
+            source /home/gpadmin/gpdb_src/gpAux/gpdemo/gpdemo-env.sh
+            printf "%s" "${PGPORT}"
+          ')
+          target_port=$(docker exec --user gpadmin ggcheckmigrate-target bash -lc '
+            source /home/gpadmin/gpdb_src/gpAux/gpdemo/gpdemo-env.sh
+            printf "%s" "${PGPORT}"
+          ')
+          docker exec \
+            --user gpadmin \
+            --env GGCHECKMIGRATE_SOURCE_HOST=127.0.0.1 \
+            --env GGCHECKMIGRATE_SOURCE_PORT="${source_port}" \
+            --env GGCHECKMIGRATE_SOURCE_USER=gpadmin \
+            --env GGCHECKMIGRATE_TARGET_HOST=ggcheckmigrate-target \
+            --env GGCHECKMIGRATE_TARGET_PORT="${target_port}" \
+            --env GGCHECKMIGRATE_TARGET_USER=gpadmin \
+            --env GGCHECKMIGRATE_BINARY=/home/gpadmin/go/bin/ggcheckmigrate \
+            ggcheckmigrate-source \
+            bash -lc '
+              source /usr/local/greengage-db-devel/greengage_path.sh
+              source /home/gpadmin/gpdb_src/gpAux/gpdemo/gpdemo-env.sh
+              /home/gpadmin/go/src/github.com/GreengageDB/gpbackup/ci/scripts/test-ggcheckmigrate.bash
+            '
+
+      - name: Remove the source and target containers
+        if: always()
+        run: |
+          docker rm -f ggcheckmigrate-source ggcheckmigrate-target || true
+          docker network rm ggcheckmigrate || true

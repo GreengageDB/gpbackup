@@ -549,20 +549,20 @@ func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 	}
 }
 
-func TestSystemViewDependenciesUseCatalogDependencies(t *testing.T) {
+func TestSystemViewDependenciesSeedDefinitionsAndUseCatalogDependencies(t *testing.T) {
 	for _, catalog := range []string{"pg_catalog.pg_rewrite", "pg_catalog.pg_depend"} {
 		if !strings.Contains(systemObjectDependencyQuery, catalog) {
 			t.Fatalf("The system dependency check does not use %s", catalog)
 		}
 	}
-	if strings.Count(systemObjectDependencyQuery, "rewrite_rule.rulename = '_RETURN'") != 2 {
-		t.Fatal("The system dependency check traverses rewrite rules outside view definitions")
+	if !strings.Contains(systemObjectDependencyQuery, "pg_catalog.pg_get_viewdef") {
+		t.Fatal("The system dependency check does not inspect definitions for pinned catalog relations")
 	}
-	if !strings.Contains(systemObjectDependencyQuery, "referenced_relation.relkind IN ('v', 'm')") {
-		t.Fatal("The system dependency check recursively traverses non-view relations")
+	if !strings.Contains(systemObjectDependencyQuery, "catalog_dependency.refobjid = dependency.oid") {
+		t.Fatal("The system dependency check does not traverse dependent views")
 	}
-	if strings.Contains(systemObjectDependencyQuery, "pg_get_viewdef") {
-		t.Fatal("The system dependency check still parses view definitions")
+	if !strings.Contains(systemObjectDependencyQuery, "rewrite_rule.rulename = '_RETURN'") {
+		t.Fatal("The system dependency check traverses rules outside view definitions")
 	}
 }
 
