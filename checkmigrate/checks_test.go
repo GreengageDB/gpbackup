@@ -841,6 +841,39 @@ func TestDoCheckMigrateReportsCheckSavepointReleaseFailure(t *testing.T) {
 	}
 }
 
+func TestRunMigrationChecksKeepsIndependentChecksAfterCatalogSetupFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupCatalogQuery)).WillReturnError(errors.New("catalog support unavailable"))
+	mock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupTypesQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	for _, testCase := range sourceCheckTestCases {
+		if testCase.isClusterCheck || testCase.query == removedCatalogColumnViewQuery || testCase.query == removedCatalogRelationViewQuery {
+			continue
+		}
+		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectQuery(regexp.QuoteMeta(testCase.query)).WillReturnRows(rowsForCheck(testCase, false))
+		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	mock.ExpectRollback()
+
+	summary := runMigrationChecks(connection, nil)
+	if summary.databaseError != nil {
+		t.Fatalf("The partial capability run returned an error with %v", summary.databaseError)
+	}
+	if summary.completedCheckCount != 18 || summary.unavailableCheckCount != 2 || summary.failedCheckCount != 0 {
+		t.Fatalf("The partial capability summary was %+v", summary)
+	}
+}
+
 func TestDoCheckMigrateReportsSetupSavepointReleaseFailure(t *testing.T) {
 	connection, mock, _ := setupCheckTest(t)
 	sourceConnectionPool = connection
