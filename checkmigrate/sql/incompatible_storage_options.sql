@@ -19,8 +19,8 @@ WITH settings AS (
     WHERE guc_name = 'gp_default_storage_options'
       AND pg_catalog.btrim(option_value) <> ''
 )
-SELECT pg_catalog.coalesce(datname, '<none>')::text AS database_name,
-       pg_catalog.coalesce(rolname, '<none>')::text AS role_name,
+SELECT coalesce(datname, '<none>')::text AS database_name,
+       coalesce(rolname, '<none>')::text AS role_name,
        setting::text,
        option_name::text
 FROM options

@@ -1,5 +1,5 @@
-SELECT pg_catalog.coalesce(database_catalog.datname, '<none>')::text AS database_name,
-       pg_catalog.coalesce(role_catalog.rolname, '<none>')::text AS role_name,
+SELECT coalesce(database_catalog.datname, '<none>')::text AS database_name,
+       coalesce(role_catalog.rolname, '<none>')::text AS role_name,
        pg_catalog.lower(pg_catalog.split_part(setting_value.setting, '=', 1))::text AS guc_name,
        setting_value.setting::text
 FROM pg_catalog.pg_db_role_setting setting_catalog

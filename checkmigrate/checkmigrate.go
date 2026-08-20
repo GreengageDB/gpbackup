@@ -63,16 +63,24 @@ func DoCheckMigrate() {
 	findingCount := 0
 	hasExecutionError := false
 
-	gplog.Debug("Starting cluster check %q", "resource groups")
-	resourceGroupFindingCount, resourceGroupError := checkResourceGroups(sourceConnectionPool)
-	if resourceGroupError != nil {
-		failedCheckCount++
-		hasExecutionError = true
-		gplog.Error("Cluster failed check %q with %v", "resource groups", resourceGroupError)
-	} else {
+	clusterChecks := []migrationCheck{
+		{name: "resource groups", doRunCheck: checkResourceGroups},
+		{name: "incompatible storage options", doRunCheck: checkIncompatibleStorageOptions},
+		{name: "removed GUC settings", doRunCheck: checkRemovedGUCSettings},
+	}
+	for _, check := range clusterChecks {
+		gplog.Debug("Starting cluster check %q", check.name)
+		clusterFindingCount, checkError := check.doRunCheck(sourceConnectionPool)
+		if checkError != nil {
+			failedCheckCount++
+			hasExecutionError = true
+			gplog.Error("Cluster failed check %q with %v", check.name, checkError)
+
+			continue
+		}
 		completedCheckCount++
-		findingCount += resourceGroupFindingCount
-		gplog.Debug("Completed cluster check %q with %d findings", "resource groups", resourceGroupFindingCount)
+		findingCount += clusterFindingCount
+		gplog.Debug("Completed cluster check %q with %d findings", check.name, clusterFindingCount)
 	}
 
 	for _, database := range databaseNames {

@@ -305,8 +305,6 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 		{name: "arenadata_toolkit schema", doRunCheck: checkArenadataToolkitSchema},
 		{name: "system object dependencies", doRunCheck: checkSystemObjectDependencies},
 		{name: "deep partition templates", doRunCheck: checkDeepPartitionTemplates},
-		{name: "incompatible storage options", doRunCheck: checkIncompatibleStorageOptions},
-		{name: "removed GUC settings", doRunCheck: checkRemovedGUCSettings},
 		{name: "disallowed arrow operators", doRunCheck: checkDisallowedArrowOperators},
 		{name: "partition operator families", doRunCheck: checkPartitionOpfamilies},
 	}

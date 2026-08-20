@@ -34,12 +34,18 @@ if [[ ! ${database_name} =~ ^[a-zA-Z_][a-zA-Z_0-9]*$ ]]; then
   exit 1
 fi
 output_path=$(mktemp)
-trap 'rm -f "${output_path}" "${output_path}.first" "${output_path}.second"' EXIT INT TERM
+cleanup_output() {
+  rm -f "${output_path}" "${output_path}.first" "${output_path}.second"
+}
+trap cleanup_output EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 source_psql=(
   psql
   -X
   -v ON_ERROR_STOP=1
+  -v database_name="${database_name}"
   -h "${source_host}"
   -p "${source_port}"
   -U "${source_user}"
@@ -71,8 +77,14 @@ fail_with_output() {
 }
 
 "${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${database_name}"
+"${source_psql[@]}" postgres -c "DROP RESOURCE GROUP IF EXISTS ggcheckmigrate_fixture_group"
 "${source_psql[@]}" postgres -c "CREATE DATABASE ${database_name}"
-trap '"${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${database_name}"; rm -f "${output_path}" "${output_path}.first" "${output_path}.second"' EXIT INT TERM
+cleanup_fixture() {
+  "${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${database_name}"
+  "${source_psql[@]}" postgres -c "DROP RESOURCE GROUP IF EXISTS ggcheckmigrate_fixture_group"
+  cleanup_output
+}
+trap cleanup_fixture EXIT
 
 run_check() {
   "${check_command[@]}"
@@ -132,6 +144,16 @@ DO ALSO SELECT count(*) FROM pg_catalog.pg_class;
 CREATE VIEW ggcheckmigrate_fixture.rule_table_view AS SELECT * FROM ggcheckmigrate_fixture.rule_table;
 CREATE FUNCTION ggcheckmigrate_fixture.catalog_function() RETURNS bigint
 LANGUAGE SQL AS 'SELECT count(*) FROM pg_catalog.pg_class';
+CREATE FUNCTION ggcheckmigrate_fixture.arrow_operator(integer, integer) RETURNS boolean
+LANGUAGE SQL IMMUTABLE AS 'SELECT $1 = $2';
+CREATE OPERATOR ggcheckmigrate_fixture.=> (
+  LEFTARG = integer,
+  RIGHTARG = integer,
+  PROCEDURE = ggcheckmigrate_fixture.arrow_operator
+);
+ALTER DATABASE :"database_name" SET gp_default_storage_options TO 'appendonly=true,compresstype=zlib';
+ALTER DATABASE :"database_name" SET password_hash_algorithm TO 'md5';
+CREATE RESOURCE GROUP ggcheckmigrate_fixture_group WITH (CPU_RATE_LIMIT=1, MEMORY_LIMIT=1, CONCURRENCY=1);
 CREATE TABLE ggcheckmigrate_fixture.multi_list (id integer, key_a text, key_b integer)
 DISTRIBUTED BY (id)
 PARTITION BY LIST (key_a, key_b) (
@@ -182,9 +204,23 @@ for expected_text in \
   'transitive_catalog_view' \
   'catalog_function' \
   'statement_trigger' \
-  'ao_nested'; do
+  'ao_nested' \
+  'ggcheckmigrate_fixture_group' \
+  'gp_default_storage_options' \
+  'password_hash_algorithm' \
+  '=>' ; do
   if ! grep -Fq "${expected_text}" "${output_path}"; then
     echo "The report does not name ${expected_text}" >&2
+    cat "${output_path}" >&2
+    exit 1
+  fi
+done
+
+for unexpected_text in \
+  'rule_table_view' \
+  'heap_child'; do
+  if grep -Fq "${unexpected_text}" "${output_path}"; then
+    echo "The report unexpectedly named ${unexpected_text}" >&2
     cat "${output_path}" >&2
     exit 1
   fi
