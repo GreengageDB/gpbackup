@@ -11,6 +11,18 @@ CREATE OR REPLACE FUNCTION pg_temp.view_has_removed_types(oid)
 RETURNS boolean
 AS '$libdir/pg_upgrade_support'
 LANGUAGE C STRICT;
+CREATE OR REPLACE FUNCTION pg_temp.view_has_changed_function_signatures(oid)
+RETURNS boolean
+AS '$libdir/pg_upgrade_support'
+LANGUAGE C STRICT;
+CREATE OR REPLACE FUNCTION pg_temp.get_removed_columns(oid)
+RETURNS text
+AS '$libdir/pg_upgrade_support'
+LANGUAGE C STRICT;
+CREATE OR REPLACE FUNCTION pg_temp.get_removed_tables(oid)
+RETURNS text
+AS '$libdir/pg_upgrade_support'
+LANGUAGE C STRICT;
 CREATE OR REPLACE FUNCTION pg_temp.data_type_checks(base_oids regtype[])
 RETURNS TABLE (nspname name, relname name, attname name)
 AS $function$

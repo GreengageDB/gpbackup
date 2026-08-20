@@ -14,6 +14,9 @@ JOIN pg_catalog.pg_namespace child_namespace ON child_namespace.oid = child_rela
 WHERE p.parkind = 'r'
   AND NOT partition_rule.parisdefault
   AND t.typname IN ('text', 'float8', 'float4', 'numeric')
+  AND n.nspname !~ '^pg_temp_'
+  AND n.nspname !~ '^pg_toast_temp_'
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
   AND ((partition_rule.parrangestart IS NOT NULL AND NOT partition_rule.parrangestartincl)
        OR (partition_rule.parrangeend IS NOT NULL AND partition_rule.parrangeendincl))
 ORDER BY n.nspname, c.relname, t.typname, child_namespace.nspname, child_relation.relname;

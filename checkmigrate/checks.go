@@ -68,6 +68,27 @@ var systemObjectDependencyQuery string
 //go:embed sql/deep_partition_templates.sql
 var deepPartitionTemplateQuery string
 
+//go:embed sql/incompatible_storage_options.sql
+var incompatibleStorageOptionQuery string
+
+//go:embed sql/removed_guc_settings.sql
+var removedGUCSettingQuery string
+
+//go:embed sql/disallowed_arrow_operators.sql
+var disallowedArrowOperatorQuery string
+
+//go:embed sql/partition_opfamilies.sql
+var partitionOpfamilyQuery string
+
+//go:embed sql/changed_function_signature_views.sql
+var changedFunctionSignatureViewQuery string
+
+//go:embed sql/removed_catalog_column_views.sql
+var removedCatalogColumnViewQuery string
+
+//go:embed sql/removed_catalog_relation_views.sql
+var removedCatalogRelationViewQuery string
+
 type namedObjectResult struct {
 	SchemaName string `db:"schema_name"`
 	ObjectName string `db:"object_name"`
@@ -141,6 +162,29 @@ type systemObjectDependencyResult struct {
 	ReferencedObject string `db:"referenced_object"`
 }
 
+type configurationSettingResult struct {
+	DatabaseName string `db:"database_name"`
+	RoleName     string `db:"role_name"`
+	Setting      string `db:"setting"`
+	OptionName   string `db:"option_name"`
+	GUCName      string `db:"guc_name"`
+}
+
+type partitionOpfamilyResult struct {
+	SchemaName     string `db:"schema_name"`
+	ObjectName     string `db:"object_name"`
+	OperatorClass  string `db:"operator_class"`
+	OperatorFamily string `db:"operator_family"`
+}
+
+type removedCatalogDependencyResult struct {
+	SchemaName       string `db:"schema_name"`
+	ObjectName       string `db:"object_name"`
+	RelationKind     string `db:"relation_kind"`
+	RemovedColumns   string `db:"removed_columns"`
+	RemovedRelations string `db:"removed_relations"`
+}
+
 var relationKindLabels = map[string]string{
 	"v": "view",
 	"m": "materialized view",
@@ -186,6 +230,7 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 	}()
 
 	if targetConnection != nil {
+		gplog.Debug("Database %q is starting check %q", sourceConnection.DBName, "required libraries")
 		if _, savepointError := sourceConnection.Exec("SAVEPOINT ggcheckmigrate_libraries"); savepointError != nil {
 			summary.databaseError = fmt.Errorf("required libraries savepoint failed with %w", savepointError)
 
@@ -193,7 +238,6 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 		}
 		findingCount, checkError := checkRequiredLibraries(sourceConnection, targetConnection)
 		if checkError == nil {
-			summary.completedCheckCount++
 			summary.findingCount += findingCount
 		} else {
 			summary.failedCheckCount++
@@ -204,7 +248,20 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 				return summary
 			}
 		}
-		_, _ = sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_libraries")
+		if _, releaseError := sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_libraries"); releaseError != nil {
+			if checkError == nil {
+				summary.failedCheckCount++
+			}
+			summary.databaseError = fmt.Errorf("required libraries savepoint release failed with %w", releaseError)
+
+			return summary
+		}
+		if checkError == nil {
+			summary.completedCheckCount++
+			gplog.Debug("Database %q completed check %q with %d findings", sourceConnection.DBName, "required libraries", findingCount)
+		} else {
+			gplog.Debug("Database %q completed check %q with an execution failure", sourceConnection.DBName, "required libraries")
+		}
 	}
 
 	if _, savepointError := sourceConnection.Exec("SAVEPOINT ggcheckmigrate_setup"); savepointError != nil {
@@ -223,7 +280,11 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 		}
 		gplog.Error("Database %q failed migration check setup with %v", sourceConnection.DBName, setupError)
 	}
-	_, _ = sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_setup")
+	if _, releaseError := sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_setup"); releaseError != nil {
+		summary.databaseError = fmt.Errorf("migration check setup savepoint release failed with %w", releaseError)
+
+		return summary
+	}
 
 	checks := []migrationCheck{
 		{name: "multi-column LIST partitions", doRunCheck: checkMultiColumnListPartitions},
@@ -231,6 +292,9 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 		{name: "views with removed operators", isSetupRequired: true, doRunCheck: checkViewsWithRemovedOperators},
 		{name: "views with removed functions", isSetupRequired: true, doRunCheck: checkViewsWithRemovedFunctions},
 		{name: "views with removed types", isSetupRequired: true, doRunCheck: checkViewsWithRemovedTypes},
+		{name: "views with changed function signatures", isSetupRequired: true, doRunCheck: checkViewsWithChangedFunctionSignatures},
+		{name: "views with removed catalog columns", isSetupRequired: true, doRunCheck: checkViewsWithRemovedCatalogColumns},
+		{name: "views with removed catalog relations", isSetupRequired: true, doRunCheck: checkViewsWithRemovedCatalogRelations},
 		{name: "removed data types", isSetupRequired: true, doRunCheck: checkRemovedDataTypes},
 		{name: "missing AO options", doRunCheck: checkMissingAOOptions},
 		{name: "restricted EXECUTE ON functions", doRunCheck: checkRestrictedExecuteOnFunctions},
@@ -241,6 +305,10 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 		{name: "arenadata_toolkit schema", doRunCheck: checkArenadataToolkitSchema},
 		{name: "system object dependencies", doRunCheck: checkSystemObjectDependencies},
 		{name: "deep partition templates", doRunCheck: checkDeepPartitionTemplates},
+		{name: "incompatible storage options", doRunCheck: checkIncompatibleStorageOptions},
+		{name: "removed GUC settings", doRunCheck: checkRemovedGUCSettings},
+		{name: "disallowed arrow operators", doRunCheck: checkDisallowedArrowOperators},
+		{name: "partition operator families", doRunCheck: checkPartitionOpfamilies},
 	}
 
 	for _, check := range checks {
@@ -251,6 +319,7 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 			continue
 		}
 
+		gplog.Debug("Database %q is starting check %q", sourceConnection.DBName, check.name)
 		if _, savepointError := sourceConnection.Exec("SAVEPOINT ggcheckmigrate_check"); savepointError != nil {
 			summary.databaseError = fmt.Errorf("check %q savepoint failed with %w", check.name, savepointError)
 
@@ -265,13 +334,25 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 
 				return summary
 			}
-			_, _ = sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check")
+			summary.findingCount += findingCount
+			if _, releaseError := sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
+				summary.databaseError = fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError)
+
+				return summary
+			}
+			gplog.Debug("Database %q completed check %q with an execution failure", sourceConnection.DBName, check.name)
 			continue
 		}
 
-		_, _ = sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check")
-		summary.completedCheckCount++
 		summary.findingCount += findingCount
+		if _, releaseError := sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
+			summary.failedCheckCount++
+			summary.databaseError = fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError)
+
+			return summary
+		}
+		summary.completedCheckCount++
+		gplog.Debug("Database %q completed check %q with %d findings", sourceConnection.DBName, check.name, findingCount)
 	}
 
 	return summary
@@ -366,6 +447,63 @@ func checkViewsWithRemovedTypes(connection *dbconn.DBConn) (int, error) {
 	output.WriteString("Your cluster contains views that use removed types. Update the views to use supported types or remove them before migration.\n")
 	for _, result := range results {
 		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view uses a removed type.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName)
+	}
+	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
+
+	return len(results), nil
+}
+
+func checkViewsWithChangedFunctionSignatures(connection *dbconn.DBConn) (int, error) {
+	results := make([]viewResult, 0)
+	if queryError := connection.Select(&results, changedFunctionSignatureViewQuery); queryError != nil {
+		return 0, queryError
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	var output strings.Builder
+	output.WriteString("Your cluster contains views that call functions whose signatures changed in version 7. Recreate the views with compatible function calls before migration.\n")
+	for _, result := range results {
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view calls a function with a changed signature.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName)
+	}
+	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
+
+	return len(results), nil
+}
+
+func checkViewsWithRemovedCatalogColumns(connection *dbconn.DBConn) (int, error) {
+	results := make([]removedCatalogDependencyResult, 0)
+	if queryError := connection.Select(&results, removedCatalogColumnViewQuery); queryError != nil {
+		return 0, queryError
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	var output strings.Builder
+	output.WriteString("Your cluster contains views that reference system columns removed from version 7. Update or remove the views before migration.\n")
+	for _, result := range results {
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view references removed columns %q.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName, result.RemovedColumns)
+	}
+	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
+
+	return len(results), nil
+}
+
+func checkViewsWithRemovedCatalogRelations(connection *dbconn.DBConn) (int, error) {
+	results := make([]removedCatalogDependencyResult, 0)
+	if queryError := connection.Select(&results, removedCatalogRelationViewQuery); queryError != nil {
+		return 0, queryError
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	var output strings.Builder
+	output.WriteString("Your cluster contains views that reference system relations removed from version 7. Update or remove the views before migration.\n")
+	for _, result := range results {
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The view references removed relations %q.\n", connection.DBName, result.ObjectName, relationKindLabels[result.RelationKind], result.SchemaName, result.RemovedRelations)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 
@@ -609,6 +747,82 @@ func checkDeepPartitionTemplates(connection *dbconn.DBConn) (int, error) {
 	output.WriteString("Your cluster contains subpartition templates deeper than the second partition level. Save and remove these templates before backup, then recreate them with version 7 syntax.\n")
 	for _, result := range results {
 		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. The table has a deep subpartition template.\n", connection.DBName, result.ObjectName, "partitioned table", result.SchemaName)
+	}
+	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
+
+	return len(results), nil
+}
+
+func checkIncompatibleStorageOptions(connection *dbconn.DBConn) (int, error) {
+	results := make([]configurationSettingResult, 0)
+	if queryError := connection.Select(&results, incompatibleStorageOptionQuery); queryError != nil {
+		return 0, queryError
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	var output strings.Builder
+	output.WriteString("Your cluster contains gp_default_storage_options assignments with options that are incompatible with version 7. Remove the incompatible options before migration.\n")
+	for _, result := range results {
+		fmt.Fprintf(&output, "Database setting for database %q and role %q contains option %q in %q.\n", result.DatabaseName, result.RoleName, result.OptionName, result.Setting)
+	}
+	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
+
+	return len(results), nil
+}
+
+func checkRemovedGUCSettings(connection *dbconn.DBConn) (int, error) {
+	results := make([]configurationSettingResult, 0)
+	if queryError := connection.Select(&results, removedGUCSettingQuery); queryError != nil {
+		return 0, queryError
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	var output strings.Builder
+	output.WriteString("Your cluster contains persistent assignments for settings that were removed from version 7. Remove the assignments before migration.\n")
+	for _, result := range results {
+		fmt.Fprintf(&output, "Database setting for database %q and role %q contains removed setting %q in %q.\n", result.DatabaseName, result.RoleName, result.GUCName, result.Setting)
+	}
+	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
+
+	return len(results), nil
+}
+
+func checkDisallowedArrowOperators(connection *dbconn.DBConn) (int, error) {
+	results := make([]namedObjectResult, 0)
+	if queryError := connection.Select(&results, disallowedArrowOperatorQuery); queryError != nil {
+		return 0, queryError
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	var output strings.Builder
+	output.WriteString("Your cluster contains user-defined => operators. Drop the operators before migration.\n")
+	for _, result := range results {
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q.\n", connection.DBName, result.ObjectName, "operator", result.SchemaName)
+	}
+	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
+
+	return len(results), nil
+}
+
+func checkPartitionOpfamilies(connection *dbconn.DBConn) (int, error) {
+	results := make([]partitionOpfamilyResult, 0)
+	if queryError := connection.Select(&results, partitionOpfamilyQuery); queryError != nil {
+		return 0, queryError
+	}
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	var output strings.Builder
+	output.WriteString("Your cluster contains partition keys whose operator families lack support procedure 1. Add the support procedure or recreate the affected partitioned tables with supported operator classes.\n")
+	for _, result := range results {
+		fmt.Fprintf(&output, "Database %q contains object %q of type %q in schema %q. Operator class %q uses operator family %q.\n", connection.DBName, result.ObjectName, "partitioned table", result.SchemaName, result.OperatorClass, result.OperatorFamily)
 	}
 	gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%s", strings.TrimSpace(output.String()))
 

@@ -31,4 +31,8 @@ GGCHECKMIGRATE_BINARY="$GOPATH/bin/ggcheckmigrate" \
 ci/scripts/test-ggcheckmigrate.bash
 ```
 
-The source and target credentials can be stored in `.pgpass`.
+The source and target credentials can be stored in `.pgpass`. The utility also uses `PGPASSWORD` and the configured ident, peer, or trust authentication methods. It does not accept a password flag.
+
+An explicit `--source-database` checks one database. When the flag is omitted, every connectable database except `template0` is checked. The initial catalog connection uses `postgres` and falls back to `template1`. At least one of these databases must accept connections.
+
+The source-only fixture validates per-database catalog checks and the cluster resource group check. The required library check runs when the Greengage 7 target variables are set. The implemented check list and report fields are documented in the main README. Other migration problems can exist, and a clean result does not guarantee a successful restore.

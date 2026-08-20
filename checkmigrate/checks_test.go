@@ -89,6 +89,39 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		},
 	},
 	{
+		name:        "views with changed function signatures",
+		check:       checkViewsWithChangedFunctionSignatures,
+		query:       changedFunctionSignatureViewQuery,
+		columns:     []string{"schema_name", "object_name", "relation_kind"},
+		rows:        [][]driver.Value{{"public", "changed_signature_view", "v"}},
+		problemText: "views that call functions whose signatures changed in version 7",
+		expectedObjects: []string{
+			`object "changed_signature_view" of type "view" in schema "public"`,
+		},
+	},
+	{
+		name:        "views with removed catalog columns",
+		check:       checkViewsWithRemovedCatalogColumns,
+		query:       removedCatalogColumnViewQuery,
+		columns:     []string{"schema_name", "object_name", "relation_kind", "removed_columns"},
+		rows:        [][]driver.Value{{"public", "removed_column_view", "v", "pg_class.relstorage"}},
+		problemText: "views that reference system columns removed from version 7",
+		expectedObjects: []string{
+			`object "removed_column_view" of type "view" in schema "public"`,
+		},
+	},
+	{
+		name:        "views with removed catalog relations",
+		check:       checkViewsWithRemovedCatalogRelations,
+		query:       removedCatalogRelationViewQuery,
+		columns:     []string{"schema_name", "object_name", "relation_kind", "removed_relations"},
+		rows:        [][]driver.Value{{"public", "removed_relation_view", "v", "pg_partition"}},
+		problemText: "views that reference system relations removed from version 7",
+		expectedObjects: []string{
+			`object "removed_relation_view" of type "view" in schema "public"`,
+		},
+	},
+	{
 		name:        "removed data types",
 		check:       checkRemovedDataTypes,
 		query:       removedDataTypeQuery,
@@ -204,6 +237,51 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		problemText: "subpartition templates deeper than the second partition level",
 		expectedObjects: []string{
 			`object "deep_parts" of type "partitioned table" in schema "public"`,
+		},
+	},
+	{
+		name:        "incompatible storage options",
+		check:       checkIncompatibleStorageOptions,
+		query:       incompatibleStorageOptionQuery,
+		columns:     []string{"database_name", "role_name", "setting", "option_name"},
+		rows:        [][]driver.Value{{"source_database", "application_role", "gp_default_storage_options=appendonly=true", "appendonly"}},
+		problemText: "gp_default_storage_options assignments with options that are incompatible with version 7",
+		expectedObjects: []string{
+			`database "source_database" and role "application_role" contains option "appendonly"`,
+		},
+	},
+	{
+		name:        "removed GUC settings",
+		check:       checkRemovedGUCSettings,
+		query:       removedGUCSettingQuery,
+		columns:     []string{"database_name", "role_name", "guc_name", "setting"},
+		rows:        [][]driver.Value{{"source_database", "application_role", "password_hash_algorithm", "password_hash_algorithm=sha-256"}},
+		problemText: "persistent assignments for settings that were removed from version 7",
+		expectedObjects: []string{
+			`database "source_database" and role "application_role" contains removed setting "password_hash_algorithm"`,
+		},
+	},
+	{
+		name:        "disallowed arrow operators",
+		check:       checkDisallowedArrowOperators,
+		query:       disallowedArrowOperatorQuery,
+		columns:     []string{"schema_name", "object_name"},
+		rows:        [][]driver.Value{{"public", "=>"}},
+		problemText: "user-defined => operators",
+		expectedObjects: []string{
+			`object "=>" of type "operator" in schema "public"`,
+		},
+	},
+	{
+		name:        "partition operator families",
+		check:       checkPartitionOpfamilies,
+		query:       partitionOpfamilyQuery,
+		columns:     []string{"schema_name", "object_name", "operator_class", "operator_family"},
+		rows:        [][]driver.Value{{"public", "partitioned_table", "custom_ops", "custom_family"}},
+		problemText: "partition keys whose operator families lack support procedure 1",
+		expectedObjects: []string{
+			`object "partitioned_table" of type "partitioned table" in schema "public"`,
+			`Operator class "custom_ops" uses operator family "custom_family"`,
 		},
 	},
 }
@@ -390,7 +468,7 @@ func TestMigrationSetupUsesTemporarySchema(t *testing.T) {
 	if !strings.Contains(migrationCheckSetupQuery, "pg_temp") {
 		t.Fatal("The migration setup does not use the temporary schema")
 	}
-	for _, query := range []string{removedOperatorViewQuery, removedFunctionViewQuery, removedTypeViewQuery, removedDataTypeQuery} {
+	for _, query := range []string{removedOperatorViewQuery, removedFunctionViewQuery, removedTypeViewQuery, changedFunctionSignatureViewQuery, removedCatalogColumnViewQuery, removedCatalogRelationViewQuery, removedDataTypeQuery} {
 		if !strings.Contains(query, "pg_temp") {
 			t.Fatalf("The support query does not use the temporary schema in %q", query)
 		}
@@ -403,6 +481,95 @@ func TestPlpythonCheckUsesLanguageHandler(t *testing.T) {
 	}
 	if strings.Contains(plpython2DependentFunctionQuery, "pg_pltemplate") {
 		t.Fatal("The PL/Python check still depends on the language template")
+	}
+}
+
+func TestSourceDatabaseEnumerationExcludesTemplateZero(t *testing.T) {
+	if !strings.Contains(sourceDatabaseNamesQuery, "datname <> 'template0'") {
+		t.Fatal("The source database enumeration does not exclude template0")
+	}
+	if strings.Contains(sourceDatabaseNamesQuery, "template1") {
+		t.Fatal("The source database enumeration excludes template1")
+	}
+}
+
+func TestSourceChecksUseNamespaceFilters(t *testing.T) {
+	queries := []string{
+		multiColumnListPartitionQuery,
+		plpython2DependentFunctionQuery,
+		removedOperatorViewQuery,
+		removedFunctionViewQuery,
+		removedTypeViewQuery,
+		changedFunctionSignatureViewQuery,
+		removedCatalogColumnViewQuery,
+		removedCatalogRelationViewQuery,
+		migrationCheckSetupQuery,
+		requiredLibraryQuery,
+		missingAOOptionQuery,
+		restrictedExecuteOnFunctionQuery,
+		incompletePartitionIndexQuery,
+		incompatibleRangePartitionQuery,
+		statementTriggerQuery,
+		systemObjectDependencyQuery,
+		deepPartitionTemplateQuery,
+		disallowedArrowOperatorQuery,
+		partitionOpfamilyQuery,
+	}
+	for _, query := range queries {
+		if !strings.Contains(query, "pg_temp_") || !strings.Contains(query, "information_schema") {
+			t.Fatalf("The source check does not filter non-user schemas in %q", query)
+		}
+	}
+}
+
+func TestSystemViewDependenciesUseCatalogDependencies(t *testing.T) {
+	for _, catalog := range []string{"pg_catalog.pg_rewrite", "pg_catalog.pg_depend"} {
+		if !strings.Contains(systemObjectDependencyQuery, catalog) {
+			t.Fatalf("The system dependency check does not use %s", catalog)
+		}
+	}
+	if strings.Count(systemObjectDependencyQuery, "rewrite_rule.rulename = '_RETURN'") != 2 {
+		t.Fatal("The system dependency check traverses rewrite rules outside view definitions")
+	}
+	if !strings.Contains(systemObjectDependencyQuery, "referenced_relation.relkind IN ('v', 'm')") {
+		t.Fatal("The system dependency check recursively traverses non-view relations")
+	}
+	if strings.Contains(systemObjectDependencyQuery, "pg_get_viewdef") {
+		t.Fatal("The system dependency check still parses view definitions")
+	}
+}
+
+func TestRequiredLibrariesMatchBackedUpFunctionScope(t *testing.T) {
+	for _, schemaName := range []string{"gp_toolkit", "pg_aoseg", "pg_bitmapindex"} {
+		if !strings.Contains(requiredLibraryQuery, schemaName) {
+			t.Fatalf("The required library check includes excluded schema %s", schemaName)
+		}
+	}
+	if !strings.Contains(requiredLibraryQuery, "dependency.deptype = 'e'") {
+		t.Fatal("The required library check includes extension-owned functions")
+	}
+}
+
+func TestResourceGroupsIncludeBuiltInGroups(t *testing.T) {
+	if strings.Contains(resourceGroupQuery, "oid >= 16384") {
+		t.Fatal("The resource group check excludes restored built-in groups")
+	}
+}
+
+func TestMissingAOOptionsUseImmediateAOParents(t *testing.T) {
+	for _, catalog := range []string{"pg_catalog.pg_partition_rule", "pg_catalog.pg_partition"} {
+		if !strings.Contains(missingAOOptionQuery, catalog) {
+			t.Fatalf("The AO option check does not use %s", catalog)
+		}
+	}
+	if !strings.Contains(missingAOOptionQuery, "parent_rule.parchildrelid, root_partition.parrelid") {
+		t.Fatal("The AO option check does not resolve immediate partition parents")
+	}
+	if !strings.Contains(missingAOOptionQuery, "child_relation.relstorage IN ('a', 'c')") {
+		t.Fatal("The AO option check includes heap or external child partitions")
+	}
+	if strings.Contains(missingAOOptionQuery, "pg_catalog.pg_partitions") {
+		t.Fatal("The AO option check still resolves parents through the root-only view")
 	}
 }
 
@@ -531,8 +698,15 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 	if gplog.GetErrorCode() != 1 {
 		t.Fatalf("The multi-database run returned exit code %d", gplog.GetErrorCode())
 	}
-	if !strings.Contains(string(stderr.Contents()), `Database "application"`) {
+	output := string(stderr.Contents())
+	if !strings.Contains(output, `Database "application"`) {
 		t.Fatalf("The multi-database run did not print the application database in %q", stderr.Contents())
+	}
+	if strings.Count(output, "Summary contains") != 1 {
+		t.Fatalf("The multi-database run printed an unexpected summary count in %q", output)
+	}
+	if !strings.Contains(output, "Summary contains 2 databases, 2 checked databases, 0 skipped databases, 45 completed checks, 0 failed checks, and 2 findings") {
+		t.Fatalf("The multi-database run printed an unexpected summary in %q", output)
 	}
 	if applicationConnection.DBName != "application" ||
 		applicationConnection.User != connection.User ||
@@ -591,6 +765,54 @@ func TestDoCheckMigrateContinuesAfterFinding(t *testing.T) {
 	}
 	if !strings.Contains(string(stderr.Contents()), firstCheck.expectedObjects[0]) {
 		t.Fatalf("The finding run did not print the affected object in %q", stderr.Contents())
+	}
+}
+
+func TestDoCheckMigrateReportsCheckSavepointReleaseFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	sourceConnectionPool = connection
+	targetConnectionPool = nil
+	t.Cleanup(func() {
+		sourceConnectionPool = nil
+	})
+
+	expectResourceGroupsEmpty(mock)
+	expectMigrationTransaction(mock)
+	firstCheck := sourceCheckTestCases[0]
+	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(regexp.QuoteMeta(firstCheck.query)).WillReturnRows(rowsForCheck(firstCheck, false))
+	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnError(errors.New("release failed"))
+	mock.ExpectRollback()
+
+	if recoveredValue := callDoCheckMigrate(); recoveredValue != nil {
+		t.Fatalf("DoCheckMigrate panicked with %v", recoveredValue)
+	}
+	if gplog.GetErrorCode() != 5 {
+		t.Fatalf("The savepoint release failure returned exit code %d", gplog.GetErrorCode())
+	}
+}
+
+func TestDoCheckMigrateReportsSetupSavepointReleaseFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	sourceConnectionPool = connection
+	targetConnectionPool = nil
+	t.Cleanup(func() {
+		sourceConnectionPool = nil
+	})
+
+	expectResourceGroupsEmpty(mock)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnError(errors.New("release failed"))
+	mock.ExpectRollback()
+
+	if recoveredValue := callDoCheckMigrate(); recoveredValue != nil {
+		t.Fatalf("DoCheckMigrate panicked with %v", recoveredValue)
+	}
+	if gplog.GetErrorCode() != 5 {
+		t.Fatalf("The setup savepoint release failure returned exit code %d", gplog.GetErrorCode())
 	}
 }
 

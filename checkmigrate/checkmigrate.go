@@ -46,11 +46,13 @@ func DoCheckMigrate() {
 
 	databaseNames := []databaseNameResult{{DatabaseName: sourceConnectionPool.DBName}}
 	if shouldScrapeDatabaseNames {
+		gplog.Debug("Starting source database enumeration")
 		databaseNames = make([]databaseNameResult, 0)
 		if queryError := sourceConnectionPool.Select(&databaseNames, sourceDatabaseNamesQuery); queryError != nil {
 			gplog.SetErrorCode(5)
 			panic(queryError)
 		}
+		gplog.Debug("Completed source database enumeration with %d databases", len(databaseNames))
 	}
 
 	databaseCount := len(databaseNames)
@@ -61,6 +63,7 @@ func DoCheckMigrate() {
 	findingCount := 0
 	hasExecutionError := false
 
+	gplog.Debug("Starting cluster check %q", "resource groups")
 	resourceGroupFindingCount, resourceGroupError := checkResourceGroups(sourceConnectionPool)
 	if resourceGroupError != nil {
 		failedCheckCount++
@@ -69,9 +72,11 @@ func DoCheckMigrate() {
 	} else {
 		completedCheckCount++
 		findingCount += resourceGroupFindingCount
+		gplog.Debug("Completed cluster check %q with %d findings", "resource groups", resourceGroupFindingCount)
 	}
 
 	for _, database := range databaseNames {
+		gplog.Debug("Starting checks for database %q", database.DatabaseName)
 		sourceConnection := sourceConnectionPool
 		shouldCloseConnection := false
 		if database.DatabaseName != sourceConnectionPool.DBName {
@@ -81,6 +86,7 @@ func DoCheckMigrate() {
 				skippedDatabaseCount++
 				hasExecutionError = true
 				gplog.Error("Database %q could not be checked because its connection failed with %v", database.DatabaseName, connectError)
+				gplog.Debug("Completed checks for database %q with a connection failure", database.DatabaseName)
 
 				continue
 			}
@@ -106,6 +112,7 @@ func DoCheckMigrate() {
 		if databaseSummary.failedCheckCount > 0 {
 			hasExecutionError = true
 		}
+		gplog.Debug("Completed checks for database %q with %d completed checks, %d failed checks, and %d findings", database.DatabaseName, databaseSummary.completedCheckCount, databaseSummary.failedCheckCount, databaseSummary.findingCount)
 	}
 
 	summaryShellVerbosity := gplog.LOGINFO

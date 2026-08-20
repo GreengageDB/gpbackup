@@ -28,8 +28,17 @@ make_cluster
 wget https://golang.org/dl/go1.20.5.linux-amd64.tar.gz -q -O - | tar -C /opt -xz;
 
 su - gpadmin -c "
+set -eo pipefail
 source /usr/local/greengage-db-devel/greengage_path.sh;
 source ~/gpdb_src/gpAux/gpdemo/gpdemo-env.sh;
 gpconfig -c shared_preload_libraries -v \"\$(psql -At -c \"SELECT array_to_string(array_append(string_to_array(current_setting('shared_preload_libraries'), ','), 'dummy_seclabel'), ',')\" postgres)\";
 gpstop -ar;
-PATH=$PATH:/opt/go/bin:~/go/bin GOPATH=~/go make depend build install integration end_to_end -C /home/gpadmin/go/src/github.com/GreengageDB/gpbackup"
+PATH=$PATH:/opt/go/bin:~/go/bin GOPATH=~/go make depend build install integration end_to_end -C /home/gpadmin/go/src/github.com/GreengageDB/gpbackup
+server_version=\$(psql -XAt postgres -c \"SELECT setting FROM pg_catalog.pg_settings WHERE name = 'gp_server_version'\")
+if [[ \${server_version} == 6.* ]]; then
+  GGCHECKMIGRATE_SOURCE_HOST=127.0.0.1 \
+  GGCHECKMIGRATE_SOURCE_PORT="\${PGPORT}" \
+  GGCHECKMIGRATE_SOURCE_USER=gpadmin \
+  GGCHECKMIGRATE_BINARY="\${HOME}/go/bin/ggcheckmigrate" \
+  /home/gpadmin/go/src/github.com/GreengageDB/gpbackup/ci/scripts/test-ggcheckmigrate.bash
+fi"
