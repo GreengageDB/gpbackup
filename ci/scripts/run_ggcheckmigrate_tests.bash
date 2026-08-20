@@ -53,6 +53,7 @@ docker exec \
   --env GGCHECKMIGRATE_SOURCE_ADDRESS="${source_address}" \
   "${target_container}" \
   bash -lc '
+    source /usr/local/greengage-db-devel/greengage_path.sh
     source /home/gpadmin/gpdb_src/gpAux/gpdemo/gpdemo-env.sh
     printf "host all all %s/32 trust\n" "${GGCHECKMIGRATE_SOURCE_ADDRESS}" >> "${COORDINATOR_DATA_DIRECTORY}/pg_hba.conf"
     gpstop -u
@@ -62,6 +63,7 @@ docker exec "${source_container}" bash -lc '
   wget https://golang.org/dl/go1.20.5.linux-amd64.tar.gz -q -O - | tar -C /opt -xz
 '
 docker exec --user gpadmin "${source_container}" bash -lc '
+  source /usr/local/greengage-db-devel/greengage_path.sh
   source /home/gpadmin/gpdb_src/gpAux/gpdemo/gpdemo-env.sh
   PATH=/opt/go/bin:${PATH} GOPATH=/home/gpadmin/go make depend build -C /home/gpadmin/go/src/github.com/GreengageDB/gpbackup
 '
@@ -86,6 +88,7 @@ docker exec \
   --env GGCHECKMIGRATE_BINARY=/home/gpadmin/go/bin/ggcheckmigrate \
   "${source_container}" \
   bash -lc '
+    source /usr/local/greengage-db-devel/greengage_path.sh
     source /home/gpadmin/gpdb_src/gpAux/gpdemo/gpdemo-env.sh
     /home/gpadmin/go/src/github.com/GreengageDB/gpbackup/ci/scripts/test-ggcheckmigrate.bash
   '
