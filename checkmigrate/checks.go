@@ -213,9 +213,11 @@ type migrationCheck struct {
 }
 
 const (
-	migrationSupportCapability = "migration support functions"
-	catalogSupportCapability   = "catalog support functions"
-	dataTypeSupportCapability  = "data type support function"
+	migrationSupportCapability  = "migration support functions"
+	catalogSupportCapability    = "catalog support functions"
+	dataTypeSupportCapability   = "data type support function"
+	setTransactionReadOnlyQuery = "SET TRANSACTION READ ONLY"
+	setLocalTrackCountsQuery    = "SET LOCAL track_counts TO off"
 )
 
 type migrationCheckSummary struct {
@@ -236,12 +238,76 @@ func beginMigrationTransaction(connection *dbconn.DBConn) error {
 		return beginError
 	}
 
-	rollbackError := connection.Rollback()
-	if rollbackError != nil {
-		return fmt.Errorf("%v and transaction rollback failed with %w", beginError, rollbackError)
+	return rollbackMigrationTransactionAfterError(connection, beginError)
+}
+
+func beginReadOnlyMigrationTransaction(connection *dbconn.DBConn) error {
+	if beginError := beginMigrationTransaction(connection); beginError != nil {
+		return beginError
+	}
+	if _, readOnlyError := connection.Exec(setTransactionReadOnlyQuery); readOnlyError != nil {
+		return rollbackMigrationTransactionAfterError(connection, fmt.Errorf("setting source transaction read only failed with %w", readOnlyError))
+	}
+	if _, trackCountsError := connection.Exec(setLocalTrackCountsQuery); trackCountsError != nil {
+		return rollbackMigrationTransactionAfterError(connection, fmt.Errorf("disabling source transaction statistics failed with %w", trackCountsError))
 	}
 
-	return beginError
+	return nil
+}
+
+func rollbackMigrationTransactionAfterError(connection *dbconn.DBConn, transactionError error) error {
+	rollbackError := connection.Rollback()
+	if rollbackError != nil {
+		return fmt.Errorf("%v and transaction rollback failed with %w", transactionError, rollbackError)
+	}
+
+	return transactionError
+}
+
+func prepareMigrationCheckCapabilities(connection *dbconn.DBConn) (map[string]bool, error) {
+	if beginError := beginMigrationTransaction(connection); beginError != nil {
+		return nil, beginError
+	}
+
+	setupQueries := []struct {
+		capability string
+		query      string
+	}{
+		{capability: migrationSupportCapability, query: migrationCheckSetupQuery},
+		{capability: catalogSupportCapability, query: migrationCheckSetupCatalogQuery},
+		{capability: dataTypeSupportCapability, query: migrationCheckSetupTypesQuery},
+	}
+	availableCapabilities := make(map[string]bool, len(setupQueries))
+	for _, setup := range setupQueries {
+		if _, savepointError := connection.Exec("SAVEPOINT ggcheckmigrate_setup"); savepointError != nil {
+			setupError := fmt.Errorf("%s setup savepoint failed with %w", setup.capability, savepointError)
+
+			return nil, rollbackMigrationTransactionAfterError(connection, setupError)
+		}
+		_, setupError := connection.Exec(setup.query)
+		if setupError != nil {
+			_, recoveryError := connection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_setup")
+			if recoveryError != nil {
+				setupError = fmt.Errorf("%s setup failed with %v and savepoint recovery failed with %w", setup.capability, setupError, recoveryError)
+
+				return nil, rollbackMigrationTransactionAfterError(connection, setupError)
+			}
+			gplog.Error("Database %q could not provide %s because setup failed with %v", connection.DBName, setup.capability, setupError)
+		} else {
+			availableCapabilities[setup.capability] = true
+		}
+		if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_setup"); releaseError != nil {
+			setupError := fmt.Errorf("%s setup savepoint release failed with %w", setup.capability, releaseError)
+
+			return nil, rollbackMigrationTransactionAfterError(connection, setupError)
+		}
+	}
+
+	if commitError := connection.Commit(); commitError != nil {
+		return nil, fmt.Errorf("migration check setup transaction commit failed with %w", commitError)
+	}
+
+	return availableCapabilities, nil
 }
 
 func runMigrationCheckPlan(connection *dbconn.DBConn, checks []migrationCheck) (summary migrationCheckSummary) {
@@ -287,7 +353,7 @@ func runMigrationCheckPlan(connection *dbconn.DBConn, checks []migrationCheck) (
 }
 
 func runClusterChecks(sourceConnection *dbconn.DBConn, checks []migrationCheck) (summary migrationCheckSummary) {
-	if beginError := beginMigrationTransaction(sourceConnection); beginError != nil {
+	if beginError := beginReadOnlyMigrationTransaction(sourceConnection); beginError != nil {
 		summary.databaseError = beginError
 		summary.failedCheckCount = len(checks)
 
@@ -316,7 +382,13 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 
 		return summary
 	}
-	if beginError := beginMigrationTransaction(sourceConnection); beginError != nil {
+	availableCapabilities, setupError := prepareMigrationCheckCapabilities(sourceConnection)
+	if setupError != nil {
+		summary.databaseError = setupError
+
+		return summary
+	}
+	if beginError := beginReadOnlyMigrationTransaction(sourceConnection); beginError != nil {
 		summary.databaseError = beginError
 
 		return summary
@@ -366,40 +438,6 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 			gplog.Debug("Database %q completed check %q with %d findings", sourceConnection.DBName, "required libraries", findingCount)
 		} else {
 			gplog.Debug("Database %q completed check %q with an execution failure", sourceConnection.DBName, "required libraries")
-		}
-	}
-
-	setupQueries := []struct {
-		capability string
-		query      string
-	}{
-		{capability: migrationSupportCapability, query: migrationCheckSetupQuery},
-		{capability: catalogSupportCapability, query: migrationCheckSetupCatalogQuery},
-		{capability: dataTypeSupportCapability, query: migrationCheckSetupTypesQuery},
-	}
-	availableCapabilities := make(map[string]bool, len(setupQueries))
-	for _, setup := range setupQueries {
-		if _, savepointError := sourceConnection.Exec("SAVEPOINT ggcheckmigrate_setup"); savepointError != nil {
-			summary.databaseError = fmt.Errorf("%s setup savepoint failed with %w", setup.capability, savepointError)
-
-			return summary
-		}
-		_, setupError := sourceConnection.Exec(setup.query)
-		if setupError != nil {
-			_, recoveryError := sourceConnection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_setup")
-			if recoveryError != nil {
-				summary.databaseError = fmt.Errorf("%s setup failed with %v and savepoint recovery failed with %w", setup.capability, setupError, recoveryError)
-
-				return summary
-			}
-			gplog.Error("Database %q could not provide %s because setup failed with %v", sourceConnection.DBName, setup.capability, setupError)
-		} else {
-			availableCapabilities[setup.capability] = true
-		}
-		if _, releaseError := sourceConnection.Exec("RELEASE SAVEPOINT ggcheckmigrate_setup"); releaseError != nil {
-			summary.databaseError = fmt.Errorf("%s setup savepoint release failed with %w", setup.capability, releaseError)
-
-			return summary
 		}
 	}
 

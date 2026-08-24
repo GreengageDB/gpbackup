@@ -329,9 +329,7 @@ func expectAllSourceChecksEmpty(mock sqlmock.Sqlmock) {
 	}
 }
 
-func expectMigrationTransaction(mock sqlmock.Sqlmock) {
-	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
+func expectMigrationSetupQueries(mock sqlmock.Sqlmock) {
 	for _, setupQuery := range []string{migrationCheckSetupQuery, migrationCheckSetupCatalogQuery, migrationCheckSetupTypesQuery} {
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec(regexp.QuoteMeta(setupQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -339,9 +337,27 @@ func expectMigrationTransaction(mock sqlmock.Sqlmock) {
 	}
 }
 
-func expectClusterChecksEmpty(mock sqlmock.Sqlmock) {
+func expectMigrationSetupTransaction(mock sqlmock.Sqlmock) {
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMigrationSetupQueries(mock)
+	mock.ExpectCommit()
+}
+
+func expectReadOnlyMigrationTransaction(mock sqlmock.Sqlmock) {
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(setTransactionReadOnlyQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(setLocalTrackCountsQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+}
+
+func expectMigrationTransaction(mock sqlmock.Sqlmock) {
+	expectMigrationSetupTransaction(mock)
+	expectReadOnlyMigrationTransaction(mock)
+}
+
+func expectClusterChecksEmpty(mock sqlmock.Sqlmock) {
+	expectReadOnlyMigrationTransaction(mock)
 	for _, query := range []string{resourceGroupQuery, incompatibleStorageOptionQuery, removedGUCSettingQuery} {
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 		var columns []string
@@ -492,6 +508,9 @@ func TestMigrationSetupUsesTemporarySchema(t *testing.T) {
 	if !strings.Contains(migrationCheckSetupQuery, "pg_temp") {
 		t.Fatal("The migration setup does not use the temporary schema")
 	}
+	if strings.Contains(migrationCheckSetupQuery, "track_counts") {
+		t.Fatal("The migration setup changes track_counts outside the read-only check transaction")
+	}
 	for _, query := range []string{removedOperatorViewQuery, removedFunctionViewQuery, removedTypeViewQuery, changedFunctionSignatureViewQuery, removedCatalogColumnViewQuery, removedCatalogRelationViewQuery, removedDataTypeQuery} {
 		if !strings.Contains(query, "pg_temp") {
 			t.Fatalf("The support query does not use the temporary schema in %q", query)
@@ -628,23 +647,13 @@ func TestDoCheckMigrateChecksRequiredLibrariesBeforeSourceChecks(t *testing.T) {
 	})
 
 	expectClusterChecksEmpty(sourceMock)
-	sourceMock.ExpectBegin()
-	sourceMock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMigrationTransaction(sourceMock)
 	sourceMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_libraries")).WillReturnResult(sqlmock.NewResult(0, 0))
 	sourceMock.ExpectQuery(regexp.QuoteMeta(requiredLibraryQuery)).WillReturnRows(
 		sqlmock.NewRows([]string{"schema_name", "object_name", "identity_arguments", "library_name"}).AddRow("public", "missing_fn", "integer", "$libdir/missing"),
 	)
 	targetMock.ExpectExec(regexp.QuoteMeta("LOAD '$libdir/missing'")).WillReturnError(errors.New("missing library"))
 	sourceMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_libraries")).WillReturnResult(sqlmock.NewResult(0, 0))
-	sourceMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
-	sourceMock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
-	sourceMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
-	sourceMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
-	sourceMock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupCatalogQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
-	sourceMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
-	sourceMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
-	sourceMock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupTypesQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
-	sourceMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 	expectAllSourceChecksEmpty(sourceMock)
 	sourceMock.ExpectRollback()
 
@@ -855,6 +864,8 @@ func TestRunMigrationChecksKeepsIndependentChecksAfterCatalogSetupFailure(t *tes
 	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupTypesQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+	expectReadOnlyMigrationTransaction(mock)
 	for _, testCase := range sourceCheckTestCases {
 		if testCase.isClusterCheck || testCase.query == removedCatalogColumnViewQuery || testCase.query == removedCatalogRelationViewQuery {
 			continue
@@ -946,6 +957,39 @@ func TestRunMigrationChecksRollsBackAfterIsolationFailure(t *testing.T) {
 	}
 	if connection.Tx[0] != nil {
 		t.Fatal("The failed transaction remained installed")
+	}
+}
+
+func TestRunMigrationChecksReportsSetupCommitFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMigrationSetupQueries(mock)
+	mock.ExpectCommit().WillReturnError(errors.New("setup commit failed"))
+
+	summary := runMigrationChecks(connection, nil)
+	if summary.databaseError == nil || !strings.Contains(summary.databaseError.Error(), "setup commit failed") {
+		t.Fatalf("The setup commit failure was not reported: %v", summary.databaseError)
+	}
+	if connection.Tx[0] != nil {
+		t.Fatal("The failed setup transaction remained installed")
+	}
+}
+
+func TestRunMigrationChecksRollsBackAfterReadOnlyFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	expectMigrationSetupTransaction(mock)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(setTransactionReadOnlyQuery)).WillReturnError(errors.New("read only failed"))
+	mock.ExpectRollback()
+
+	summary := runMigrationChecks(connection, nil)
+	if summary.databaseError == nil || !strings.Contains(summary.databaseError.Error(), "read only failed") {
+		t.Fatalf("The read-only failure was not reported: %v", summary.databaseError)
+	}
+	if connection.Tx[0] != nil {
+		t.Fatal("The failed read-only transaction remained installed")
 	}
 }
 

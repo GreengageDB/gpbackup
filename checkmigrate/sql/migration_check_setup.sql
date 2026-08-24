@@ -1,4 +1,3 @@
-SET LOCAL track_counts TO off;
 CREATE OR REPLACE FUNCTION pg_temp.view_has_removed_operators(oid)
 RETURNS boolean
 AS '$libdir/pg_upgrade_support'
