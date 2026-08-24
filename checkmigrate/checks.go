@@ -231,6 +231,7 @@ func beginMigrationTransaction(connection *dbconn.DBConn) error {
 	if beginError == nil {
 		return nil
 	}
+	// DBConn.Begin can leave the transaction initialized when setting its isolation level fails.
 	if len(connection.Tx) == 0 || connection.Tx[0] == nil {
 		return beginError
 	}
@@ -402,6 +403,7 @@ func runMigrationChecks(sourceConnection *dbconn.DBConn, targetConnection *dbcon
 		}
 	}
 
+	// Database checks inspect catalogs whose contents are scoped to the current database.
 	checks := []migrationCheck{
 		{name: "multi-column LIST partitions", doRunCheck: checkMultiColumnListPartitions},
 		{name: "PL/Python 2 functions", doRunCheck: checkPlpython2DependentFunctions},

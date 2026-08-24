@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 
+	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	. "github.com/GreengageDB/gpbackup/checkmigrate"
 	"github.com/GreengageDB/gpbackup/options"
 	"github.com/spf13/cobra"
@@ -26,7 +27,11 @@ func main() {
 		Run: func(cmd *cobra.Command, args []string) {
 			DoFlagValidation(cmd)
 			defer DoTeardown()
-			DoSetup()
+			if setupError := DoSetup(); setupError != nil {
+				gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%v", setupError)
+
+				return
+			}
 			DoCheckMigrate()
 		}}
 	rootCmd.SetArgs(options.HandleSingleDashes(os.Args[1:]))

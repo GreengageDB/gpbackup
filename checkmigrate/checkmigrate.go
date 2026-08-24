@@ -30,12 +30,12 @@ func DoFlagValidation(cmd *cobra.Command) {
 }
 
 // This function handles setup that must be done after parsing flags.
-func DoSetup() {
+func DoSetup() error {
 	SetLoggerVerbosity()
 	gplog.Verbose("CheckMigrate Command: %s", os.Args)
 	gplog.Info("ggcheckmigrate version = %s", GetVersion())
 
-	CreateConnectionPool()
+	return CreateConnectionPool()
 }
 
 func DoCheckMigrate() {
@@ -67,6 +67,7 @@ func DoCheckMigrate() {
 	findingCount := 0
 	hasExecutionError := false
 
+	// Cluster checks inspect shared catalogs or settings and run once through the bootstrap connection.
 	clusterChecks := []migrationCheck{
 		{name: "resource groups", doRunCheck: checkResourceGroups},
 		{name: "incompatible storage options", doRunCheck: checkIncompatibleStorageOptions},

@@ -33,7 +33,7 @@ func SetLoggerVerbosity() {
 
 // We kind of replicate NewDBConnFromEnvironment(), but as we have
 // host/port/user flags we need to do their checking and assignment here.
-func CreateConnectionPool() {
+func CreateConnectionPool() error {
 	sourceConnectionPool = nil
 	targetConnectionPool = nil
 
@@ -76,15 +76,18 @@ func CreateConnectionPool() {
 	}
 	if sourceConnectionPool == nil {
 		gplog.SetErrorCode(5)
-		panic(sourceConnectionError)
+
+		return sourceConnectionError
 	}
 	if !sourceConnectionPool.Version.Is("6") {
 		gplog.SetErrorCode(2)
-		panic(errors.New("this utility can only check for migrate from Greengage version 6"))
+
+		return errors.New("this utility can only check for migrate from Greengage version 6")
 	}
 	if sourceConnectionPool.Version.Before("6.27.1") {
 		gplog.SetErrorCode(2)
-		panic(errors.New("this utility requires Greengage version 6.27.1 or newer"))
+
+		return errors.New("this utility requires Greengage version 6.27.1 or newer")
 	}
 
 	targetHost := options.MustGetFlagString(cmdFlags, options.TARGET_HOST)
@@ -103,11 +106,15 @@ func CreateConnectionPool() {
 		targetConnectionPool = createDBConn(targetDb, targetUser, targetHost, targetPort)
 		if connectionError := targetConnectionPool.Connect(1); connectionError != nil {
 			gplog.SetErrorCode(5)
-			panic(connectionError)
+
+			return connectionError
 		}
 		if !targetConnectionPool.Version.Is("7") {
 			gplog.SetErrorCode(3)
-			panic(errors.New("this utility can only check for migrate to Greengage version 7"))
+
+			return errors.New("this utility can only check for migrate to Greengage version 7")
 		}
 	}
+
+	return nil
 }

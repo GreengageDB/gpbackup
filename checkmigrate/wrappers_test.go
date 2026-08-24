@@ -63,7 +63,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			checkmigrate.CreateConnectionPool()
+			Expect(checkmigrate.CreateConnectionPool()).To(Succeed())
 
 			sourcePool := checkmigrate.GetSourceConnectionPool()
 			Expect(sourcePool).NotTo(BeNil())
@@ -86,7 +86,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			checkmigrate.CreateConnectionPool()
+			Expect(checkmigrate.CreateConnectionPool()).To(Succeed())
 
 			sourcePool := checkmigrate.GetSourceConnectionPool()
 			Expect(sourcePool).NotTo(BeNil())
@@ -103,7 +103,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			checkmigrate.CreateConnectionPool()
+			Expect(checkmigrate.CreateConnectionPool()).To(Succeed())
 
 			Expect(checkmigrate.GetSourceConnectionPool().Port).To(Equal(7000))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
@@ -117,7 +117,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			checkmigrate.CreateConnectionPool()
+			Expect(checkmigrate.CreateConnectionPool()).To(Succeed())
 
 			Expect(checkmigrate.GetSourceConnectionPool().Port).To(Equal(5432))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
@@ -143,7 +143,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			checkmigrate.CreateConnectionPool()
+			Expect(checkmigrate.CreateConnectionPool()).To(Succeed())
 
 			sourcePool := checkmigrate.GetSourceConnectionPool()
 			Expect(sourcePool.DBName).To(Equal("template1"))
@@ -162,7 +162,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return failingSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool).To(Panic())
+			Expect(checkmigrate.CreateConnectionPool()).To(MatchError("source connection failed (testhost:5432)"))
 			Expect(gplog.GetErrorCode()).To(Equal(5))
 		})
 
@@ -174,7 +174,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return invalidSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool).To(PanicWith(MatchError("this utility can only check for migrate from Greengage version 6")))
+			Expect(checkmigrate.CreateConnectionPool()).To(MatchError("this utility can only check for migrate from Greengage version 6"))
 			Expect(gplog.GetErrorCode()).To(Equal(2))
 			Expect(invalidSourceMock.ExpectationsWereMet()).To(Succeed())
 		})
@@ -187,7 +187,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return oldSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool).To(PanicWith(MatchError("this utility requires Greengage version 6.27.1 or newer")))
+			Expect(checkmigrate.CreateConnectionPool()).To(MatchError("this utility requires Greengage version 6.27.1 or newer"))
 			Expect(gplog.GetErrorCode()).To(Equal(2))
 			Expect(oldSourceMock.ExpectationsWereMet()).To(Succeed())
 		})
@@ -213,7 +213,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockTarget
 			})
 
-			checkmigrate.CreateConnectionPool()
+			Expect(checkmigrate.CreateConnectionPool()).To(Succeed())
 
 			targetPool := checkmigrate.GetTargetConnectionPool()
 			Expect(targetPool).NotTo(BeNil())
@@ -240,7 +240,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return failingTarget
 			})
 
-			Expect(checkmigrate.CreateConnectionPool).To(Panic())
+			Expect(checkmigrate.CreateConnectionPool()).To(MatchError("target connection failed (testhost:5432)"))
 			Expect(gplog.GetErrorCode()).To(Equal(5))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 		})
@@ -262,7 +262,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return invalidTarget
 			})
 
-			Expect(checkmigrate.CreateConnectionPool).To(PanicWith(MatchError("this utility can only check for migrate to Greengage version 7")))
+			Expect(checkmigrate.CreateConnectionPool()).To(MatchError("this utility can only check for migrate to Greengage version 7"))
 			Expect(gplog.GetErrorCode()).To(Equal(3))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 			Expect(invalidTargetMock.ExpectationsWereMet()).To(Succeed())
