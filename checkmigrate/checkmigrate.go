@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
+	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/utils"
 
 	"github.com/spf13/cobra"
@@ -26,6 +27,13 @@ func DoInit(cmd *cobra.Command) {
 // This function handles argument parsing and validation, e.g. checking that a passed filename exists.
 // It should only validate; initialization with any sort of side effects should go in DoInit or DoSetup.
 func DoFlagValidation(cmd *cobra.Command) {
+	defer func() {
+		if recoveredValue := recover(); recoveredValue != nil {
+			gplog.SetErrorCode(4)
+			panic(recoveredValue)
+		}
+	}()
+
 	ValidateFlagCombinations(cmd.Flags())
 }
 
@@ -35,22 +43,24 @@ func DoSetup() error {
 	gplog.Verbose("CheckMigrate Command: %s", os.Args)
 	gplog.Info("ggcheckmigrate version = %s", GetVersion())
 
-	return CreateConnectionPool()
+	return CreateConnections()
 }
 
 func DoCheckMigrate() {
-	if sourceConnectionPool == nil {
+	if bootstrapSourceConnection == nil {
 		gplog.SetErrorCode(5)
 		panic(errors.New("source connection is not initialized"))
 	}
 
-	databaseNames := []databaseNameResult{{DatabaseName: sourceConnectionPool.DBName}}
+	databaseNames := []databaseNameResult{{DatabaseName: bootstrapSourceConnection.DBName}}
 	if shouldScrapeDatabaseNames {
 		gplog.Debug("Starting source database enumeration")
 		databaseNames = make([]databaseNameResult, 0)
-		if queryError := sourceConnectionPool.Select(&databaseNames, sourceDatabaseNamesQuery); queryError != nil {
+		if queryError := bootstrapSourceConnection.Select(&databaseNames, sourceDatabaseNamesQuery); queryError != nil {
+			gplog.Error("Source database enumeration failed with %v", queryError)
 			gplog.SetErrorCode(5)
-			panic(queryError)
+
+			return
 		}
 		gplog.Debug("Completed source database enumeration with %d databases", len(databaseNames))
 	}
@@ -73,7 +83,7 @@ func DoCheckMigrate() {
 		{name: "incompatible storage options", doRunCheck: checkIncompatibleStorageOptions},
 		{name: "removed GUC settings", doRunCheck: checkRemovedGUCSettings},
 	}
-	clusterSummary := runClusterChecks(sourceConnectionPool, clusterChecks)
+	clusterSummary := runClusterChecks(bootstrapSourceConnection, clusterChecks)
 	completedClusterCheckCount = clusterSummary.completedCheckCount
 	failedClusterCheckCount = clusterSummary.failedCheckCount
 	findingCount += clusterSummary.findingCount
@@ -87,29 +97,45 @@ func DoCheckMigrate() {
 
 	for _, database := range databaseNames {
 		gplog.Debug("Starting checks for database %q", database.DatabaseName)
-		sourceConnection := sourceConnectionPool
+		databaseConnection := bootstrapSourceConnection
 		shouldCloseConnection := false
-		if database.DatabaseName != sourceConnectionPool.DBName {
-			sourceConnection = createDBConn(database.DatabaseName, sourceConnectionPool.User, sourceConnectionPool.Host, sourceConnectionPool.Port)
-			if connectError := sourceConnection.Connect(1); connectError != nil {
-				sourceConnection.Close()
+		if database.DatabaseName != bootstrapSourceConnection.DBName {
+			databaseConnection = createDBConn(
+				database.DatabaseName,
+				bootstrapSourceConnection.User,
+				bootstrapSourceConnection.Host,
+				bootstrapSourceConnection.Port,
+			)
+			if connectError := databaseConnection.Connect(1); connectError != nil {
+				databaseConnection.Close()
 				unreachableDatabaseCount++
 				hasExecutionError = true
-				gplog.Error("Database %q could not be checked because its connection failed with %v", database.DatabaseName, connectError)
-				gplog.Debug("Completed checks for database %q with a connection failure", database.DatabaseName)
+				gplog.Error(
+					"Database %q could not be checked because its connection failed with %v",
+					database.DatabaseName,
+					connectError,
+				)
+				gplog.Debug(
+					"Completed checks for database %q with a connection failure",
+					database.DatabaseName,
+				)
 
 				continue
 			}
 			shouldCloseConnection = true
 		}
 
-		databaseSummary := runMigrationChecks(sourceConnection, targetConnectionPool)
+		databaseSummary := runMigrationChecks(databaseConnection, targetConnection)
 		if shouldCloseConnection {
-			sourceConnection.Close()
+			databaseConnection.Close()
 		}
 		if databaseSummary.databaseError != nil {
 			hasExecutionError = true
-			gplog.Error("Database %q could not complete its checks with %v", database.DatabaseName, databaseSummary.databaseError)
+			gplog.Error(
+				"Database %q could not complete its checks with %v",
+				database.DatabaseName,
+				databaseSummary.databaseError,
+			)
 		}
 		if databaseSummary.completedCheckCount > 0 {
 			checkedDatabaseCount++
@@ -123,19 +149,46 @@ func DoCheckMigrate() {
 		if databaseSummary.failedCheckCount > 0 || databaseSummary.unavailableCheckCount > 0 {
 			hasExecutionError = true
 		}
-		gplog.Debug("Completed checks for database %q with %d completed checks, %d failed checks, %d unavailable checks, and %d findings", database.DatabaseName, databaseSummary.completedCheckCount, databaseSummary.failedCheckCount, databaseSummary.unavailableCheckCount, databaseSummary.findingCount)
+		gplog.Debug(
+			"Completed checks for database %q with %d completed checks, %d failed checks, %d unavailable checks, and %d findings",
+			database.DatabaseName,
+			databaseSummary.completedCheckCount,
+			databaseSummary.failedCheckCount,
+			databaseSummary.unavailableCheckCount,
+			databaseSummary.findingCount,
+		)
 	}
 
 	summaryShellVerbosity := gplog.LOGINFO
 	if findingCount > 0 || hasExecutionError {
 		summaryShellVerbosity = gplog.LOGERROR
 	}
-	gplog.Custom(gplog.LOGINFO, summaryShellVerbosity, "Summary contains %d enumerated databases, %d checked databases, %d unreachable databases, %d unavailable databases, %d completed cluster checks, %d failed cluster checks, %d completed database checks, %d failed database checks, %d unavailable database checks, and %d findings", enumeratedDatabaseCount, checkedDatabaseCount, unreachableDatabaseCount, unavailableDatabaseCount, completedClusterCheckCount, failedClusterCheckCount, completedDatabaseCheckCount, failedDatabaseCheckCount, unavailableDatabaseCheckCount, findingCount)
+	gplog.Custom(
+		gplog.LOGINFO,
+		summaryShellVerbosity,
+		"Summary contains %d enumerated databases, %d checked databases, %d unreachable databases, "+
+			"%d unavailable databases, %d completed cluster checks, %d failed cluster checks, "+
+			"%d completed database checks, %d failed database checks, %d unavailable database checks, "+
+			"and %d findings",
+		enumeratedDatabaseCount,
+		checkedDatabaseCount,
+		unreachableDatabaseCount,
+		unavailableDatabaseCount,
+		completedClusterCheckCount,
+		failedClusterCheckCount,
+		completedDatabaseCheckCount,
+		failedDatabaseCheckCount,
+		unavailableDatabaseCheckCount,
+		findingCount,
+	)
 
 	if hasExecutionError {
 		gplog.SetErrorCode(5)
 	} else if findingCount > 0 {
 		gplog.SetErrorCode(1)
+	}
+	if shouldScrapeDatabaseNames && enumeratedDatabaseCount == 0 {
+		gplog.Warn("No --%s was specified. Only basic check was performed.", options.SOURCE_DATABASE)
 	}
 }
 
@@ -194,11 +247,11 @@ func DoCleanup(didCheckmigrateFail bool) {
 
 		gplog.Info("Beginning cleanup")
 
-		if sourceConnectionPool != nil {
-			sourceConnectionPool.Close()
+		if bootstrapSourceConnection != nil {
+			bootstrapSourceConnection.Close()
 		}
-		if targetConnectionPool != nil {
-			targetConnectionPool.Close()
+		if targetConnection != nil {
+			targetConnection.Close()
 		}
 	})
 }

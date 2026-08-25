@@ -12,11 +12,11 @@ import (
 
 // Non-flag variables
 var (
-	sourceConnectionPool *dbconn.DBConn
-	targetConnectionPool *dbconn.DBConn
-	version              string
-	wasTerminated        atomic.Bool
-	cleanupOnce          sync.Once
+	bootstrapSourceConnection *dbconn.DBConn
+	targetConnection          *dbconn.DBConn
+	version                   string
+	wasTerminated             atomic.Bool
+	cleanupOnce               sync.Once
 
 	shouldScrapeDatabaseNames bool
 
@@ -51,12 +51,12 @@ func GetVersion() string {
 	return version
 }
 
-func GetSourceConnectionPool() *dbconn.DBConn {
-	return sourceConnectionPool
+func GetSourceConnection() *dbconn.DBConn {
+	return bootstrapSourceConnection
 }
 
-func GetTargetConnectionPool() *dbconn.DBConn {
-	return targetConnectionPool
+func GetTargetConnection() *dbconn.DBConn {
+	return targetConnection
 }
 
 func GetShouldScrapeDatabaseNames() bool {
@@ -65,8 +65,8 @@ func GetShouldScrapeDatabaseNames() bool {
 
 // ResetGlobalState() clears the global variables before each test
 func ResetGlobalState() {
-	sourceConnectionPool = nil
-	targetConnectionPool = nil
+	bootstrapSourceConnection = nil
+	targetConnection = nil
 	shouldScrapeDatabaseNames = false
 }
 

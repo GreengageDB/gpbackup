@@ -17,7 +17,7 @@ import (
 )
 
 var _ = Describe("checkmigrate wrapper tests", func() {
-	Describe("CreateConnectionPool", func() {
+	Describe("CreateConnections", func() {
 		var (
 			mockSource *dbconn.DBConn
 			mockTarget *dbconn.DBConn
@@ -63,13 +63,13 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool()).To(Succeed())
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
 
-			sourcePool := checkmigrate.GetSourceConnectionPool()
-			Expect(sourcePool).NotTo(BeNil())
-			Expect(sourcePool.Port).To(Equal(5432))
-			Expect(sourcePool.DBName).To(Equal("postgres"))
-			Expect(sourcePool.User).To(Equal("test_os_user"))
+			sourceConnection := checkmigrate.GetSourceConnection()
+			Expect(sourceConnection).NotTo(BeNil())
+			Expect(sourceConnection.Port).To(Equal(5432))
+			Expect(sourceConnection.DBName).To(Equal("postgres"))
+			Expect(sourceConnection.User).To(Equal("test_os_user"))
 			Expect(checkmigrate.GetShouldScrapeDatabaseNames()).To(BeTrue())
 
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
@@ -86,11 +86,11 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool()).To(Succeed())
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
 
-			sourcePool := checkmigrate.GetSourceConnectionPool()
-			Expect(sourcePool).NotTo(BeNil())
-			Expect(sourcePool.Port).To(Equal(6000))
+			sourceConnection := checkmigrate.GetSourceConnection()
+			Expect(sourceConnection).NotTo(BeNil())
+			Expect(sourceConnection.Port).To(Equal(6000))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 		})
 
@@ -103,9 +103,9 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool()).To(Succeed())
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
 
-			Expect(checkmigrate.GetSourceConnectionPool().Port).To(Equal(7000))
+			Expect(checkmigrate.GetSourceConnection().Port).To(Equal(7000))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 		})
 
@@ -117,9 +117,9 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool()).To(Succeed())
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
 
-			Expect(checkmigrate.GetSourceConnectionPool().Port).To(Equal(5432))
+			Expect(checkmigrate.GetSourceConnection().Port).To(Equal(5432))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 		})
 
@@ -143,12 +143,12 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool()).To(Succeed())
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
 
-			sourcePool := checkmigrate.GetSourceConnectionPool()
-			Expect(sourcePool.DBName).To(Equal("template1"))
-			Expect(sourcePool.User).To(Equal("test_os_user"))
-			Expect(sourcePool.Port).To(Equal(5432))
+			sourceConnection := checkmigrate.GetSourceConnection()
+			Expect(sourceConnection.DBName).To(Equal("template1"))
+			Expect(sourceConnection.User).To(Equal("test_os_user"))
+			Expect(sourceConnection.Port).To(Equal(5432))
 			Expect(checkmigrate.GetShouldScrapeDatabaseNames()).To(BeTrue())
 			Expect(connectionCount).To(Equal(2))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
@@ -162,7 +162,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return failingSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool()).To(MatchError("source connection failed (testhost:5432)"))
+			Expect(checkmigrate.CreateConnections()).To(MatchError("source connection failed (testhost:5432)"))
 			Expect(gplog.GetErrorCode()).To(Equal(5))
 		})
 
@@ -174,7 +174,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return invalidSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool()).To(MatchError("this utility can only check for migrate from Greengage version 6"))
+			Expect(checkmigrate.CreateConnections()).To(MatchError("this utility can only check for migrate from Greengage version 6"))
 			Expect(gplog.GetErrorCode()).To(Equal(2))
 			Expect(invalidSourceMock.ExpectationsWereMet()).To(Succeed())
 		})
@@ -187,7 +187,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return oldSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool()).To(MatchError("this utility requires Greengage version 6.27.1 or newer"))
+			Expect(checkmigrate.CreateConnections()).To(MatchError("this utility requires Greengage version 6.27.1 or newer"))
 			Expect(gplog.GetErrorCode()).To(Equal(2))
 			Expect(oldSourceMock.ExpectationsWereMet()).To(Succeed())
 		})
@@ -213,12 +213,12 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockTarget
 			})
 
-			Expect(checkmigrate.CreateConnectionPool()).To(Succeed())
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
 
-			targetPool := checkmigrate.GetTargetConnectionPool()
-			Expect(targetPool).NotTo(BeNil())
-			Expect(targetPool.Host).To(Equal("localhost"))
-			Expect(targetPool.Port).To(Equal(7000))
+			targetConnection := checkmigrate.GetTargetConnection()
+			Expect(targetConnection).NotTo(BeNil())
+			Expect(targetConnection.Host).To(Equal("localhost"))
+			Expect(targetConnection.Port).To(Equal(7000))
 
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 			Expect(targetMock.ExpectationsWereMet()).To(Succeed())
@@ -240,7 +240,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return failingTarget
 			})
 
-			Expect(checkmigrate.CreateConnectionPool()).To(MatchError("target connection failed (testhost:5432)"))
+			Expect(checkmigrate.CreateConnections()).To(MatchError("target connection failed (testhost:5432)"))
 			Expect(gplog.GetErrorCode()).To(Equal(5))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 		})
@@ -262,7 +262,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return invalidTarget
 			})
 
-			Expect(checkmigrate.CreateConnectionPool()).To(MatchError("this utility can only check for migrate to Greengage version 7"))
+			Expect(checkmigrate.CreateConnections()).To(MatchError("this utility can only check for migrate to Greengage version 7"))
 			Expect(gplog.GetErrorCode()).To(Equal(3))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 			Expect(invalidTargetMock.ExpectationsWereMet()).To(Succeed())

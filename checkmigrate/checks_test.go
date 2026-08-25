@@ -11,6 +11,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
+	"github.com/GreengageDB/gpbackup/options"
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
 )
@@ -631,14 +632,14 @@ func TestMissingAOOptionsUseImmediateAOParents(t *testing.T) {
 
 func TestDoCheckMigrateChecksRequiredLibrariesBeforeSourceChecks(t *testing.T) {
 	sourceConnection, sourceMock, _ := setupCheckTest(t)
-	targetConnection, targetMock, _, stderr, _ := testhelper.SetupTestEnvironment()
-	targetConnection.DBName = "target_database"
-	sourceConnectionPool = sourceConnection
-	targetConnectionPool = targetConnection
-	t.Cleanup(targetConnection.Close)
+	targetDatabaseConnection, targetMock, _, stderr, _ := testhelper.SetupTestEnvironment()
+	targetDatabaseConnection.DBName = "target_database"
+	bootstrapSourceConnection = sourceConnection
+	targetConnection = targetDatabaseConnection
+	t.Cleanup(targetDatabaseConnection.Close)
 	t.Cleanup(func() {
-		sourceConnectionPool = nil
-		targetConnectionPool = nil
+		bootstrapSourceConnection = nil
+		targetConnection = nil
 	})
 	t.Cleanup(func() {
 		if err := targetMock.ExpectationsWereMet(); err != nil {
@@ -670,10 +671,10 @@ func TestDoCheckMigrateChecksRequiredLibrariesBeforeSourceChecks(t *testing.T) {
 
 func TestDoCheckMigrateReturnsZeroForCleanSource(t *testing.T) {
 	connection, mock, stderr := setupCheckTest(t)
-	sourceConnectionPool = connection
-	targetConnectionPool = nil
+	bootstrapSourceConnection = connection
+	targetConnection = nil
 	t.Cleanup(func() {
-		sourceConnectionPool = nil
+		bootstrapSourceConnection = nil
 	})
 
 	expectClusterChecksEmpty(mock)
@@ -706,8 +707,8 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 			t.Errorf("The application database SQL expectations were not met with %v", err)
 		}
 	})
-	sourceConnectionPool = connection
-	targetConnectionPool = nil
+	bootstrapSourceConnection = connection
+	targetConnection = nil
 	shouldScrapeDatabaseNames = true
 	originalCreateDBConn := createDBConn
 	createDBConn = func(dbName, username, host string, port int) *dbconn.DBConn {
@@ -719,7 +720,7 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 		return applicationConnection
 	}
 	t.Cleanup(func() {
-		sourceConnectionPool = nil
+		bootstrapSourceConnection = nil
 		shouldScrapeDatabaseNames = false
 		createDBConn = originalCreateDBConn
 	})
@@ -772,31 +773,70 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 }
 
 func TestDoCheckMigrateReportsDatabaseEnumerationFailure(t *testing.T) {
-	connection, mock, _ := setupCheckTest(t)
-	sourceConnectionPool = connection
-	targetConnectionPool = nil
+	connection, mock, stderr := setupCheckTest(t)
+	bootstrapSourceConnection = connection
+	targetConnection = nil
 	shouldScrapeDatabaseNames = true
 	t.Cleanup(func() {
-		sourceConnectionPool = nil
+		bootstrapSourceConnection = nil
 		shouldScrapeDatabaseNames = false
 	})
 
 	mock.ExpectQuery(regexp.QuoteMeta(sourceDatabaseNamesQuery)).WillReturnError(errors.New("database enumeration failed"))
 
-	if recoveredValue := callDoCheckMigrate(); recoveredValue == nil {
-		t.Fatal("DoCheckMigrate did not panic for a database enumeration failure")
+	if recoveredValue := callDoCheckMigrate(); recoveredValue != nil {
+		t.Fatalf("DoCheckMigrate panicked with %v", recoveredValue)
 	}
 	if gplog.GetErrorCode() != 5 {
 		t.Fatalf("The database enumeration failure returned exit code %d", gplog.GetErrorCode())
+	}
+	if !strings.Contains(string(stderr.Contents()), "Source database enumeration failed with database enumeration failed") {
+		t.Fatalf("The database enumeration failure was not printed in %q", stderr.Contents())
+	}
+}
+
+func TestDoCheckMigrateWarnsWhenNoSourceDatabasesAreEnumerated(t *testing.T) {
+	gomega.RegisterTestingT(t)
+	connection, mock, stdout, _, _ := testhelper.SetupTestEnvironment()
+	connection.DBName = "source_database"
+	gplog.SetErrorCode(0)
+	t.Cleanup(connection.Close)
+	t.Cleanup(func() {
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("The SQL expectations were not met with %v", err)
+		}
+	})
+	bootstrapSourceConnection = connection
+	targetConnection = nil
+	shouldScrapeDatabaseNames = true
+	t.Cleanup(func() {
+		bootstrapSourceConnection = nil
+		shouldScrapeDatabaseNames = false
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta(sourceDatabaseNamesQuery)).WillReturnRows(
+		sqlmock.NewRows([]string{"database_name"}),
+	)
+	expectClusterChecksEmpty(mock)
+
+	if recoveredValue := callDoCheckMigrate(); recoveredValue != nil {
+		t.Fatalf("DoCheckMigrate panicked with %v", recoveredValue)
+	}
+	if gplog.GetErrorCode() != 0 {
+		t.Fatalf("The zero-database run returned exit code %d", gplog.GetErrorCode())
+	}
+	expectedWarning := "No --" + options.SOURCE_DATABASE + " was specified. Only basic check was performed."
+	if !strings.Contains(string(stdout.Contents()), expectedWarning) {
+		t.Fatalf("The zero-database run did not print %q in %q", expectedWarning, stdout.Contents())
 	}
 }
 
 func TestDoCheckMigrateContinuesAfterFinding(t *testing.T) {
 	connection, mock, stderr := setupCheckTest(t)
-	sourceConnectionPool = connection
-	targetConnectionPool = nil
+	bootstrapSourceConnection = connection
+	targetConnection = nil
 	t.Cleanup(func() {
-		sourceConnectionPool = nil
+		bootstrapSourceConnection = nil
 	})
 
 	expectClusterChecksEmpty(mock)
@@ -828,10 +868,10 @@ func TestDoCheckMigrateContinuesAfterFinding(t *testing.T) {
 
 func TestDoCheckMigrateReportsCheckSavepointReleaseFailure(t *testing.T) {
 	connection, mock, _ := setupCheckTest(t)
-	sourceConnectionPool = connection
-	targetConnectionPool = nil
+	bootstrapSourceConnection = connection
+	targetConnection = nil
 	t.Cleanup(func() {
-		sourceConnectionPool = nil
+		bootstrapSourceConnection = nil
 	})
 
 	expectClusterChecksEmpty(mock)
@@ -887,10 +927,10 @@ func TestRunMigrationChecksKeepsIndependentChecksAfterCatalogSetupFailure(t *tes
 
 func TestDoCheckMigrateReportsSetupSavepointReleaseFailure(t *testing.T) {
 	connection, mock, _ := setupCheckTest(t)
-	sourceConnectionPool = connection
-	targetConnectionPool = nil
+	bootstrapSourceConnection = connection
+	targetConnection = nil
 	t.Cleanup(func() {
-		sourceConnectionPool = nil
+		bootstrapSourceConnection = nil
 	})
 
 	expectClusterChecksEmpty(mock)
@@ -911,10 +951,10 @@ func TestDoCheckMigrateReportsSetupSavepointReleaseFailure(t *testing.T) {
 
 func TestDoCheckMigrateOverridesFindingWithQueryFailure(t *testing.T) {
 	connection, mock, _ := setupCheckTest(t)
-	sourceConnectionPool = connection
-	targetConnectionPool = nil
+	bootstrapSourceConnection = connection
+	targetConnection = nil
 	t.Cleanup(func() {
-		sourceConnectionPool = nil
+		bootstrapSourceConnection = nil
 	})
 
 	expectClusterChecksEmpty(mock)
@@ -1013,10 +1053,10 @@ func TestRunClusterChecksRollsBackAfterIsolationFailure(t *testing.T) {
 
 func TestDoCheckMigrateReportsRollbackFailure(t *testing.T) {
 	connection, mock, _ := setupCheckTest(t)
-	sourceConnectionPool = connection
-	targetConnectionPool = nil
+	bootstrapSourceConnection = connection
+	targetConnection = nil
 	t.Cleanup(func() {
-		sourceConnectionPool = nil
+		bootstrapSourceConnection = nil
 	})
 
 	expectClusterChecksEmpty(mock)
@@ -1048,8 +1088,8 @@ func TestDoCheckMigrateContinuesAfterDatabaseConnectionFailure(t *testing.T) {
 			t.Errorf("The working database SQL expectations were not met with %v", err)
 		}
 	})
-	sourceConnectionPool = connection
-	targetConnectionPool = nil
+	bootstrapSourceConnection = connection
+	targetConnection = nil
 	shouldScrapeDatabaseNames = true
 	originalCreateDBConn := createDBConn
 	createDBConn = func(dbName, username, host string, port int) *dbconn.DBConn {
@@ -1061,7 +1101,7 @@ func TestDoCheckMigrateContinuesAfterDatabaseConnectionFailure(t *testing.T) {
 		return workingConnection
 	}
 	t.Cleanup(func() {
-		sourceConnectionPool = nil
+		bootstrapSourceConnection = nil
 		shouldScrapeDatabaseNames = false
 		createDBConn = originalCreateDBConn
 	})

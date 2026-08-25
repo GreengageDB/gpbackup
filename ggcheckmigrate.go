@@ -13,20 +13,14 @@ import (
 )
 
 func main() {
-	defer func() {
-		if recover() != nil {
-			os.Exit(4)
-		}
-	}()
-
 	var rootCmd = &cobra.Command{
 		Use:     "ggcheckmigrate",
 		Short:   "ggcheckmigrate is the utility to check migration ability for Greengage",
 		Args:    cobra.NoArgs,
 		Version: GetVersion(),
 		Run: func(cmd *cobra.Command, args []string) {
-			DoFlagValidation(cmd)
 			defer DoTeardown()
+			DoFlagValidation(cmd)
 			if setupError := DoSetup(); setupError != nil {
 				gplog.Custom(gplog.LOGERROR, gplog.LOGERROR, "%v", setupError)
 

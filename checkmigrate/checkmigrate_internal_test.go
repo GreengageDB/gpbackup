@@ -19,8 +19,8 @@ func TestDoCleanupRunsOnce(t *testing.T) {
 	CleanupGroup = &sync.WaitGroup{}
 	CleanupGroup.Add(1)
 	cleanupOnce = sync.Once{}
-	sourceConnectionPool = nil
-	targetConnectionPool = nil
+	bootstrapSourceConnection = nil
+	targetConnection = nil
 
 	var callers sync.WaitGroup
 	callers.Add(2)

@@ -132,6 +132,11 @@ parameter_exit_code=0
 if [[ ${parameter_exit_code} -ne 4 ]]; then
   fail_with_output "The check with a target host and no target port" 4 "${parameter_exit_code}"
 fi
+if ! grep -Fq 'both -H and -P options must be provided to check the target cluster' "${output_path}"; then
+  echo "The parameter failure does not explain the invalid target options" >&2
+  cat "${output_path}" >&2
+  exit 1
+fi
 
 execution_exit_code=0
 "${binary_path}" \

@@ -33,9 +33,9 @@ func SetLoggerVerbosity() {
 
 // We kind of replicate NewDBConnFromEnvironment(), but as we have
 // host/port/user flags we need to do their checking and assignment here.
-func CreateConnectionPool() error {
-	sourceConnectionPool = nil
-	targetConnectionPool = nil
+func CreateConnections() error {
+	bootstrapSourceConnection = nil
+	targetConnection = nil
 
 	sourceHost := options.MustGetFlagString(cmdFlags, options.SOURCE_HOST)
 	sourcePort := options.MustGetFlagInt(cmdFlags, options.SOURCE_PORT)
@@ -66,25 +66,25 @@ func CreateConnectionPool() error {
 
 	var sourceConnectionError error
 	for _, sourceDatabaseName := range sourceDatabaseNames {
-		sourceConnection := createDBConn(sourceDatabaseName, sourceUser, sourceHost, sourcePort)
-		sourceConnectionError = sourceConnection.Connect(1)
+		candidateSourceConnection := createDBConn(sourceDatabaseName, sourceUser, sourceHost, sourcePort)
+		sourceConnectionError = candidateSourceConnection.Connect(1)
 		if sourceConnectionError == nil {
-			sourceConnectionPool = sourceConnection
+			bootstrapSourceConnection = candidateSourceConnection
 			break
 		}
-		sourceConnection.Close()
+		candidateSourceConnection.Close()
 	}
-	if sourceConnectionPool == nil {
+	if bootstrapSourceConnection == nil {
 		gplog.SetErrorCode(5)
 
 		return sourceConnectionError
 	}
-	if !sourceConnectionPool.Version.Is("6") {
+	if !bootstrapSourceConnection.Version.Is("6") {
 		gplog.SetErrorCode(2)
 
 		return errors.New("this utility can only check for migrate from Greengage version 6")
 	}
-	if sourceConnectionPool.Version.Before("6.27.1") {
+	if bootstrapSourceConnection.Version.Before("6.27.1") {
 		gplog.SetErrorCode(2)
 
 		return errors.New("this utility requires Greengage version 6.27.1 or newer")
@@ -103,13 +103,13 @@ func CreateConnectionPool() error {
 	}
 
 	if targetHost != "" && targetPort != 0 {
-		targetConnectionPool = createDBConn(targetDb, targetUser, targetHost, targetPort)
-		if connectionError := targetConnectionPool.Connect(1); connectionError != nil {
+		targetConnection = createDBConn(targetDb, targetUser, targetHost, targetPort)
+		if connectionError := targetConnection.Connect(1); connectionError != nil {
 			gplog.SetErrorCode(5)
 
 			return connectionError
 		}
-		if !targetConnectionPool.Version.Is("7") {
+		if !targetConnection.Version.Is("7") {
 			gplog.SetErrorCode(3)
 
 			return errors.New("this utility can only check for migrate to Greengage version 7")
