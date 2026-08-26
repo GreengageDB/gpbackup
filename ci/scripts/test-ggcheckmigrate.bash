@@ -84,6 +84,27 @@ fail_with_output() {
 if [[ $("${source_psql[@]}" postgres -Atc "SELECT count(*) FROM pg_catalog.pg_resgroup WHERE rsgname = 'ggcheckmigrate_fixture_group'") -gt 0 ]]; then
   "${source_psql[@]}" postgres -c "DROP RESOURCE GROUP ggcheckmigrate_fixture_group"
 fi
+
+all_database_exit_code=0
+all_database_command=(
+  "${binary_path}"
+  --source-host "${source_host}"
+  --source-port "${source_port}"
+  --source-user "${source_user}"
+  --debug
+)
+"${all_database_command[@]}" >"${output_path}" 2>&1 || all_database_exit_code=$?
+if [[ ${all_database_exit_code} -gt 1 ]]; then
+  fail_with_output "The check of all connectable databases" "0 or 1" "${all_database_exit_code}"
+fi
+for expected_database in postgres template1; do
+  if ! grep -Fq "Starting checks for database \"${expected_database}\"" "${output_path}"; then
+    echo "The fresh cluster run did not check ${expected_database}" >&2
+    cat "${output_path}" >&2
+    exit 1
+  fi
+done
+
 "${source_psql[@]}" postgres -c "CREATE DATABASE ${database_name}"
 "${source_psql[@]}" postgres -c "CREATE DATABASE ${enumeration_database_name}"
 cleanup_fixture() {
@@ -105,20 +126,8 @@ run_check >"${output_path}" 2>&1 || clean_exit_code=$?
 if [[ ${clean_exit_code} -ne 0 ]]; then
   fail_with_output "The check of an empty database" 0 "${clean_exit_code}"
 fi
-
-all_database_exit_code=0
-all_database_command=(
-  "${binary_path}"
-  --source-host "${source_host}"
-  --source-port "${source_port}"
-  --source-user "${source_user}"
-)
-"${all_database_command[@]}" >"${output_path}" 2>&1 || all_database_exit_code=$?
-if [[ ${all_database_exit_code} -gt 1 ]]; then
-  fail_with_output "The check of all connectable databases" "0 or 1" "${all_database_exit_code}"
-fi
-if ! grep -Eq 'Summary contains ([2-9]|[1-9][0-9]+) enumerated databases' "${output_path}"; then
-  echo "The all-database summary does not include multiple databases" >&2
+if ! grep -Fq 'CheckMigrate completed successfully with exit code 0' "${output_path}"; then
+  echo "The successful run did not log exit code 0" >&2
   cat "${output_path}" >&2
   exit 1
 fi
@@ -137,6 +146,11 @@ if ! grep -Fq 'both -H and -P options must be provided to check the target clust
   cat "${output_path}" >&2
   exit 1
 fi
+if ! grep -Fq 'CheckMigrate completed with exit code 4' "${output_path}"; then
+  echo "The parameter failure did not log exit code 4" >&2
+  cat "${output_path}" >&2
+  exit 1
+fi
 
 execution_exit_code=0
 "${binary_path}" \
@@ -146,6 +160,16 @@ execution_exit_code=0
   >"${output_path}" 2>&1 || execution_exit_code=$?
 if [[ ${execution_exit_code} -ne 5 ]]; then
   fail_with_output "The check against an unreachable source port" 5 "${execution_exit_code}"
+fi
+if ! grep -Fq '[ERROR]' "${output_path}"; then
+  echo "The connection failure did not print an error" >&2
+  cat "${output_path}" >&2
+  exit 1
+fi
+if ! grep -Fq 'CheckMigrate completed with exit code 5' "${output_path}"; then
+  echo "The connection failure did not log exit code 5" >&2
+  cat "${output_path}" >&2
+  exit 1
 fi
 
 "${source_psql[@]}" "${database_name}" <<'SQL'
@@ -310,6 +334,11 @@ finding_exit_code=0
 run_check >"${output_path}" 2>&1 || finding_exit_code=$?
 if [[ ${finding_exit_code} -ne 1 ]]; then
   fail_with_output "The check of a database with known problems" 1 "${finding_exit_code}"
+fi
+if ! grep -Fq 'CheckMigrate completed with exit code 1' "${output_path}"; then
+  echo "The finding run did not log exit code 1" >&2
+  cat "${output_path}" >&2
+  exit 1
 fi
 
 for expected_text in \

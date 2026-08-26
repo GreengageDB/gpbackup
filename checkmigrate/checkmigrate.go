@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
-	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/utils"
 
 	"github.com/spf13/cobra"
@@ -62,6 +61,16 @@ func DoCheckMigrate() {
 
 			return
 		}
+		if len(databaseNames) == 0 {
+			databaseNames = append(
+				databaseNames,
+				databaseNameResult{DatabaseName: bootstrapSourceConnection.DBName},
+			)
+			gplog.Warn(
+				"Source database enumeration returned no rows. Database %q will be checked.",
+				bootstrapSourceConnection.DBName,
+			)
+		}
 		gplog.Debug("Completed source database enumeration with %d databases", len(databaseNames))
 	}
 
@@ -77,12 +86,6 @@ func DoCheckMigrate() {
 	findingCount := 0
 	hasExecutionError := false
 
-	// Cluster checks inspect shared catalogs or settings and run once through the bootstrap connection.
-	clusterChecks := []migrationCheck{
-		{name: "resource groups", doRunCheck: checkResourceGroups},
-		{name: "incompatible storage options", doRunCheck: checkIncompatibleStorageOptions},
-		{name: "removed GUC settings", doRunCheck: checkRemovedGUCSettings},
-	}
 	clusterSummary := runClusterChecks(bootstrapSourceConnection, clusterChecks)
 	completedClusterCheckCount = clusterSummary.completedCheckCount
 	failedClusterCheckCount = clusterSummary.failedCheckCount
@@ -150,7 +153,8 @@ func DoCheckMigrate() {
 			hasExecutionError = true
 		}
 		gplog.Debug(
-			"Completed checks for database %q with %d completed checks, %d failed checks, %d unavailable checks, and %d findings",
+			"Completed checks for database %q with %d completed checks, %d failed checks, "+
+				"%d unavailable checks, and %d findings",
 			database.DatabaseName,
 			databaseSummary.completedCheckCount,
 			databaseSummary.failedCheckCount,
@@ -187,9 +191,6 @@ func DoCheckMigrate() {
 	} else if findingCount > 0 {
 		gplog.SetErrorCode(1)
 	}
-	if shouldScrapeDatabaseNames && enumeratedDatabaseCount == 0 {
-		gplog.Warn("No --%s was specified. Only basic check was performed.", options.SOURCE_DATABASE)
-	}
 }
 
 func DoTeardown() {
@@ -204,7 +205,9 @@ func DoTeardown() {
 
 		errorCode := gplog.GetErrorCode()
 		if errorCode == 0 {
-			gplog.Info("CheckMigrate completed successfully")
+			gplog.Info("CheckMigrate completed successfully with exit code %d", errorCode)
+		} else {
+			gplog.Info("CheckMigrate completed with exit code %d", errorCode)
 		}
 		os.Exit(errorCode)
 

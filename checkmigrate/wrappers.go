@@ -42,7 +42,8 @@ func CreateConnections() error {
 	sourceDb := options.MustGetFlagString(cmdFlags, options.SOURCE_DATABASE)
 	sourceUser := options.MustGetFlagString(cmdFlags, options.SOURCE_USER)
 
-	if environmentPort := operating.System.Getenv("PGPORT"); !cmdFlags.Changed(options.SOURCE_PORT) && environmentPort != "" {
+	environmentPort := operating.System.Getenv("PGPORT")
+	if !cmdFlags.Changed(options.SOURCE_PORT) && environmentPort != "" {
 		parsedPort, conversionError := strconv.Atoi(environmentPort)
 		if conversionError == nil {
 			sourcePort = parsedPort

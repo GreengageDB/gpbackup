@@ -3,6 +3,7 @@ package checkmigrate
 import (
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -11,7 +12,6 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
-	"github.com/GreengageDB/gpbackup/options"
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
 )
@@ -36,8 +36,8 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"sales", "orders"}, {"warehouse", "inventory"}},
 		problemText: "partitioned tables with a LIST partition key containing multiple columns",
 		expectedObjects: []string{
-			`object "orders" of type "partitioned table" in schema "sales"`,
-			`object "inventory" of type "partitioned table" in schema "warehouse"`,
+			`Object "orders" has type "partitioned table" in schema "sales"`,
+			`Object "inventory" has type "partitioned table" in schema "warehouse"`,
 		},
 	},
 	{
@@ -48,8 +48,8 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"analytics", "forecast", "integer"}, {"public", "legacy_python", "text, integer"}},
 		problemText: "PL/Python functions that rely on Python 2",
 		expectedObjects: []string{
-			`object "forecast" of type "function" in schema "analytics"`,
-			`object "legacy_python" of type "function" in schema "public"`,
+			`Object "forecast" has type "function" in schema "analytics"`,
+			`Object "legacy_python" has type "function" in schema "public"`,
 			`identity arguments are "integer"`,
 			`identity arguments are "text, integer"`,
 		},
@@ -62,8 +62,8 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "operator_view", "v"}, {"reports", "operator_materialized_view", "m"}},
 		problemText: "views that use removed operators",
 		expectedObjects: []string{
-			`object "operator_view" of type "view" in schema "public"`,
-			`object "operator_materialized_view" of type "materialized view" in schema "reports"`,
+			`Object "operator_view" has type "view" in schema "public"`,
+			`Object "operator_materialized_view" has type "materialized view" in schema "reports"`,
 		},
 	},
 	{
@@ -74,8 +74,8 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "function_view", "v"}, {"reports", "function_materialized_view", "m"}},
 		problemText: "views that use removed functions",
 		expectedObjects: []string{
-			`object "function_view" of type "view" in schema "public"`,
-			`object "function_materialized_view" of type "materialized view" in schema "reports"`,
+			`Object "function_view" has type "view" in schema "public"`,
+			`Object "function_materialized_view" has type "materialized view" in schema "reports"`,
 		},
 	},
 	{
@@ -86,8 +86,8 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "type_view", "v"}, {"reports", "type_materialized_view", "m"}},
 		problemText: "views that use removed types",
 		expectedObjects: []string{
-			`object "type_view" of type "view" in schema "public"`,
-			`object "type_materialized_view" of type "materialized view" in schema "reports"`,
+			`Object "type_view" has type "view" in schema "public"`,
+			`Object "type_materialized_view" has type "materialized view" in schema "reports"`,
 		},
 	},
 	{
@@ -98,7 +98,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "changed_signature_view", "v"}},
 		problemText: "views that call functions whose signatures changed in version 7",
 		expectedObjects: []string{
-			`object "changed_signature_view" of type "view" in schema "public"`,
+			`Object "changed_signature_view" has type "view" in schema "public"`,
 		},
 	},
 	{
@@ -109,7 +109,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "removed_column_view", "v", "pg_class.relstorage"}},
 		problemText: "views that reference system columns removed from version 7",
 		expectedObjects: []string{
-			`object "removed_column_view" of type "view" in schema "public"`,
+			`Object "removed_column_view" has type "view" in schema "public"`,
 		},
 	},
 	{
@@ -120,7 +120,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "removed_relation_view", "v", "pg_partition"}},
 		problemText: "views that reference system relations removed from version 7",
 		expectedObjects: []string{
-			`object "removed_relation_view" of type "view" in schema "public"`,
+			`Object "removed_relation_view" has type "view" in schema "public"`,
 		},
 	},
 	{
@@ -131,8 +131,8 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "events", "created_at"}, {"archive", "old_events", "expired_at"}},
 		problemText: "removed abstime, reltime, tinterval, or unknown data types",
 		expectedObjects: []string{
-			`object "created_at" of type "column" in schema "public"`,
-			`object "expired_at" of type "column" in schema "archive"`,
+			`Object "created_at" has type "column" in schema "public"`,
+			`Object "expired_at" has type "column" in schema "archive"`,
 		},
 	},
 	{
@@ -143,8 +143,8 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "ao_parent", "public", "ao_child_one", "compresstype=zlib"}, {"archive", "ao_parent_two", "archive", "ao_child_two", "compresslevel=5"}},
 		problemText: "child partitions that do not define the parent table settings",
 		expectedObjects: []string{
-			`object "ao_child_one" of type "partition" in schema "public"`,
-			`object "ao_child_two" of type "partition" in schema "archive"`,
+			`Object "ao_child_one" has type "partition" in schema "public"`,
+			`Object "ao_child_two" has type "partition" in schema "archive"`,
 		},
 	},
 	{
@@ -155,8 +155,8 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "master_function", "integer"}, {"analytics", "segment_function", "text, integer"}},
 		problemText: "functions that are not set-returning and use MASTER, ALL SEGMENTS, or INITPLAN EXECUTE ON",
 		expectedObjects: []string{
-			`object "master_function" of type "function" in schema "public"`,
-			`object "segment_function" of type "function" in schema "analytics"`,
+			`Object "master_function" has type "function" in schema "public"`,
+			`Object "segment_function" has type "function" in schema "analytics"`,
 			`identity arguments are "integer"`,
 			`identity arguments are "text, integer"`,
 		},
@@ -169,8 +169,8 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "sales", "sales_unique"}, {"archive", "orders", "orders_primary"}},
 		problemText: "partitioned tables with unique indexes that omit partition keys",
 		expectedObjects: []string{
-			`object "sales_unique" of type "index" in schema "public"`,
-			`object "orders_primary" of type "index" in schema "archive"`,
+			`Object "sales_unique" has type "index" in schema "public"`,
+			`Object "orders_primary" has type "index" in schema "archive"`,
 		},
 	},
 	{
@@ -181,8 +181,8 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "prices", "numeric", "sales", "prices_1_prt_low"}, {"archive", "labels", "text", "history", "labels_1_prt_a"}},
 		problemText: "range partitions that use START EXCLUSIVE or END INCLUSIVE boundaries",
 		expectedObjects: []string{
-			`object "prices_1_prt_low" of type "partition" in schema "sales"`,
-			`object "labels_1_prt_a" of type "partition" in schema "history"`,
+			`Object "prices_1_prt_low" has type "partition" in schema "sales"`,
+			`Object "labels_1_prt_a" has type "partition" in schema "history"`,
 		},
 	},
 	{
@@ -193,8 +193,8 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "orders", "orders_statement"}, {"audit", "events", "events_statement"}},
 		problemText: "Your cluster contains statement triggers",
 		expectedObjects: []string{
-			`object "orders_statement" of type "trigger" in schema "public"`,
-			`object "events_statement" of type "trigger" in schema "audit"`,
+			`Object "orders_statement" has type "trigger" in schema "public"`,
+			`Object "events_statement" has type "trigger" in schema "audit"`,
 		},
 	},
 	{
@@ -205,7 +205,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "gp_array_agg"}},
 		problemText: "extensions that are absent from version 7",
 		expectedObjects: []string{
-			`object "gp_array_agg" of type "extension" in schema "public"`,
+			`Object "gp_array_agg" has type "extension" in schema "public"`,
 		},
 	},
 	{
@@ -216,7 +216,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"arenadata_toolkit", "arenadata_toolkit"}},
 		problemText: "contains the arenadata_toolkit schema",
 		expectedObjects: []string{
-			`object "arenadata_toolkit" of type "schema" in schema "arenadata_toolkit"`,
+			`Object "arenadata_toolkit" has type "schema" in schema "arenadata_toolkit"`,
 		},
 	},
 	{
@@ -227,7 +227,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "catalog_view", "v", "pg_catalog.pg_class"}},
 		problemText: "user objects that reference system relations",
 		expectedObjects: []string{
-			`object "catalog_view" of type "view" in schema "public"`,
+			`Object "catalog_view" has type "view" in schema "public"`,
 		},
 	},
 	{
@@ -238,7 +238,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "deep_parts"}},
 		problemText: "subpartition templates deeper than the second partition level",
 		expectedObjects: []string{
-			`object "deep_parts" of type "partitioned table" in schema "public"`,
+			`Object "deep_parts" has type "partitioned table" in schema "public"`,
 		},
 	},
 	{
@@ -273,7 +273,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "=>"}},
 		problemText: "user-defined => operators",
 		expectedObjects: []string{
-			`object "=>" of type "operator" in schema "public"`,
+			`Object "=>" has type "operator" in schema "public"`,
 		},
 	},
 	{
@@ -284,7 +284,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		rows:        [][]driver.Value{{"public", "partitioned_table", "custom_ops", "custom_family"}},
 		problemText: "partition keys whose operator families lack support procedure 1",
 		expectedObjects: []string{
-			`object "partitioned_table" of type "partitioned table" in schema "public"`,
+			`Object "partitioned_table" has type "partitioned table" in schema "public"`,
 			`Operator class "custom_ops" uses operator family "custom_family"`,
 		},
 	},
@@ -405,6 +405,15 @@ func TestSourceChecksReportEveryObject(t *testing.T) {
 			output := string(stderr.Contents())
 			if strings.Count(output, testCase.problemText) != 1 {
 				t.Fatalf("The problem text occurred an unexpected number of times in %q", output)
+			}
+			if !testCase.isClusterCheck {
+				databaseHeader := fmt.Sprintf(
+					"Database %q contains these findings:",
+					connection.DBName,
+				)
+				if strings.Count(output, databaseHeader) != 1 {
+					t.Fatalf("The database heading occurred an unexpected number of times in %q", output)
+				}
 			}
 			for _, expectedObject := range testCase.expectedObjects {
 				if !strings.Contains(output, expectedObject) {
@@ -534,9 +543,15 @@ func TestUnknownRelationKindUsesCatalogCode(t *testing.T) {
 	}
 }
 
-func TestSourceDatabaseEnumerationExcludesTemplateDatabases(t *testing.T) {
-	if !strings.Contains(sourceDatabaseNamesQuery, "NOT datistemplate") {
-		t.Fatal("The source database enumeration does not exclude template databases")
+func TestSourceDatabaseEnumerationIncludesConnectableTemplateDatabases(t *testing.T) {
+	if !strings.Contains(sourceDatabaseNamesQuery, "datallowconn") {
+		t.Fatal("The source database enumeration does not require connectable databases")
+	}
+	if !strings.Contains(sourceDatabaseNamesQuery, "datname <> 'template0'") {
+		t.Fatal("The source database enumeration does not exclude template0")
+	}
+	if strings.Contains(sourceDatabaseNamesQuery, "datistemplate") {
+		t.Fatal("The source database enumeration excludes connectable template databases")
 	}
 }
 
@@ -649,12 +664,12 @@ func TestDoCheckMigrateChecksRequiredLibrariesBeforeSourceChecks(t *testing.T) {
 
 	expectClusterChecksEmpty(sourceMock)
 	expectMigrationTransaction(sourceMock)
-	sourceMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_libraries")).WillReturnResult(sqlmock.NewResult(0, 0))
+	sourceMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	sourceMock.ExpectQuery(regexp.QuoteMeta(requiredLibraryQuery)).WillReturnRows(
 		sqlmock.NewRows([]string{"schema_name", "object_name", "identity_arguments", "library_name"}).AddRow("public", "missing_fn", "integer", "$libdir/missing"),
 	)
 	targetMock.ExpectExec(regexp.QuoteMeta("LOAD '$libdir/missing'")).WillReturnError(errors.New("missing library"))
-	sourceMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_libraries")).WillReturnResult(sqlmock.NewResult(0, 0))
+	sourceMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	expectAllSourceChecksEmpty(sourceMock)
 	sourceMock.ExpectRollback()
 
@@ -795,8 +810,7 @@ func TestDoCheckMigrateReportsDatabaseEnumerationFailure(t *testing.T) {
 	}
 }
 
-func TestDoCheckMigrateWarnsWhenNoSourceDatabasesAreEnumerated(t *testing.T) {
-	gomega.RegisterTestingT(t)
+func TestDoCheckMigrateChecksBootstrapDatabaseWhenEnumerationIsEmpty(t *testing.T) {
 	connection, mock, stdout, _, _ := testhelper.SetupTestEnvironment()
 	connection.DBName = "source_database"
 	gplog.SetErrorCode(0)
@@ -818,16 +832,19 @@ func TestDoCheckMigrateWarnsWhenNoSourceDatabasesAreEnumerated(t *testing.T) {
 		sqlmock.NewRows([]string{"database_name"}),
 	)
 	expectClusterChecksEmpty(mock)
+	expectMigrationTransaction(mock)
+	expectAllSourceChecksEmpty(mock)
+	mock.ExpectRollback()
 
 	if recoveredValue := callDoCheckMigrate(); recoveredValue != nil {
 		t.Fatalf("DoCheckMigrate panicked with %v", recoveredValue)
 	}
 	if gplog.GetErrorCode() != 0 {
-		t.Fatalf("The zero-database run returned exit code %d", gplog.GetErrorCode())
+		t.Fatalf("The bootstrap database run returned exit code %d", gplog.GetErrorCode())
 	}
-	expectedWarning := "No --" + options.SOURCE_DATABASE + " was specified. Only basic check was performed."
+	expectedWarning := `Source database enumeration returned no rows. Database "source_database" will be checked.`
 	if !strings.Contains(string(stdout.Contents()), expectedWarning) {
-		t.Fatalf("The zero-database run did not print %q in %q", expectedWarning, stdout.Contents())
+		t.Fatalf("The bootstrap database run did not print %q in %q", expectedWarning, stdout.Contents())
 	}
 }
 
@@ -1030,6 +1047,42 @@ func TestRunMigrationChecksRollsBackAfterReadOnlyFailure(t *testing.T) {
 	}
 	if connection.Tx[0] != nil {
 		t.Fatal("The failed read-only transaction remained installed")
+	}
+}
+
+func TestRunMigrationChecksRollsBackAfterTrackCountsFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	expectMigrationSetupTransaction(mock)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(setTransactionReadOnlyQuery)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(setLocalTrackCountsQuery)).
+		WillReturnError(errors.New("track counts failed"))
+	mock.ExpectRollback()
+
+	summary := runMigrationChecks(connection, nil)
+	if summary.databaseError == nil || !strings.Contains(summary.databaseError.Error(), "track counts failed") {
+		t.Fatalf("The track counts failure was not reported: %v", summary.databaseError)
+	}
+	if connection.Tx[0] != nil {
+		t.Fatal("The failed read-only transaction remained installed")
+	}
+}
+
+func TestRunMigrationChecksReportsRollbackFailureAfterBeginFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).
+		WillReturnError(errors.New("isolation failed"))
+	mock.ExpectRollback().WillReturnError(errors.New("rollback failed"))
+
+	summary := runMigrationChecks(connection, nil)
+	if summary.databaseError == nil ||
+		!strings.Contains(summary.databaseError.Error(), "isolation failed") ||
+		!strings.Contains(summary.databaseError.Error(), "rollback failed") {
+		t.Fatalf("The begin and rollback failures were not reported: %v", summary.databaseError)
 	}
 }
 
