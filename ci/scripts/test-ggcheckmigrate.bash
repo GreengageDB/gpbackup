@@ -417,7 +417,11 @@ for expected_check in "${expected_checks[@]}"; do
   fi
 done
 
-if ! grep -Fq "3 completed cluster checks, 0 failed cluster checks, ${expected_database_check_count} completed database checks, 0 failed database checks, 0 unavailable database checks" "${output_path}"; then
+if ! grep -Eq 'completed cluster checks:[[:space:]]+3$' "${output_path}" ||
+  ! grep -Eq 'failed cluster checks:[[:space:]]+0$' "${output_path}" ||
+  ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
+  ! grep -Eq 'failed database checks:[[:space:]]+0$' "${output_path}" ||
+  ! grep -Eq 'unavailable database checks:[[:space:]]+0$' "${output_path}"; then
   echo "The finding run did not complete every check" >&2
   cat "${output_path}" >&2
   exit 1
@@ -433,7 +437,7 @@ for unexpected_text in \
   fi
 done
 
-if ! grep -Eq 'and [1-9][0-9]* findings' "${output_path}"; then
+if ! grep -Eq 'findings:[[:space:]]+[1-9][0-9]*$' "${output_path}"; then
   echo "The summary does not report a positive finding count" >&2
   cat "${output_path}" >&2
   exit 1
@@ -477,7 +481,12 @@ for expected_check in "${expected_checks[@]}"; do
   fi
 done
 
-if ! grep -Fq "3 completed cluster checks, 0 failed cluster checks, ${expected_database_check_count} completed database checks, 0 failed database checks, 0 unavailable database checks, and 0 findings" "${output_path}"; then
+if ! grep -Eq 'completed cluster checks:[[:space:]]+3$' "${output_path}" ||
+  ! grep -Eq 'failed cluster checks:[[:space:]]+0$' "${output_path}" ||
+  ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
+  ! grep -Eq 'failed database checks:[[:space:]]+0$' "${output_path}" ||
+  ! grep -Eq 'unavailable database checks:[[:space:]]+0$' "${output_path}" ||
+  ! grep -Eq 'findings:[[:space:]]+0$' "${output_path}"; then
   echo "The clean run did not complete every check with zero findings" >&2
   cat "${output_path}" >&2
   exit 1

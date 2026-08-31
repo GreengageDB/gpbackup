@@ -304,8 +304,9 @@ type migrationCheckSummary struct {
 	failedCheckCount      int
 	unavailableCheckCount int
 	findingCount          int
-	databaseError         error
 }
+
+var errTargetDatabaseUnavailable = errors.New("target database is unavailable")
 
 func beginMigrationTransaction(connection *dbconn.DBConn) error {
 	beginError := connection.Begin()
@@ -343,7 +344,10 @@ func beginReadOnlyMigrationTransaction(connection *dbconn.DBConn) error {
 func rollbackMigrationTransactionAfterError(connection *dbconn.DBConn, transactionError error) error {
 	rollbackError := connection.Rollback()
 	if rollbackError != nil {
-		return fmt.Errorf("%v and transaction rollback failed with %w", transactionError, rollbackError)
+		return errors.Join(
+			transactionError,
+			fmt.Errorf("transaction rollback failed with %w", rollbackError),
+		)
 	}
 
 	return transactionError
@@ -409,7 +413,8 @@ func runMigrationCheckPlan(
 	connection *dbconn.DBConn,
 	checks []migrationCheck,
 	availableCapabilities map[string]bool,
-) (summary migrationCheckSummary) {
+) (migrationCheckSummary, error) {
+	var summary migrationCheckSummary
 	for _, check := range checks {
 		if check.requiredCapability != "" && !availableCapabilities[check.requiredCapability] {
 			summary.unavailableCheckCount++
@@ -425,29 +430,32 @@ func runMigrationCheckPlan(
 
 		gplog.Debug("Database %q is starting check %q", connection.DBName, check.name)
 		if _, savepointError := connection.Exec("SAVEPOINT ggcheckmigrate_check"); savepointError != nil {
-			summary.databaseError = fmt.Errorf("check %q savepoint failed with %w", check.name, savepointError)
-
-			return summary
+			return summary, fmt.Errorf("check %q savepoint failed with %w", check.name, savepointError)
 		}
 		findingCount, checkError := check.doRunCheck(connection)
 		if checkError != nil {
-			summary.failedCheckCount++
-			gplog.Error("Database %q failed check %q with %v", connection.DBName, check.name, checkError)
 			if _, recoveryError := connection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_check"); recoveryError != nil {
-				summary.databaseError = fmt.Errorf(
-					"check %q failed with %v and savepoint recovery failed with %w",
-					check.name,
-					checkError,
-					recoveryError,
+				return summary, errors.Join(
+					fmt.Errorf("check %q failed with %w", check.name, checkError),
+					fmt.Errorf("check %q savepoint recovery failed with %w", check.name, recoveryError),
 				)
-
-				return summary
 			}
 			summary.findingCount += findingCount
-			if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
-				summary.databaseError = fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError)
+			if errors.Is(checkError, errTargetDatabaseUnavailable) {
+				if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
+					return summary, errors.Join(
+						fmt.Errorf("check %q failed with %w", check.name, checkError),
+						fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError),
+					)
+				}
 
-				return summary
+				return summary, fmt.Errorf("check %q failed with %w", check.name, checkError)
+			}
+
+			summary.failedCheckCount++
+			gplog.Error("Database %q failed check %q with %v", connection.DBName, check.name, checkError)
+			if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
+				return summary, fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError)
 			}
 			gplog.Debug("Database %q completed check %q with an execution failure", connection.DBName, check.name)
 
@@ -455,37 +463,31 @@ func runMigrationCheckPlan(
 		}
 
 		summary.findingCount += findingCount
-		if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
-			summary.failedCheckCount++
-			summary.databaseError = fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError)
-
-			return summary
-		}
 		summary.completedCheckCount++
+		if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
+			return summary, fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError)
+		}
 		gplog.Debug("Database %q completed check %q with %d findings", connection.DBName, check.name, findingCount)
 	}
 
-	return summary
+	return summary, nil
 }
 
-func runClusterChecks(sourceConnection *dbconn.DBConn, checks []migrationCheck) (summary migrationCheckSummary) {
+func runClusterChecks(
+	sourceConnection *dbconn.DBConn,
+	checks []migrationCheck,
+) (summary migrationCheckSummary, executionError error) {
 	if beginError := beginReadOnlyMigrationTransaction(sourceConnection); beginError != nil {
-		summary.databaseError = beginError
-		summary.failedCheckCount = len(checks)
-
-		return summary
+		return summary, beginError
 	}
 	defer func() {
 		rollbackError := sourceConnection.Rollback()
-		if rollbackError == nil {
-			return
+		if rollbackError != nil {
+			executionError = errors.Join(
+				executionError,
+				fmt.Errorf("cluster transaction rollback failed with %w", rollbackError),
+			)
 		}
-		if summary.databaseError != nil {
-			gplog.Error("Cluster transaction rollback failed with %v", rollbackError)
-
-			return
-		}
-		summary.databaseError = fmt.Errorf("cluster transaction rollback failed with %w", rollbackError)
 	}()
 
 	return runMigrationCheckPlan(sourceConnection, checks, nil)
@@ -494,35 +496,25 @@ func runClusterChecks(sourceConnection *dbconn.DBConn, checks []migrationCheck) 
 func runMigrationChecks(
 	sourceConnection *dbconn.DBConn,
 	targetConnection *dbconn.DBConn,
-) (summary migrationCheckSummary) {
+) (summary migrationCheckSummary, executionError error) {
 	if sourceConnection == nil {
-		summary.failedCheckCount++
-		summary.databaseError = errors.New("source connection is not initialized")
-
-		return summary
+		return summary, errors.New("source connection is not initialized")
 	}
 	availableCapabilities, setupError := prepareMigrationCheckCapabilities(sourceConnection)
 	if setupError != nil {
-		summary.databaseError = setupError
-
-		return summary
+		return summary, setupError
 	}
 	if beginError := beginReadOnlyMigrationTransaction(sourceConnection); beginError != nil {
-		summary.databaseError = beginError
-
-		return summary
+		return summary, beginError
 	}
 	defer func() {
 		rollbackError := sourceConnection.Rollback()
-		if rollbackError == nil {
-			return
+		if rollbackError != nil {
+			executionError = errors.Join(
+				executionError,
+				fmt.Errorf("source transaction rollback failed with %w", rollbackError),
+			)
 		}
-		if summary.databaseError != nil {
-			gplog.Error("Database %q failed transaction rollback with %v", sourceConnection.DBName, rollbackError)
-
-			return
-		}
-		summary.databaseError = fmt.Errorf("source transaction rollback failed with %w", rollbackError)
 	}()
 
 	checks := databaseChecks
@@ -970,11 +962,23 @@ func checkRequiredLibraries(sourceConnection *dbconn.DBConn, targetConnection *d
 
 	isLibraryMissingByName := make(map[string]bool)
 	missingFunctions := make([]requiredLibraryResult, 0)
+	var targetExecutionError error
 	for _, result := range results {
 		isMissing, wasChecked := isLibraryMissingByName[result.LibraryName]
 		if !wasChecked {
 			loadQuery := fmt.Sprintf("LOAD '%s'", utils.EscapeSingleQuotes(result.LibraryName))
 			_, loadError := targetConnection.Exec(loadQuery)
+			if loadError != nil {
+				if _, livenessError := targetConnection.Exec("SELECT 1"); livenessError != nil {
+					targetExecutionError = errors.Join(
+						errTargetDatabaseUnavailable,
+						fmt.Errorf("loading target library %q failed with %w", result.LibraryName, loadError),
+						fmt.Errorf("checking target database liveness failed with %w", livenessError),
+					)
+
+					break
+				}
+			}
 			isMissing = loadError != nil
 			isLibraryMissingByName[result.LibraryName] = isMissing
 		}
@@ -983,7 +987,7 @@ func checkRequiredLibraries(sourceConnection *dbconn.DBConn, targetConnection *d
 		}
 	}
 	if len(missingFunctions) == 0 {
-		return 0, nil
+		return 0, targetExecutionError
 	}
 
 	var output strings.Builder
@@ -1005,7 +1009,7 @@ func checkRequiredLibraries(sourceConnection *dbconn.DBConn, targetConnection *d
 	}
 	logFindingOutput(&output)
 
-	return len(missingFunctions), nil
+	return len(missingFunctions), targetExecutionError
 }
 
 func checkRemovedExtensions(connection *dbconn.DBConn) (int, error) {

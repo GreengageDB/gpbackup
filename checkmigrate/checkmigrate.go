@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
@@ -85,17 +86,18 @@ func DoCheckMigrate() {
 	unavailableDatabaseCheckCount := 0
 	findingCount := 0
 	hasExecutionError := false
+	hasCheckResultIssue := false
 
-	clusterSummary := runClusterChecks(bootstrapSourceConnection, clusterChecks)
+	clusterSummary, clusterExecutionError := runClusterChecks(bootstrapSourceConnection, clusterChecks)
 	completedClusterCheckCount = clusterSummary.completedCheckCount
 	failedClusterCheckCount = clusterSummary.failedCheckCount
 	findingCount += clusterSummary.findingCount
 	if clusterSummary.failedCheckCount > 0 {
-		hasExecutionError = true
+		hasCheckResultIssue = true
 	}
-	if clusterSummary.databaseError != nil {
+	if clusterExecutionError != nil {
 		hasExecutionError = true
-		gplog.Error("Cluster checks could not complete with %v", clusterSummary.databaseError)
+		gplog.Error("Cluster checks could not complete with %v", clusterExecutionError)
 	}
 
 	for _, database := range databaseNames {
@@ -128,16 +130,16 @@ func DoCheckMigrate() {
 			shouldCloseConnection = true
 		}
 
-		databaseSummary := runMigrationChecks(databaseConnection, targetConnection)
+		databaseSummary, databaseExecutionError := runMigrationChecks(databaseConnection, targetConnection)
 		if shouldCloseConnection {
 			databaseConnection.Close()
 		}
-		if databaseSummary.databaseError != nil {
+		if databaseExecutionError != nil {
 			hasExecutionError = true
 			gplog.Error(
 				"Database %q could not complete its checks with %v",
 				database.DatabaseName,
-				databaseSummary.databaseError,
+				databaseExecutionError,
 			)
 		}
 		if databaseSummary.completedCheckCount > 0 {
@@ -150,7 +152,7 @@ func DoCheckMigrate() {
 		unavailableDatabaseCheckCount += databaseSummary.unavailableCheckCount
 		findingCount += databaseSummary.findingCount
 		if databaseSummary.failedCheckCount > 0 || databaseSummary.unavailableCheckCount > 0 {
-			hasExecutionError = true
+			hasCheckResultIssue = true
 		}
 		gplog.Debug(
 			"Completed checks for database %q with %d completed checks, %d failed checks, "+
@@ -164,31 +166,39 @@ func DoCheckMigrate() {
 	}
 
 	summaryShellVerbosity := gplog.LOGINFO
-	if findingCount > 0 || hasExecutionError {
+	if findingCount > 0 || hasCheckResultIssue || hasExecutionError {
 		summaryShellVerbosity = gplog.LOGERROR
+	}
+	summaryRows := []struct {
+		label string
+		count int
+	}{
+		{label: "enumerated databases:", count: enumeratedDatabaseCount},
+		{label: "checked databases:", count: checkedDatabaseCount},
+		{label: "unreachable databases:", count: unreachableDatabaseCount},
+		{label: "unavailable databases:", count: unavailableDatabaseCount},
+		{label: "completed cluster checks:", count: completedClusterCheckCount},
+		{label: "failed cluster checks:", count: failedClusterCheckCount},
+		{label: "completed database checks:", count: completedDatabaseCheckCount},
+		{label: "failed database checks:", count: failedDatabaseCheckCount},
+		{label: "unavailable database checks:", count: unavailableDatabaseCheckCount},
+		{label: "findings:", count: findingCount},
+	}
+	var summaryOutput strings.Builder
+	summaryOutput.WriteString("Execution summary:")
+	for _, row := range summaryRows {
+		fmt.Fprintf(&summaryOutput, "\n  %-31s%2d", row.label, row.count)
 	}
 	gplog.Custom(
 		gplog.LOGINFO,
 		summaryShellVerbosity,
-		"Summary contains %d enumerated databases, %d checked databases, %d unreachable databases, "+
-			"%d unavailable databases, %d completed cluster checks, %d failed cluster checks, "+
-			"%d completed database checks, %d failed database checks, %d unavailable database checks, "+
-			"and %d findings",
-		enumeratedDatabaseCount,
-		checkedDatabaseCount,
-		unreachableDatabaseCount,
-		unavailableDatabaseCount,
-		completedClusterCheckCount,
-		failedClusterCheckCount,
-		completedDatabaseCheckCount,
-		failedDatabaseCheckCount,
-		unavailableDatabaseCheckCount,
-		findingCount,
+		"%s",
+		summaryOutput.String(),
 	)
 
 	if hasExecutionError {
 		gplog.SetErrorCode(5)
-	} else if findingCount > 0 {
+	} else if findingCount > 0 || hasCheckResultIssue {
 		gplog.SetErrorCode(1)
 	}
 }
