@@ -168,6 +168,8 @@ func DoRestore() {
 		// they are arguably the data of the sequence relations and can affect user tables
 		// containing columns that reference those sequence relations.
 		restoreSequenceValues(metadataFilename)
+		// The data of QD-only tables also reside in the metadata, and it should be restored.
+		restoreQDOnlyTablesData(metadataFilename)
 	}
 
 	totalTablesRestored := 0
@@ -301,7 +303,13 @@ func restorePredata(metadataFilename string) {
 	if opts.RedirectSchema == "" {
 		schemaStatements = GetRestoreMetadataStatementsFiltered("predata", metadataFilename, []string{toc.OBJ_SCHEMA}, []string{}, filters)
 	}
-	statements := GetRestoreMetadataStatementsFiltered("predata", metadataFilename, []string{}, []string{toc.OBJ_SCHEMA}, filters)
+	excludeObjectTypes := []string{toc.OBJ_SCHEMA}
+	if backupConfig.MetadataOnly || MustGetFlagBool(options.METADATA_ONLY) {
+		// QD-only table data is not real schema/DDL content; a metadata-only
+		// restore should not replay it.
+		excludeObjectTypes = append(excludeObjectTypes, toc.OBJ_QD_ONLY_TABLE_DATA)
+	}
+	statements := GetRestoreMetadataStatementsFiltered("predata", metadataFilename, []string{}, excludeObjectTypes, filters)
 
 	editStatementsRedirectSchema(statements, opts.RedirectSchema)
 	progressBar := utils.NewProgressBar(len(schemaStatements)+len(statements), "Pre-data objects restored: ", utils.PB_VERBOSE)
@@ -403,6 +411,34 @@ func restoreSequenceValues(metadataFilename string) {
 		gplog.Info("Sequence values restore completed with failures")
 	} else {
 		gplog.Info("Sequence values restore complete")
+	}
+}
+
+func restoreQDOnlyTablesData(metadataFilename string) {
+	if wasTerminated.Load() {
+		return
+	}
+	gplog.Info("Restoring data of QD-only tables")
+
+	filters := NewFilters(opts.IncludedSchemas, opts.ExcludedSchemas, opts.IncludedRelations, opts.ExcludedRelations)
+	statements := GetRestoreMetadataStatementsFiltered("predata", metadataFilename, []string{toc.OBJ_QD_ONLY_TABLE_DATA}, []string{}, filters)
+
+	numErrors := int32(0)
+	if len(statements) == 0 {
+		gplog.Verbose("No QD-only tables to restore")
+	} else {
+		progressBar := utils.NewProgressBar(len(statements), "QD-only tables restored: ", utils.PB_VERBOSE)
+		progressBar.Start()
+		numErrors = ExecuteRestoreMetadataStatements("data", statements, "QD-only tables", progressBar, utils.PB_VERBOSE, connectionPool.NumConns > 1)
+		progressBar.Finish()
+	}
+
+	if wasTerminated.Load() {
+		gplog.Info("QD-only tables restore incomplete")
+	} else if numErrors > 0 {
+		gplog.Info("QD-only tables restore completed with failures")
+	} else {
+		gplog.Info("QD-only tables restore complete")
 	}
 }
 

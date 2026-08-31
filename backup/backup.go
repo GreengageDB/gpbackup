@@ -130,8 +130,9 @@ func DoBackup() {
 
 	gplog.Info("Gathering table state information")
 	metadataTables, dataTables, allTables := RetrieveAndProcessTables()
+	dataTablesQDOnly := GetBackupDataSetQDOnly(dataTables)
 	dataTables, numExtOrForeignTables := GetBackupDataSet(dataTables)
-	if len(dataTables) == 0 && !backupReport.MetadataOnly {
+	if len(dataTables) == 0 && len(dataTablesQDOnly) == 0 && !backupReport.MetadataOnly {
 		gplog.Warn("No tables in backup set contain data. Performing metadata-only backup instead.")
 		backupReport.MetadataOnly = true
 	}
@@ -192,6 +193,7 @@ func DoBackup() {
 
 	if !backupReport.MetadataOnly {
 		backupData(backupSetTables)
+		backupQDOnlyData(metadataFile, dataTablesQDOnly)
 	}
 
 	printDataBackupWarnings(numExtOrForeignTables)
@@ -288,6 +290,40 @@ func backupPredata(metadataFile *utils.FileWithByteCount, tables []Table, tableO
 	backupViewsDependingOnConstraints(metadataFile, viewsDependingOnConstraints)
 
 	logCompletionMessage("Pre-data metadata metadata backup")
+}
+
+func backupQDOnlyData(metadataFile *utils.FileWithByteCount, tables []TableQDOnly) {
+	gplog.Verbose("Writing QD-only tables data to metadata file")
+
+	for _, table := range tables {
+		start := metadataFile.ByteCount
+
+		columnNames := ConstructTableAttributesList(table.ColumnDefs)
+		tableName := table.FQN()
+		if columnNames == "" {
+			gplog.Fatal(fmt.Errorf("QD-only table %s has no non-generated columns to back up", tableName), "")
+		}
+
+		cols := strings.Split(strings.Trim(columnNames, "()"), ",")
+		quoted := make([]string, len(cols))
+		for i, col := range cols {
+			quoted[i] = fmt.Sprintf("quote_nullable(%s)", col)
+		}
+		selectList := strings.Join(quoted, " || ',' || ")
+		query := fmt.Sprintf(`SELECT %s FROM %s %s`, selectList, tableName, *table.ExtensionTableConfig)
+
+		var rows []string
+		err := connectionPool.Select(&rows, query)
+		gplog.FatalOnError(err)
+
+		for _, row := range rows {
+			metadataFile.MustPrintf("INSERT INTO %s %s VALUES(%s);\n", tableName, columnNames, row)
+		}
+
+		section, entry := table.GetMetadataEntry()
+		tier := globalTierMap[table.GetUniqueID()]
+		globalTOC.AddMetadataEntry(section, entry, start, metadataFile.ByteCount, tier)
+	}
 }
 
 func backupData(tables []Table) {

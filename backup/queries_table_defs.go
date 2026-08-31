@@ -23,9 +23,20 @@ type Table struct {
 	TableDefinition
 }
 
+type TableQDOnly struct {
+	Table
+}
+
+func (t Table) IsQDOnly() bool {
+	def := t.TableDefinition
+	// For now, only config tables of local extensions are
+	// legitimate QD-only tables.
+	return def.ExtensionTableConfig != nil && def.DistPolicy.Policy == ""
+}
+
 func (t Table) SkipDataBackup() bool {
 	def := t.TableDefinition
-	return def.IsExternal || (def.ForeignDef != ForeignTableDefinition{})
+	return def.IsExternal || (def.ForeignDef != ForeignTableDefinition{}) || t.IsQDOnly()
 }
 
 func (t Table) GetMetadataEntry() (string, toc.MetadataEntry) {
@@ -44,6 +55,18 @@ func (t Table) GetMetadataEntry() (string, toc.MetadataEntry) {
 			Name:            t.Name,
 			ObjectType:      objectType,
 			ReferenceObject: referenceObject,
+			StartByte:       0,
+			EndByte:         0,
+		}
+}
+
+func (t TableQDOnly) GetMetadataEntry() (string, toc.MetadataEntry) {
+	return "predata",
+		toc.MetadataEntry{
+			Schema:          t.Schema,
+			Name:            t.Name,
+			ObjectType:      toc.OBJ_QD_ONLY_TABLE_DATA,
+			ReferenceObject: t.FQN(),
 			StartByte:       0,
 			EndByte:         0,
 		}
