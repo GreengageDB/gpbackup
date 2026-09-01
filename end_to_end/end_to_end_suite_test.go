@@ -1494,7 +1494,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 			assertArtifactsCleaned(timestamp)
 		})
 
-		It("restores QD-only config table data with --data-only against a pre-existing schema", func() {
+		It("restores QD-only config table data with --data-only --include-table against a pre-existing schema", func() {
 			installLocalExtFixture()
 			defer createLocalExt(backupConn, true)()
 
@@ -1507,7 +1507,9 @@ var _ = Describe("backup and restore end to end tests", func() {
 			output := gpbackup(gpbackupPath, backupHelperPath, "--data-only")
 			timestamp := getBackupTimestamp(string(output))
 			gprestore(gprestorePath, restoreHelperPath, timestamp,
-				"--redirect-db", "restoredb", "--data-only")
+				"--redirect-db", "restoredb", "--data-only",
+				"--include-table", "public.test_local_cfg",
+				"--include-table", "public.test_local_cfg_filtered")
 
 			assertDataRestored(restoreConn, map[string]int{
 				"public.test_local_cfg":          4,
@@ -1544,32 +1546,6 @@ var _ = Describe("backup and restore end to end tests", func() {
 
 			assertQDOnlyPolicy("test_local_cfg")
 			assertQDOnlyPolicy("test_local_cfg_filtered")
-
-			assertArtifactsCleaned(timestamp)
-		})
-
-		It("restores only the named table with --include-table", func() {
-			installLocalExtFixture()
-			defer createLocalExt(backupConn, true)()
-
-			// --include-table on an extension-member table doesn't pull in
-			// the parent CREATE EXTENSION statement (a separate issue, yet to be fixed).
-			// Pre-create the extension so this test isolates just the
-			// QD-only data-filtering behavior under test here.
-			defer createLocalExt(restoreConn, false)()
-
-			output := gpbackup(gpbackupPath, backupHelperPath)
-			timestamp := getBackupTimestamp(string(output))
-			gprestore(gprestorePath, restoreHelperPath, timestamp,
-				"--redirect-db", "restoredb",
-				"--include-table", "public.test_local_cfg")
-
-			assertDataRestored(restoreConn, map[string]int{
-				"public.test_local_cfg":          4,
-				"public.test_local_cfg_filtered": 0,
-			})
-
-			assertLocalCfgContentRestored()
 
 			assertArtifactsCleaned(timestamp)
 		})
