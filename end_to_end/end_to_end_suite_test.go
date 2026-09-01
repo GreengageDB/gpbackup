@@ -1347,6 +1347,321 @@ var _ = Describe("backup and restore end to end tests", func() {
 			assertArtifactsCleaned(timestamp)
 		})
 	})
+	Describe("Local extension config table data", func() {
+		// Seeded here rather than in test_ext_local--1.0.sql: the script
+		// re-runs on every CREATE EXTENSION (including the one gprestore
+		// replays), so a seed INSERT included into the script would collide
+		// with gpbackup's own restored copy of the same pg_extension_config_dump()'d
+		// rows and silently duplicate them.
+		const localExtSeedData = `
+			INSERT INTO test_local_cfg VALUES
+				(1, 'alpha', NULL, decode('00010203', 'hex')),
+				(2, '', 'empty string, distinct from NULL', decode('deadbeef', 'hex')),
+				(3, E'quote'' semi; back\\slash', 'special chars', decode('277b7d3b5c', 'hex')),
+				(4, 'unicode: héllo wörld 你好', 'utf8', NULL);
+			INSERT INTO test_local_cfg_filtered VALUES
+				(1, true),
+				(2, false),
+				(3, true);
+		`
+
+		installLocalExtFixture := func() {
+			_ = os.Chdir("resources")
+			command := exec.Command("make", "USE_PGXS=1", "install")
+			mustRunCommand(command)
+			_ = os.Chdir("..")
+		}
+
+		// createLocalExt creates test_ext_local on conn, seeding it with
+		// localExtSeedData if seed is true. Skips the running spec if the
+		// cluster doesn't recognize the gg_local control-file flag (this is
+		// a capability probe rather than a version check, since gg_local
+		// hasn't landed in any Greengage release yet and may never map to
+		// a version number gpbackup could branch on). Returns a cleanup
+		// func for the caller to defer.
+		createLocalExt := func(conn *dbconn.DBConn, seed bool) func() {
+			_, err := conn.Exec("CREATE EXTENSION test_ext_local;")
+			if err != nil {
+				Skip(fmt.Sprintf("local extension support (gg_local) not available on this cluster: %v", err))
+			}
+			if seed {
+				testhelper.AssertQueryRuns(conn, localExtSeedData)
+			}
+			return func() { testhelper.AssertQueryRuns(conn, "DROP EXTENSION test_ext_local;") }
+		}
+
+		// assertQDOnlyPolicy confirms tableName has no gp_distribution_policy
+		// row, i.e. it's still coordinator-only after the restore under test.
+		assertQDOnlyPolicy := func(tableName string) {
+			hasPolicy := dbconn.MustSelectString(restoreConn, fmt.Sprintf(`
+				SELECT EXISTS (
+					SELECT 1 FROM gp_distribution_policy WHERE localoid = '%s'::regclass
+				)::text AS string`, tableName))
+			Expect(hasPolicy).To(Equal("false"))
+		}
+
+		// assertFilteredTableRestored confirms test_local_cfg_filtered's two
+		// extcondition-matching rows survived, and that the row
+		// failing "WHERE active" did not come through.
+		assertFilteredTableRestored := func() {
+			filteredActive1 := dbconn.MustSelectString(restoreConn,
+				"SELECT active::text AS string FROM public.test_local_cfg_filtered WHERE id = 1")
+			Expect(filteredActive1).To(Equal("true"))
+
+			filteredActive3 := dbconn.MustSelectString(restoreConn,
+				"SELECT active::text AS string FROM public.test_local_cfg_filtered WHERE id = 3")
+			Expect(filteredActive3).To(Equal("true"))
+
+			excludedRowPresent := dbconn.MustSelectString(restoreConn,
+				"SELECT EXISTS (SELECT 1 FROM public.test_local_cfg_filtered WHERE id = 2)::text AS string")
+			Expect(excludedRowPresent).To(Equal("false"))
+		}
+
+		// assertLocalCfgContentRestored confirms all four of
+		// test_local_cfg's rows survived an INSERT-based restore.
+		assertLocalCfgContentRestored := func() {
+			noteIsNull := dbconn.MustSelectString(restoreConn,
+				"SELECT (note IS NULL)::text AS string FROM public.test_local_cfg WHERE id = 1")
+			Expect(noteIsNull).To(Equal("true"))
+
+			emptyVal := dbconn.MustSelectString(restoreConn,
+				"SELECT (val = '')::text AS string FROM public.test_local_cfg WHERE id = 2")
+			Expect(emptyVal).To(Equal("true"))
+
+			specialVal := dbconn.MustSelectString(restoreConn,
+				"SELECT val AS string FROM public.test_local_cfg WHERE id = 3")
+			Expect(specialVal).To(Equal("quote' semi; back\\slash"))
+
+			unicodeVal := dbconn.MustSelectString(restoreConn,
+				"SELECT val AS string FROM public.test_local_cfg WHERE id = 4")
+			Expect(unicodeVal).To(Equal("unicode: héllo wörld 你好"))
+
+			binVal1 := dbconn.MustSelectString(restoreConn,
+				"SELECT encode(data, 'hex') AS string FROM public.test_local_cfg WHERE id = 1")
+			Expect(binVal1).To(Equal("00010203"))
+
+			binVal2 := dbconn.MustSelectString(restoreConn,
+				"SELECT encode(data, 'hex') AS string FROM public.test_local_cfg WHERE id = 2")
+			Expect(binVal2).To(Equal("deadbeef"))
+
+			binVal3 := dbconn.MustSelectString(restoreConn,
+				"SELECT encode(data, 'hex') AS string FROM public.test_local_cfg WHERE id = 3")
+			Expect(binVal3).To(Equal("277b7d3b5c"))
+
+			binVal4IsNull := dbconn.MustSelectString(restoreConn,
+				"SELECT (data IS NULL)::text AS string FROM public.test_local_cfg WHERE id = 4")
+			Expect(binVal4IsNull).To(Equal("true"))
+		}
+
+		It("backs up and restores QD-only config table data", func() {
+			installLocalExtFixture()
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb")
+
+			assertDataRestored(restoreConn, map[string]int{
+				"public.test_local_cfg":          4,
+				"public.test_local_cfg_filtered": 2,
+			})
+
+			assertLocalCfgContentRestored()
+			assertFilteredTableRestored()
+			assertQDOnlyPolicy("test_local_cfg")
+			assertQDOnlyPolicy("test_local_cfg_filtered")
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("excludes QD-only table data from --metadata-only backup", func() {
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--metadata-only")
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb")
+
+			assertDataRestored(restoreConn, map[string]int{
+				"public.test_local_cfg":          0,
+				"public.test_local_cfg_filtered": 0,
+			})
+
+			assertQDOnlyPolicy("test_local_cfg")
+			assertQDOnlyPolicy("test_local_cfg_filtered")
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("restores QD-only config table data with --data-only against a pre-existing schema", func() {
+			installLocalExtFixture()
+			defer createLocalExt(backupConn, true)()
+
+			// Pre-existing schema on the restore target: a --data-only
+			// backup captures no CREATE EXTENSION/CREATE TABLE statements,
+			// so the extension must already exist on restoredb for the
+			// --data-only restore to have anywhere to put the data.
+			defer createLocalExt(restoreConn, false)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--data-only")
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--data-only")
+
+			assertDataRestored(restoreConn, map[string]int{
+				"public.test_local_cfg":          4,
+				"public.test_local_cfg_filtered": 2,
+			})
+
+			assertLocalCfgContentRestored()
+			assertFilteredTableRestored()
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("excludes QD-only table data when restoring a full backup with --metadata-only", func() {
+			installLocalExtFixture()
+			defer createLocalExt(backupConn, true)()
+
+			// Unlike the "--metadata-only backup" test above, this backup
+			// is a normal full one, the exclusion under test happens on
+			// the restore side.
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--metadata-only")
+
+			assertDataRestored(restoreConn, map[string]int{
+				"public.test_local_cfg":          0,
+				"public.test_local_cfg_filtered": 0,
+			})
+
+			// The tables (and the extension that owns them) must still be
+			// created.
+			Expect(checkTableExists(restoreConn, "public.test_local_cfg")).To(BeTrue())
+			Expect(checkTableExists(restoreConn, "public.test_local_cfg_filtered")).To(BeTrue())
+
+			assertQDOnlyPolicy("test_local_cfg")
+			assertQDOnlyPolicy("test_local_cfg_filtered")
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("restores only the named table with --include-table", func() {
+			installLocalExtFixture()
+			defer createLocalExt(backupConn, true)()
+
+			// --include-table on an extension-member table doesn't pull in
+			// the parent CREATE EXTENSION statement (a separate issue, yet to be fixed).
+			// Pre-create the extension so this test isolates just the
+			// QD-only data-filtering behavior under test here.
+			defer createLocalExt(restoreConn, false)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--include-table", "public.test_local_cfg")
+
+			assertDataRestored(restoreConn, map[string]int{
+				"public.test_local_cfg":          4,
+				"public.test_local_cfg_filtered": 0,
+			})
+
+			assertLocalCfgContentRestored()
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("skips the named table's data with --exclude-table", func() {
+			installLocalExtFixture()
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--exclude-table", "public.test_local_cfg")
+
+			assertDataRestored(restoreConn, map[string]int{
+				"public.test_local_cfg":          0,
+				"public.test_local_cfg_filtered": 2,
+			})
+
+			// The excluded table still gets created (CREATE EXTENSION isn't
+			// table-scoped), it just ends up empty.
+			Expect(checkTableExists(restoreConn, "public.test_local_cfg")).To(BeTrue())
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("restores nothing from the extension with --include-schema for an unrelated schema", func() {
+			installLocalExtFixture()
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--include-schema", "schema2")
+
+			// Extension.GetMetadataEntry() has no schema of its own (it's
+			// tagged with an empty string), which doesn't match an
+			// --include-schema list, so CREATE EXTENSION never runs,
+			// and neither table (nor its data) exists.
+			Expect(checkTableExists(restoreConn, "public.test_local_cfg")).To(BeFalse())
+			Expect(checkTableExists(restoreConn, "public.test_local_cfg_filtered")).To(BeFalse())
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("restores QD-only data with --include-schema for the extension's own schema", func() {
+			installLocalExtFixture()
+			defer createLocalExt(backupConn, true)()
+
+			// Same issue as with '--include-table': CREATE
+			// EXTENSION would be dropped even though the tables it owns
+			// live in the included schema. Pre-create the extension so this
+			// test isolates the QD-only data-filtering behavior under test.
+			defer createLocalExt(restoreConn, false)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--include-schema", "public")
+
+			assertDataRestored(restoreConn, map[string]int{
+				"public.test_local_cfg":          4,
+				"public.test_local_cfg_filtered": 2,
+			})
+
+			assertLocalCfgContentRestored()
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("restores the extension normally with --exclude-schema for an unrelated schema", func() {
+			installLocalExtFixture()
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--exclude-schema", "schema2")
+
+			assertDataRestored(restoreConn, map[string]int{
+				"public.test_local_cfg":          4,
+				"public.test_local_cfg_filtered": 2,
+			})
+
+			assertLocalCfgContentRestored()
+
+			assertArtifactsCleaned(timestamp)
+		})
+	})
 	Describe("Restore with truncate-table", func() {
 		It("runs gpbackup and gprestore with truncate-table and include-table flags", func() {
 			output := gpbackup(gpbackupPath, backupHelperPath)

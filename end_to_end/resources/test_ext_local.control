@@ -1,0 +1,4 @@
+comment = 'Test extension for local (QD-only) extension support'
+default_version = '1.0'
+relocatable = false
+gg_local = true
