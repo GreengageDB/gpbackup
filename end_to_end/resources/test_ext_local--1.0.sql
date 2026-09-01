@@ -5,7 +5,8 @@
 CREATE TABLE test_local_cfg (id int, val text, note text, data bytea);
 SELECT pg_catalog.pg_extension_config_dump('test_local_cfg', '');
 
--- Second config table, registered with a non-empty extcondition filter --
--- only rows matching the WHERE clause should be backed up/restored.
+-- Second config table, filtered via extcondition. Row 4 is seeded by the
+-- script itself and excluded by the filter -- must not be duplicated.
 CREATE TABLE test_local_cfg_filtered (id int, active bool);
 SELECT pg_catalog.pg_extension_config_dump('test_local_cfg_filtered', 'WHERE active');
+INSERT INTO test_local_cfg_filtered VALUES (4, false);

@@ -1415,6 +1415,12 @@ var _ = Describe("backup and restore end to end tests", func() {
 			excludedRowPresent := dbconn.MustSelectString(restoreConn,
 				"SELECT EXISTS (SELECT 1 FROM public.test_local_cfg_filtered WHERE id = 2)::text AS string")
 			Expect(excludedRowPresent).To(Equal("false"))
+
+			// Row 4 is seeded by the script itself (not by gpbackup) and
+			// must appear exactly once, not duplicated.
+			seededCount := dbconn.MustSelectString(restoreConn,
+				"SELECT count(*) AS string FROM public.test_local_cfg_filtered WHERE id = 4")
+			Expect(seededCount).To(Equal("1"))
 		}
 
 		// assertLocalCfgContentRestored confirms all four of
@@ -1464,7 +1470,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 
 			assertDataRestored(restoreConn, map[string]int{
 				"public.test_local_cfg":          4,
-				"public.test_local_cfg_filtered": 2,
+				"public.test_local_cfg_filtered": 3,
 			})
 
 			assertLocalCfgContentRestored()
@@ -1485,7 +1491,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 
 			assertDataRestored(restoreConn, map[string]int{
 				"public.test_local_cfg":          0,
-				"public.test_local_cfg_filtered": 0,
+				"public.test_local_cfg_filtered": 1, // row 4, seeded by the script itself
 			})
 
 			assertQDOnlyPolicy("test_local_cfg")
@@ -1513,7 +1519,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 
 			assertDataRestored(restoreConn, map[string]int{
 				"public.test_local_cfg":          4,
-				"public.test_local_cfg_filtered": 2,
+				"public.test_local_cfg_filtered": 3,
 			})
 
 			assertLocalCfgContentRestored()
@@ -1536,7 +1542,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 
 			assertDataRestored(restoreConn, map[string]int{
 				"public.test_local_cfg":          0,
-				"public.test_local_cfg_filtered": 0,
+				"public.test_local_cfg_filtered": 1, // row 4, seeded by the script itself
 			})
 
 			// The tables (and the extension that owns them) must still be
@@ -1562,7 +1568,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 
 			assertDataRestored(restoreConn, map[string]int{
 				"public.test_local_cfg":          0,
-				"public.test_local_cfg_filtered": 2,
+				"public.test_local_cfg_filtered": 3,
 			})
 
 			// The excluded table still gets created (CREATE EXTENSION isn't
@@ -1610,7 +1616,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 
 			assertDataRestored(restoreConn, map[string]int{
 				"public.test_local_cfg":          4,
-				"public.test_local_cfg_filtered": 2,
+				"public.test_local_cfg_filtered": 3,
 			})
 
 			assertLocalCfgContentRestored()
@@ -1630,7 +1636,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 
 			assertDataRestored(restoreConn, map[string]int{
 				"public.test_local_cfg":          4,
-				"public.test_local_cfg_filtered": 2,
+				"public.test_local_cfg_filtered": 3,
 			})
 
 			assertLocalCfgContentRestored()
