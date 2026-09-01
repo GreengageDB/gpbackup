@@ -307,7 +307,12 @@ func backupQDOnlyData(metadataFile *utils.FileWithByteCount, tables []TableQDOnl
 		cols := strings.Split(strings.Trim(columnNames, "()"), ",")
 		quoted := make([]string, len(cols))
 		for i, col := range cols {
-			quoted[i] = fmt.Sprintf("quote_nullable(%s)", col)
+			// Cast to text explicitly: quote_nullable() is overloaded as
+			// both quote_nullable(text) and quote_nullable(anyelement) in
+			// Postgres's own catalog, and for some argument types (e.g.
+			// integer) both become viable via implicit casting, causing
+			// "function quote_nullable(...) is not unique".
+			quoted[i] = fmt.Sprintf("quote_nullable(%s::text)", col)
 		}
 		selectList := strings.Join(quoted, " || ',' || ")
 		query := fmt.Sprintf(`SELECT %s FROM %s %s`, selectList, tableName, *table.ExtensionTableConfig)
