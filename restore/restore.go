@@ -443,6 +443,21 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 	filters := NewFilters(opts.IncludedSchemas, opts.ExcludedSchemas, opts.IncludedRelations, opts.ExcludedRelations)
 	statements := GetRestoreMetadataStatementsFiltered("predata", metadataFilename, []string{toc.OBJ_QD_ONLY_TABLE_DATA}, []string{}, filters)
 
+	// Unlike other object types, this statement's INSERT INTO target schema was baked in
+	// as literal SQL text at backup time (once per row), and it can't be redirected via
+	// editStatementsRedirectSchema's single-replace/regex machinery, so it's rewritten
+	// here instead. The trailing space anchors the match to the full table name, so a
+	// same-prefixed sibling table (e.g. test_local_cfg vs. test_local_cfg_filtered) can't
+	// collide.
+	if opts.RedirectSchema != "" {
+		for i := range statements {
+			oldTarget := fmt.Sprintf("INSERT INTO %s ", utils.MakeFQN(statements[i].Schema, statements[i].Name))
+			newTarget := fmt.Sprintf("INSERT INTO %s ", utils.MakeFQN(opts.RedirectSchema, statements[i].Name))
+			statements[i].Statement = strings.ReplaceAll(statements[i].Statement, oldTarget, newTarget)
+			statements[i].Schema = opts.RedirectSchema
+		}
+	}
+
 	numErrors := int32(0)
 	if len(statements) == 0 {
 		gplog.Verbose("No QD-only tables to restore")
