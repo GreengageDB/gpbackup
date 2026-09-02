@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
+	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gpbackup/filepath"
@@ -434,6 +435,15 @@ func restoreSequenceValues(metadataFilename string) {
 	}
 }
 
+func getExtensionTableCondition(tableFQN string) string {
+	return dbconn.MustSelectString(connectionPool, fmt.Sprintf(`
+		SELECT coalesce((
+			SELECT condition
+			FROM (SELECT unnest(extconfig) AS reloid, unnest(extcondition) AS condition FROM pg_catalog.pg_extension) cfg
+			WHERE reloid = '%s'::regclass
+		), '') AS string`, tableFQN))
+}
+
 func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.CoordinatorDataEntry) {
 	if wasTerminated.Load() {
 		return 0, nil
@@ -455,6 +465,15 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 			newTarget := fmt.Sprintf("INSERT INTO %s ", utils.MakeFQN(opts.RedirectSchema, statements[i].Name))
 			statements[i].Statement = strings.ReplaceAll(statements[i].Statement, oldTarget, newTarget)
 			statements[i].Schema = opts.RedirectSchema
+		}
+	}
+
+	if MustGetFlagBool(options.TRUNCATE_TABLE) {
+		for i := range statements {
+			tableName := utils.MakeFQN(statements[i].Schema, statements[i].Name)
+			condition := getExtensionTableCondition(tableName)
+			// Use DELETE FROM instead of TRUNCATE to keep values seeded by the install script of extension
+			statements[i].Statement = fmt.Sprintf("DELETE FROM %s %s;\n%s", tableName, condition, statements[i].Statement)
 		}
 	}
 

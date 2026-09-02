@@ -1799,6 +1799,46 @@ var _ = Describe("backup and restore end to end tests", func() {
 
 			assertArtifactsCleaned(timestamp)
 		})
+
+		It("truncates only backed-up rows before restoring QD-only table data with --truncate-table", func() {
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+
+			// First restore just the metadata: creates the extension (and
+			// its tables) via its own install script, exactly as a real
+			// deployment would - seeding test_local_cfg_filtered's row 4
+			// (active=false) itself, not via our createLocalExt helper.
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--metadata-only")
+
+			// Simulate data that accumulated since that restore - exactly
+			// what --truncate-table is meant to clear away.
+			testhelper.AssertQueryRuns(restoreConn,
+				fmt.Sprintf("INSERT INTO %s VALUES (99, 'stale', NULL, NULL)", localExtTable))
+
+			// Now restore just the data, with --truncate-table, from the
+			// same backup.
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--data-only", "--truncate-table",
+				"--include-table", localExtTable,
+				"--include-table", localExtFilteredTable)
+
+			// Exactly 4 rows, not 5: the stale row is gone, replaced by the
+			// backup's own content.
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable:         4,
+				localExtFilteredTable: 3,
+			})
+			assertLocalCfgContentRestored()
+			// Also confirms row 4, seeded only by the --metadata-only
+			// restore's CREATE EXTENSION and never part of the backup's
+			// own data, survived the truncate untouched.
+			assertFilteredTableRestored()
+
+			assertArtifactsCleaned(timestamp)
+		})
 	})
 	Describe("Restore with truncate-table", func() {
 		It("runs gpbackup and gprestore with truncate-table and include-table flags", func() {
