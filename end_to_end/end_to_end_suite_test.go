@@ -1673,6 +1673,44 @@ var _ = Describe("backup and restore end to end tests", func() {
 
 			assertArtifactsCleaned(timestamp)
 		})
+
+		It("runs ANALYZE on QD-only tables after a full restore with --run-analyze", func() {
+			installLocalExtFixture()
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--run-analyze")
+
+			// test_local_cfg has 4 columns (id, val, note, data); ANALYZE
+			// should have produced one pg_statistic row per column.
+			actualStatisticCount := dbconn.MustSelectString(restoreConn,
+				`SELECT count(*) FROM pg_statistic WHERE starelid='public.test_local_cfg'::regclass::oid`)
+			Expect(actualStatisticCount).To(Equal("4"))
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("runs ANALYZE on QD-only tables after a --data-only restore with --run-analyze", func() {
+			installLocalExtFixture()
+			defer createLocalExt(backupConn, true)()
+			defer createLocalExt(restoreConn, false)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--data-only")
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--data-only",
+				"--include-table", "public.test_local_cfg",
+				"--run-analyze")
+
+			actualStatisticCount := dbconn.MustSelectString(restoreConn,
+				`SELECT count(*) FROM pg_statistic WHERE starelid='public.test_local_cfg'::regclass::oid`)
+			Expect(actualStatisticCount).To(Equal("4"))
+
+			assertArtifactsCleaned(timestamp)
+		})
 	})
 	Describe("Restore with truncate-table", func() {
 		It("runs gpbackup and gprestore with truncate-table and include-table flags", func() {

@@ -152,6 +152,8 @@ func DoSetup() {
 
 func DoRestore() {
 	var filteredDataEntries map[string][]toc.CoordinatorDataEntry
+	var qdOnlyTablesRestored int
+	var qdOnlyDataEntries map[string][]toc.CoordinatorDataEntry
 	metadataFilename := globalFPInfo.GetMetadataFilePath()
 	isDataOnly := backupConfig.DataOnly || MustGetFlagBool(options.DATA_ONLY)
 	isMetadataOnly := backupConfig.MetadataOnly || MustGetFlagBool(options.METADATA_ONLY)
@@ -162,14 +164,14 @@ func DoRestore() {
 	}
 
 	if !isDataOnly && !isIncremental {
-		restorePredata(metadataFilename)
+		qdOnlyTablesRestored, qdOnlyDataEntries = restorePredata(metadataFilename)
 	} else if isDataOnly {
 		// The sequence setval commands need to be run during data only restores since
 		// they are arguably the data of the sequence relations and can affect user tables
 		// containing columns that reference those sequence relations.
 		restoreSequenceValues(metadataFilename)
 		// The data of QD-only tables also reside in the metadata, and it should be restored.
-		restoreQDOnlyTablesData(metadataFilename)
+		qdOnlyTablesRestored, qdOnlyDataEntries = restoreQDOnlyTablesData(metadataFilename)
 	}
 
 	totalTablesRestored := 0
@@ -178,6 +180,16 @@ func DoRestore() {
 			VerifyBackupFileCountOnSegments()
 		}
 		totalTablesRestored, filteredDataEntries = restoreData()
+	}
+
+	totalTablesRestored += qdOnlyTablesRestored
+	if len(qdOnlyDataEntries) > 0 {
+		if filteredDataEntries == nil {
+			filteredDataEntries = make(map[string][]toc.CoordinatorDataEntry)
+		}
+		for timestamp, entries := range qdOnlyDataEntries {
+			filteredDataEntries[timestamp] = append(filteredDataEntries[timestamp], entries...)
+		}
 	}
 
 	if !isDataOnly && !isIncremental {
@@ -291,9 +303,9 @@ func verifyIncrementalState() {
 	}
 }
 
-func restorePredata(metadataFilename string) {
+func restorePredata(metadataFilename string) (int, map[string][]toc.CoordinatorDataEntry) {
 	if wasTerminated.Load() {
-		return
+		return 0, nil
 	}
 	var numErrors int32
 	gplog.Info("Restoring pre-data metadata")
@@ -303,12 +315,10 @@ func restorePredata(metadataFilename string) {
 	if opts.RedirectSchema == "" {
 		schemaStatements = GetRestoreMetadataStatementsFiltered("predata", metadataFilename, []string{toc.OBJ_SCHEMA}, []string{}, filters)
 	}
-	excludeObjectTypes := []string{toc.OBJ_SCHEMA}
-	if backupConfig.MetadataOnly || MustGetFlagBool(options.METADATA_ONLY) {
-		// QD-only table data is not real schema/DDL content; a metadata-only
-		// restore should not replay it.
-		excludeObjectTypes = append(excludeObjectTypes, toc.OBJ_QD_ONLY_TABLE_DATA)
-	}
+	// QD-only table data is restored separately via restoreQDOnlyTablesData below, so that
+	// it (and its associated report/ANALYZE tracking) is handled consistently whether or not
+	// this is a --data-only restore.
+	excludeObjectTypes := []string{toc.OBJ_SCHEMA, toc.OBJ_QD_ONLY_TABLE_DATA}
 	statements := GetRestoreMetadataStatementsFiltered("predata", metadataFilename, []string{}, excludeObjectTypes, filters)
 
 	editStatementsRedirectSchema(statements, opts.RedirectSchema)
@@ -372,6 +382,16 @@ func restorePredata(metadataFilename string) {
 	} else {
 		gplog.Info("Pre-data metadata restore complete")
 	}
+
+	if backupConfig.MetadataOnly || MustGetFlagBool(options.METADATA_ONLY) {
+		// QD-only table data is not real schema/DDL content; a metadata-only
+		// restore should not replay it.
+		return 0, nil
+	}
+	// The data of QD-only tables also reside in the metadata, and it should be restored.
+	// This runs after the statements above so that CREATE EXTENSION (which may seed the
+	// table) has already executed.
+	return restoreQDOnlyTablesData(metadataFilename)
 }
 
 func restoreSequenceValues(metadataFilename string) {
@@ -414,9 +434,9 @@ func restoreSequenceValues(metadataFilename string) {
 	}
 }
 
-func restoreQDOnlyTablesData(metadataFilename string) {
+func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.CoordinatorDataEntry) {
 	if wasTerminated.Load() {
-		return
+		return 0, nil
 	}
 	gplog.Info("Restoring data of QD-only tables")
 
@@ -440,6 +460,15 @@ func restoreQDOnlyTablesData(metadataFilename string) {
 	} else {
 		gplog.Info("QD-only tables restore complete")
 	}
+
+	if len(statements) == 0 {
+		return 0, nil
+	}
+	dataEntries := make([]toc.CoordinatorDataEntry, len(statements))
+	for i, statement := range statements {
+		dataEntries[i] = toc.CoordinatorDataEntry{Schema: statement.Schema, Name: statement.Name}
+	}
+	return len(statements), map[string][]toc.CoordinatorDataEntry{globalFPInfo.Timestamp: dataEntries}
 }
 
 func editStatementsRedirectSchema(statements []toc.StatementWithType, redirectSchema string) {
