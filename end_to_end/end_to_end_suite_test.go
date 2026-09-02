@@ -1511,6 +1511,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 		})
 
 		It("excludes QD-only table data from --metadata-only backup", func() {
+			installLocalExtFixture()
 			defer createLocalExt(backupConn, true)()
 
 			output := gpbackup(gpbackupPath, backupHelperPath, "--metadata-only")
