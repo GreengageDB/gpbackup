@@ -387,18 +387,23 @@ func printDataBackupWarnings(numExtTables int64) {
 	}
 }
 
-// Get the tables subset that reside only on QD
-func GetBackupDataSetQDOnly(tables []Table) []TableQDOnly {
-	var backupDataSetQDOnly []TableQDOnly
+// SplitOutQDOnlyTables pulls the QD-only tables out of tables, so
+// SkipDataBackup() never has to know about QD-only tables at all.
+func SplitOutQDOnlyTables(tables []Table) ([]TableQDOnly, []Table) {
+	var qdOnlyTables []TableQDOnly
+	var remaining []Table
 
-	if !backupReport.MetadataOnly {
-		for _, table := range tables {
-			if table.IsQDOnly() {
-				backupDataSetQDOnly = append(backupDataSetQDOnly, TableQDOnly{Table: table})
-			}
+	if backupReport.MetadataOnly {
+		return qdOnlyTables, tables
+	}
+	for _, table := range tables {
+		if table.IsQDOnly() {
+			qdOnlyTables = append(qdOnlyTables, TableQDOnly{Table: table})
+		} else {
+			remaining = append(remaining, table)
 		}
 	}
-	return backupDataSetQDOnly
+	return qdOnlyTables, remaining
 }
 
 // Remove external/foreign tables from the data backup set
@@ -410,8 +415,6 @@ func GetBackupDataSet(tables []Table) ([]Table, int64) {
 		for _, table := range tables {
 			if !table.SkipDataBackup() {
 				backupDataSet = append(backupDataSet, table)
-			} else if table.IsQDOnly() {
-				gplog.Verbose("Skipping normal data backup of table %s because it is a QD-only table; its data is backed up separately.", table.FQN())
 			} else {
 				gplog.Verbose("Skipping data backup of table %s because it is either an external or foreign table.", table.FQN())
 				numExtOrForeignTables++

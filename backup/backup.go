@@ -130,7 +130,7 @@ func DoBackup() {
 
 	gplog.Info("Gathering table state information")
 	metadataTables, dataTables, allTables := RetrieveAndProcessTables()
-	dataTablesQDOnly := GetBackupDataSetQDOnly(dataTables)
+	dataTablesQDOnly, dataTables := SplitOutQDOnlyTables(dataTables)
 	dataTables, numExtOrForeignTables := GetBackupDataSet(dataTables)
 	if len(dataTables) == 0 && len(dataTablesQDOnly) == 0 && !backupReport.MetadataOnly {
 		gplog.Warn("No tables in backup set contain data. Performing metadata-only backup instead.")

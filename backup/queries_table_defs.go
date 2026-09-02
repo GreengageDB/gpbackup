@@ -36,7 +36,7 @@ func (t Table) IsQDOnly() bool {
 
 func (t Table) SkipDataBackup() bool {
 	def := t.TableDefinition
-	return def.IsExternal || (def.ForeignDef != ForeignTableDefinition{}) || t.IsQDOnly()
+	return def.IsExternal || (def.ForeignDef != ForeignTableDefinition{})
 }
 
 func (t Table) GetMetadataEntry() (string, toc.MetadataEntry) {
