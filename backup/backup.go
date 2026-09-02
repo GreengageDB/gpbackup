@@ -304,15 +304,16 @@ func backupQDOnlyData(metadataFile *utils.FileWithByteCount, tables []TableQDOnl
 			gplog.Fatal(fmt.Errorf("QD-only table %s has no non-generated columns to back up", tableName), "")
 		}
 
-		cols := strings.Split(strings.Trim(columnNames, "()"), ",")
-		quoted := make([]string, len(cols))
-		for i, col := range cols {
-			// Cast to text explicitly: quote_nullable() is overloaded as
-			// both quote_nullable(text) and quote_nullable(anyelement) in
-			// Postgres's own catalog, and for some argument types (e.g.
-			// integer) both become viable via implicit casting, causing
-			// "function quote_nullable(...) is not unique".
-			quoted[i] = fmt.Sprintf("quote_nullable(%s::text)", col)
+		var quoted []string
+		for _, col := range table.ColumnDefs {
+			if col.AttGenerated == "" {
+				// Cast to text explicitly: quote_nullable() is overloaded as
+				// both quote_nullable(text) and quote_nullable(anyelement) in
+				// Postgres's own catalog, and for some argument types (e.g.
+				// integer) both become viable via implicit casting, causing
+				// "function quote_nullable(...) is not unique".
+				quoted = append(quoted, fmt.Sprintf("quote_nullable(%s::text)", col.Name))
+			}
 		}
 		selectList := strings.Join(quoted, " || ',' || ")
 		query := fmt.Sprintf(`SELECT %s FROM %s %s`, selectList, tableName, *table.ExtensionTableConfig)

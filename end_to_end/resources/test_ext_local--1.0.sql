@@ -10,3 +10,13 @@ SELECT pg_catalog.pg_extension_config_dump('test_local_cfg', '');
 CREATE TABLE test_local_cfg_filtered (id int, active bool);
 SELECT pg_catalog.pg_extension_config_dump('test_local_cfg_filtered', 'WHERE active');
 INSERT INTO test_local_cfg_filtered VALUES (4, false);
+
+CREATE TABLE test_local_cfg_quoted_cols (
+	id int,
+	"comma,name" text,
+	"paren(name)" text,
+	"quote'name" text,
+	"dot.and space" text,
+	"unicode_名前" text
+);
+SELECT pg_catalog.pg_extension_config_dump('test_local_cfg_quoted_cols', '');

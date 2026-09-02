@@ -1363,6 +1363,8 @@ var _ = Describe("backup and restore end to end tests", func() {
 				(1, true),
 				(2, false),
 				(3, true);
+			INSERT INTO test_local_cfg_quoted_cols VALUES
+				(1, 'comma_val', 'paren_val', 'quote_val', 'dot_space_val', 'unicode_val');
 		`
 
 		installLocalExtFixture := func() {
@@ -1459,6 +1461,30 @@ var _ = Describe("backup and restore end to end tests", func() {
 			Expect(binVal4IsNull).To(Equal("true"))
 		}
 
+		// assertQuotedColsTableRestored confirms an INSERT built around
+		// double-quoted column names restores correctly.
+		assertQuotedColsTableRestored := func() {
+			commaVal := dbconn.MustSelectString(restoreConn,
+				`SELECT "comma,name" AS string FROM public.test_local_cfg_quoted_cols WHERE id = 1`)
+			Expect(commaVal).To(Equal("comma_val"))
+
+			parenVal := dbconn.MustSelectString(restoreConn,
+				`SELECT "paren(name)" AS string FROM public.test_local_cfg_quoted_cols WHERE id = 1`)
+			Expect(parenVal).To(Equal("paren_val"))
+
+			quoteVal := dbconn.MustSelectString(restoreConn,
+				`SELECT "quote'name" AS string FROM public.test_local_cfg_quoted_cols WHERE id = 1`)
+			Expect(quoteVal).To(Equal("quote_val"))
+
+			dotSpaceVal := dbconn.MustSelectString(restoreConn,
+				`SELECT "dot.and space" AS string FROM public.test_local_cfg_quoted_cols WHERE id = 1`)
+			Expect(dotSpaceVal).To(Equal("dot_space_val"))
+
+			unicodeVal := dbconn.MustSelectString(restoreConn,
+				`SELECT "unicode_名前" AS string FROM public.test_local_cfg_quoted_cols WHERE id = 1`)
+			Expect(unicodeVal).To(Equal("unicode_val"))
+		}
+
 		It("backs up and restores QD-only config table data", func() {
 			installLocalExtFixture()
 			defer createLocalExt(backupConn, true)()
@@ -1469,14 +1495,17 @@ var _ = Describe("backup and restore end to end tests", func() {
 				"--redirect-db", "restoredb")
 
 			assertDataRestored(restoreConn, map[string]int{
-				"public.test_local_cfg":          4,
-				"public.test_local_cfg_filtered": 3,
+				"public.test_local_cfg":             4,
+				"public.test_local_cfg_filtered":    3,
+				"public.test_local_cfg_quoted_cols": 1,
 			})
 
 			assertLocalCfgContentRestored()
 			assertFilteredTableRestored()
+			assertQuotedColsTableRestored()
 			assertQDOnlyPolicy("test_local_cfg")
 			assertQDOnlyPolicy("test_local_cfg_filtered")
+			assertQDOnlyPolicy("test_local_cfg_quoted_cols")
 
 			assertArtifactsCleaned(timestamp)
 		})
