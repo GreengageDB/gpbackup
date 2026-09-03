@@ -477,6 +477,10 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 		}
 	}
 
+	for i := range statements {
+		statements[i].Statement = fmt.Sprintf("BEGIN;\n%s\nCOMMIT;", statements[i].Statement)
+	}
+
 	numErrors := int32(0)
 	if len(statements) == 0 {
 		gplog.Verbose("No QD-only tables to restore")
