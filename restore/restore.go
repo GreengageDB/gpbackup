@@ -441,7 +441,7 @@ func getExtensionTableCondition(tableFQN string) (string, error) {
 			SELECT condition
 			FROM (SELECT unnest(extconfig) AS reloid, unnest(extcondition) AS condition FROM pg_catalog.pg_extension) cfg
 			WHERE reloid = '%s'::regclass
-		), '') AS string`, tableFQN))
+		), '') AS string`, utils.EscapeSingleQuotes(tableFQN)))
 }
 
 func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.CoordinatorDataEntry) {
