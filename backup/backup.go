@@ -295,9 +295,9 @@ func backupPredata(metadataFile *utils.FileWithByteCount, tables []Table, tableO
 func backupQDOnlyData(metadataFile *utils.FileWithByteCount, tables []TableQDOnly) {
 	gplog.Verbose("Writing QD-only tables data to metadata file")
 
-	for _, table := range tables {
-		start := metadataFile.ByteCount
+	wroteHeaderComment := false
 
+	for _, table := range tables {
 		columnNames := ConstructTableAttributesList(table.ColumnDefs)
 		tableName := table.FQN()
 		if columnNames == "" {
@@ -321,6 +321,13 @@ func backupQDOnlyData(metadataFile *utils.FileWithByteCount, tables []TableQDOnl
 		var rows []string
 		err := connectionPool.Select(&rows, query)
 		gplog.FatalOnError(err)
+
+		if len(rows) > 0 && !wroteHeaderComment {
+			metadataFile.MustPrintf("-- QD-only table data: rows are NUL (\\x00) separated, not newline separated.\n")
+			wroteHeaderComment = true
+		}
+
+		start := metadataFile.ByteCount
 
 		// Deliberately not prefixed with "INSERT INTO <schema>.<table> " here: that
 		// prefix is reconstructed fresh at restore time from this table's own
