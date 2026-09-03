@@ -468,7 +468,7 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 		}
 	}
 
-	if MustGetFlagBool(options.TRUNCATE_TABLE) {
+	if MustGetFlagBool(options.TRUNCATE_TABLE) || MustGetFlagBool(options.INCREMENTAL) {
 		for i := range statements {
 			tableName := utils.MakeFQN(statements[i].Schema, statements[i].Name)
 			condition := getExtensionTableCondition(tableName)

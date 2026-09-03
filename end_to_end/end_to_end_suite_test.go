@@ -1839,6 +1839,40 @@ var _ = Describe("backup and restore end to end tests", func() {
 
 			assertArtifactsCleaned(timestamp)
 		})
+
+		It("does not duplicate QD-only config table data across an incremental restore", func() {
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--leaf-partition-data")
+			fullTimestamp := getBackupTimestamp(string(output))
+
+			// Simulate data that accumulated on the source since the full
+			// backup - exactly what an incremental backup is meant to
+			// capture.
+			testhelper.AssertQueryRuns(backupConn,
+				fmt.Sprintf("INSERT INTO %s VALUES (5, 'incremental', NULL, NULL)", localExtTable))
+
+			output = gpbackup(gpbackupPath, backupHelperPath,
+				"--incremental", "--leaf-partition-data", "--from-timestamp", fullTimestamp)
+			incrementalTimestamp := getBackupTimestamp(string(output))
+
+			gprestore(gprestorePath, restoreHelperPath, fullTimestamp,
+				"--redirect-db", "restoredb")
+
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable: 4,
+			})
+
+			gprestore(gprestorePath, restoreHelperPath, incrementalTimestamp,
+				"--redirect-db", "restoredb", "--incremental", "--data-only")
+
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable: 5,
+			})
+
+			assertArtifactsCleaned(fullTimestamp)
+			assertArtifactsCleaned(incrementalTimestamp)
+		})
 	})
 	Describe("Restore with truncate-table", func() {
 		It("runs gpbackup and gprestore with truncate-table and include-table flags", func() {
