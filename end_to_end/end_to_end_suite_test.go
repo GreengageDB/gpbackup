@@ -1800,6 +1800,37 @@ var _ = Describe("backup and restore end to end tests", func() {
 			assertArtifactsCleaned(timestamp)
 		})
 
+		It("does not corrupt row data containing an INSERT INTO target string during --redirect-schema", func() {
+			defer createLocalExt(backupConn, true)()
+
+			poisonVal := fmt.Sprintf("INSERT INTO %s poisoned", localExtTable)
+			testhelper.AssertQueryRuns(backupConn,
+				fmt.Sprintf("INSERT INTO %s VALUES (99, '%s', NULL, NULL)", localExtTable, poisonVal))
+
+			testhelper.AssertQueryRuns(restoreConn, "CREATE SCHEMA redirect_local_ext_poison")
+			defer testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA redirect_local_ext_poison")
+			_, err := restoreConn.Exec("CREATE EXTENSION test_ext_local SCHEMA redirect_local_ext_poison;")
+			Expect(err).ToNot(HaveOccurred())
+			defer testhelper.AssertQueryRuns(restoreConn, "DROP EXTENSION test_ext_local;")
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--data-only")
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--data-only",
+				"--include-table", localExtTable,
+				"--redirect-schema", "redirect_local_ext_poison")
+
+			redirectedCount := dbconn.MustSelectString(restoreConn,
+				"SELECT count(*) AS string FROM redirect_local_ext_poison.test_local_cfg")
+			Expect(redirectedCount).To(Equal("5"))
+
+			restoredVal := dbconn.MustSelectString(restoreConn,
+				"SELECT val AS string FROM redirect_local_ext_poison.test_local_cfg WHERE id = 99")
+			Expect(restoredVal).To(Equal(poisonVal))
+
+			assertArtifactsCleaned(timestamp)
+		})
+
 		It("truncates only backed-up rows before restoring QD-only table data with --truncate-table", func() {
 			defer createLocalExt(backupConn, true)()
 

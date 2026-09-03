@@ -453,19 +453,26 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 	filters := NewFilters(opts.IncludedSchemas, opts.ExcludedSchemas, opts.IncludedRelations, opts.ExcludedRelations)
 	statements := GetRestoreMetadataStatementsFiltered("predata", metadataFilename, []string{toc.OBJ_QD_ONLY_TABLE_DATA}, []string{}, filters)
 
-	// Unlike other object types, this statement's INSERT INTO target schema was baked in
-	// as literal SQL text at backup time (once per row), and it can't be redirected via
-	// editStatementsRedirectSchema's single-replace/regex machinery, so it's rewritten
-	// here instead. The trailing space anchors the match to the full table name, so a
-	// same-prefixed sibling table (e.g. test_local_cfg vs. test_local_cfg_filtered) can't
-	// collide.
-	if opts.RedirectSchema != "" {
-		for i := range statements {
-			oldTarget := fmt.Sprintf("INSERT INTO %s ", utils.MakeFQN(statements[i].Schema, statements[i].Name))
-			newTarget := fmt.Sprintf("INSERT INTO %s ", utils.MakeFQN(opts.RedirectSchema, statements[i].Name))
-			statements[i].Statement = strings.ReplaceAll(statements[i].Statement, oldTarget, newTarget)
+	// Unlike other object types, this statement's data (one "<columns> VALUES(<row>);"
+	// per row, terminated with a NUL byte plus a newline - see backupQDOnlyData) has
+	// no INSERT INTO <schema>.<table> prefix. We add it here in order to
+	// properly handle schema redirection, splitting back apart on the NUL byte rather
+	// than the newline alone so that a row's own text data (which can contain a
+	// literal embedded newline) can never be mistaken for a row boundary.
+	for i := range statements {
+		if opts.RedirectSchema != "" {
 			statements[i].Schema = opts.RedirectSchema
 		}
+		if statements[i].Statement == "" {
+			continue
+		}
+		tableName := utils.MakeFQN(statements[i].Schema, statements[i].Name)
+		insertPrefix := fmt.Sprintf("INSERT INTO %s ", tableName)
+		rows := strings.Split(strings.TrimRight(statements[i].Statement, "\x00\n"), "\x00\n")
+		for j, row := range rows {
+			rows[j] = insertPrefix + row
+		}
+		statements[i].Statement = strings.Join(rows, "\n")
 	}
 
 	if MustGetFlagBool(options.TRUNCATE_TABLE) || MustGetFlagBool(options.INCREMENTAL) {

@@ -322,8 +322,21 @@ func backupQDOnlyData(metadataFile *utils.FileWithByteCount, tables []TableQDOnl
 		err := connectionPool.Select(&rows, query)
 		gplog.FatalOnError(err)
 
+		// Deliberately not prefixed with "INSERT INTO <schema>.<table> " here: that
+		// prefix is reconstructed fresh at restore time from this table's own
+		// structural Schema/Name (redirect-schema aware).
+		//
+		// Terminated with a NUL byte (plus a trailing newline purely so the metadata
+		// file stays readable when viewed directly), not a bare newline: a row's own
+		// text data can contain a literal embedded newline (quote_nullable() doesn't
+		// escape them), which would make restore misread it as a row boundary when
+		// splitting the text back apart. A NUL byte can't have that problem -
+		// Postgres's wire format cannot represent one inside a text value at all, and
+		// every column here is cast to ::text before quoting (bytea included, via its
+		// default 'hex' bytea_output, which never emits a raw NUL either) - so it's
+		// unambiguous no matter what a row's own data contains.
 		for _, row := range rows {
-			metadataFile.MustPrintf("INSERT INTO %s %s VALUES(%s);\n", tableName, columnNames, row)
+			metadataFile.MustPrintf("%s VALUES(%s);\x00\n", columnNames, row)
 		}
 
 		section, entry := table.GetMetadataEntry()
