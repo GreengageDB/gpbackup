@@ -494,7 +494,9 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 	}
 
 	for i := range statements {
-		statements[i].Statement = fmt.Sprintf("BEGIN;\n%s\nCOMMIT;", statements[i].Statement)
+		if statements[i].Statement != "" {
+			statements[i].Statement = fmt.Sprintf("BEGIN;\n%s\nCOMMIT;", statements[i].Statement)
+		}
 	}
 
 	numErrors := int32(0)
@@ -515,14 +517,19 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 		gplog.Info("QD-only tables restore complete")
 	}
 
-	if len(statements) == 0 {
+	restoredCount := 0
+	dataEntries := make([]toc.CoordinatorDataEntry, 0, len(statements))
+	for _, statement := range statements {
+		if statement.Statement == "" {
+			continue
+		}
+		restoredCount++
+		dataEntries = append(dataEntries, toc.CoordinatorDataEntry{Schema: statement.Schema, Name: statement.Name})
+	}
+	if restoredCount == 0 {
 		return 0, nil
 	}
-	dataEntries := make([]toc.CoordinatorDataEntry, len(statements))
-	for i, statement := range statements {
-		dataEntries[i] = toc.CoordinatorDataEntry{Schema: statement.Schema, Name: statement.Name}
-	}
-	return len(statements), map[string][]toc.CoordinatorDataEntry{globalFPInfo.Timestamp: dataEntries}
+	return restoredCount, map[string][]toc.CoordinatorDataEntry{globalFPInfo.Timestamp: dataEntries}
 }
 
 func editStatementsRedirectSchema(statements []toc.StatementWithType, redirectSchema string) {
