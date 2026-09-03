@@ -46,11 +46,17 @@ func executeStatementsForConn(statements chan toc.StatementWithType, fatalErr *e
 						mutex.Lock()
 						errorTablesMetadata[statement.Schema+"."+statement.Name] = Empty{}
 						mutex.Unlock()
+					} else if statement.ObjectType == toc.OBJ_QD_ONLY_TABLE_DATA {
+						mutex.Lock()
+						errorTablesData[statement.Schema+"."+statement.Name] = Empty{}
+						mutex.Unlock()
 					}
 				} else {
 					*numErrors = *numErrors + 1
 					if statement.ObjectType == toc.OBJ_TABLE {
 						errorTablesMetadata[statement.Schema+"."+statement.Name] = Empty{}
+					} else if statement.ObjectType == toc.OBJ_QD_ONLY_TABLE_DATA {
+						errorTablesData[statement.Schema+"."+statement.Name] = Empty{}
 					}
 				}
 			} else {

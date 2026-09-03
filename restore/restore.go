@@ -435,8 +435,8 @@ func restoreSequenceValues(metadataFilename string) {
 	}
 }
 
-func getExtensionTableCondition(tableFQN string) string {
-	return dbconn.MustSelectString(connectionPool, fmt.Sprintf(`
+func getExtensionTableCondition(tableFQN string) (string, error) {
+	return dbconn.SelectString(connectionPool, fmt.Sprintf(`
 		SELECT coalesce((
 			SELECT condition
 			FROM (SELECT unnest(extconfig) AS reloid, unnest(extcondition) AS condition FROM pg_catalog.pg_extension) cfg
@@ -478,7 +478,16 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 	if MustGetFlagBool(options.TRUNCATE_TABLE) || MustGetFlagBool(options.INCREMENTAL) {
 		for i := range statements {
 			tableName := utils.MakeFQN(statements[i].Schema, statements[i].Name)
-			condition := getExtensionTableCondition(tableName)
+			condition, err := getExtensionTableCondition(tableName)
+			if err != nil {
+				if MustGetFlagBool(options.ON_ERROR_CONTINUE) {
+					gplog.Error("Unable to determine extension config condition for %s, skipping: %s", tableName, err.Error())
+					errorTablesData[tableName] = Empty{}
+					statements[i].Statement = ""
+					continue
+				}
+				gplog.Fatal(err, fmt.Sprintf("Unable to determine extension config condition for %s", tableName))
+			}
 			// Use DELETE FROM instead of TRUNCATE to keep values seeded by the install script of extension
 			statements[i].Statement = fmt.Sprintf("DELETE FROM %s %s;\n%s", tableName, condition, statements[i].Statement)
 		}
