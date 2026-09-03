@@ -3,11 +3,14 @@ package checkmigrate_test
 import (
 	"strings"
 
+	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/checkmigrate"
+	"github.com/GreengageDB/gpbackup/options"
 	"github.com/spf13/cobra"
 
 	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("checkmigrate/validate tests", func() {
@@ -57,5 +60,18 @@ var _ = Describe("checkmigrate/validate tests", func() {
 			Entry("debug and verbose flags", "--debug --verbose", false),
 			Entry("quiet and verbose flags", "--quiet --verbose", false),
 		)
+
+		It("classifies invalid combinations as parameter errors", func() {
+			testCmd := &cobra.Command{Use: "flag validation"}
+			checkmigrate.SetCmdFlags(testCmd.Flags())
+			Expect(testCmd.Flags().Set(options.TARGET_HOST, "localhost")).To(Succeed())
+
+			defer func() {
+				Expect(recover()).NotTo(BeNil())
+				Expect(gplog.GetErrorCode()).To(Equal(4))
+			}()
+
+			checkmigrate.DoFlagValidation(testCmd)
+		})
 	})
 })

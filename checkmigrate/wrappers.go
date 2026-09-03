@@ -1,10 +1,10 @@
 package checkmigrate
 
 import (
-	"os"
 	"strconv"
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
+	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gpbackup/options"
 
 	"github.com/pkg/errors"
@@ -33,43 +33,62 @@ func SetLoggerVerbosity() {
 
 // We kind of replicate NewDBConnFromEnvironment(), but as we have
 // host/port/user flags we need to do their checking and assignment here.
-func CreateConnectionPool() {
+func CreateConnections() error {
+	bootstrapSourceConnection = nil
+	targetConnection = nil
+
 	sourceHost := options.MustGetFlagString(cmdFlags, options.SOURCE_HOST)
 	sourcePort := options.MustGetFlagInt(cmdFlags, options.SOURCE_PORT)
 	sourceDb := options.MustGetFlagString(cmdFlags, options.SOURCE_DATABASE)
 	sourceUser := options.MustGetFlagString(cmdFlags, options.SOURCE_USER)
 
-	if envPort := os.Getenv("PGPORT"); !cmdFlags.Changed(options.SOURCE_PORT) && envPort != "" {
-		envPortInt, conversionError := strconv.Atoi(envPort)
+	environmentPort := operating.System.Getenv("PGPORT")
+	if !cmdFlags.Changed(options.SOURCE_PORT) && environmentPort != "" {
+		parsedPort, conversionError := strconv.Atoi(environmentPort)
 		if conversionError == nil {
-			sourcePort = envPortInt
+			sourcePort = parsedPort
 		}
 	}
 
-	// We will need to check for all DBs if sourceDB not specified,
-	// but use postgres for initial connection.
-	scrapeDbNames = false
-	if sourceDb == "" {
-		sourceDb = "postgres"
-		scrapeDbNames = true
-	}
+	shouldScrapeDatabaseNames = sourceDb == ""
 
 	// Try using PGUSER first, then USER
 	if sourceUser == "" {
-		sourceUser = os.Getenv("USER")
-		if envUser := os.Getenv("PGUSER"); envUser != "" {
+		sourceUser = operating.System.Getenv("USER")
+		if envUser := operating.System.Getenv("PGUSER"); envUser != "" {
 			sourceUser = envUser
 		}
 	}
 
-	sourceConnectionPool = createDBConn(sourceDb, sourceUser, sourceHost, sourcePort)
-	if connectionError := sourceConnectionPool.Connect(1); connectionError != nil {
-		gplog.SetErrorCode(5)
-		panic(connectionError)
+	sourceDatabaseNames := []string{sourceDb}
+	if shouldScrapeDatabaseNames {
+		sourceDatabaseNames = []string{"postgres", "template1"}
 	}
-	if !sourceConnectionPool.Version.Is("6") {
+
+	var sourceConnectionError error
+	for _, sourceDatabaseName := range sourceDatabaseNames {
+		candidateSourceConnection := createDBConn(sourceDatabaseName, sourceUser, sourceHost, sourcePort)
+		sourceConnectionError = candidateSourceConnection.Connect(1)
+		if sourceConnectionError == nil {
+			bootstrapSourceConnection = candidateSourceConnection
+			break
+		}
+		candidateSourceConnection.Close()
+	}
+	if bootstrapSourceConnection == nil {
+		gplog.SetErrorCode(5)
+
+		return sourceConnectionError
+	}
+	if !bootstrapSourceConnection.Version.Is("6") {
 		gplog.SetErrorCode(2)
-		panic(errors.New("This utility can only check for migrate from Greengage version 6"))
+
+		return errors.New("this utility can only check for migrate from Greengage version 6")
+	}
+	if bootstrapSourceConnection.Version.Before("6.27.1") {
+		gplog.SetErrorCode(2)
+
+		return errors.New("this utility requires Greengage version 6.27.1 or newer")
 	}
 
 	targetHost := options.MustGetFlagString(cmdFlags, options.TARGET_HOST)
@@ -78,21 +97,25 @@ func CreateConnectionPool() {
 	targetUser := options.MustGetFlagString(cmdFlags, options.TARGET_USER)
 
 	if targetUser == "" {
-		targetUser = os.Getenv("USER")
-		if envUser := os.Getenv("PGUSER"); envUser != "" {
+		targetUser = operating.System.Getenv("USER")
+		if envUser := operating.System.Getenv("PGUSER"); envUser != "" {
 			targetUser = envUser
 		}
 	}
 
 	if targetHost != "" && targetPort != 0 {
-		targetConnectionPool = createDBConn(targetDb, targetUser, targetHost, targetPort)
-		if connectionError := targetConnectionPool.Connect(1); connectionError != nil {
+		targetConnection = createDBConn(targetDb, targetUser, targetHost, targetPort)
+		if connectionError := targetConnection.Connect(1); connectionError != nil {
 			gplog.SetErrorCode(5)
-			panic(connectionError)
+
+			return connectionError
 		}
-		if !targetConnectionPool.Version.Is("7") {
+		if !targetConnection.Version.Is("7") {
 			gplog.SetErrorCode(3)
-			panic(errors.New("This utility can only check for migrate to Greengage version 7"))
+
+			return errors.New("this utility can only check for migrate to Greengage version 7")
 		}
 	}
+
+	return nil
 }

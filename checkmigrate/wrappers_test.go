@@ -17,7 +17,7 @@ import (
 )
 
 var _ = Describe("checkmigrate wrapper tests", func() {
-	Describe("CreateConnectionPool", func() {
+	Describe("CreateConnections", func() {
 		var (
 			mockSource *dbconn.DBConn
 			mockTarget *dbconn.DBConn
@@ -29,9 +29,9 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 		BeforeEach(func() {
 			mockSource, sourceMock = testhelper.CreateMockDBConn()
 			mockTarget, targetMock = testhelper.CreateMockDBConn()
-			testhelper.SetDBVersion(mockSource, "6.0.0")
+			testhelper.SetDBVersion(mockSource, "6.27.1")
 			testhelper.SetDBVersion(mockTarget, "7.0.0")
-			testhelper.ExpectVersionQuery(sourceMock, "6.0.0")
+			testhelper.ExpectVersionQuery(sourceMock, "6.27.1")
 			testhelper.ExpectVersionQuery(targetMock, "7.0.0")
 			checkmigrate.ResetGlobalState()
 			cmdFlags = pflag.NewFlagSet("checkmigrate", pflag.ContinueOnError)
@@ -52,7 +52,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 			}
 		})
 
-		It("defaults to port 5432, postgres db, and scrapeDbNames=true when no flags/envs are set", func() {
+		It("defaults to port 5432, postgres db, and shouldScrapeDatabaseNames=true when no flags/envs are set", func() {
 			GinkgoT().Setenv("USER", "test_os_user")
 
 			checkmigrate.SetCreateDBConn(func(dbName, username, host string, port int) *dbconn.DBConn {
@@ -63,14 +63,14 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			checkmigrate.CreateConnectionPool()
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
 
-			sourcePool := checkmigrate.GetSourceConnectionPool()
-			Expect(sourcePool).NotTo(BeNil())
-			Expect(sourcePool.Port).To(Equal(5432))
-			Expect(sourcePool.DBName).To(Equal("postgres"))
-			Expect(sourcePool.User).To(Equal("test_os_user"))
-			Expect(checkmigrate.GetScrapeDbNames()).To(BeTrue())
+			sourceConnection := checkmigrate.GetSourceConnection()
+			Expect(sourceConnection).NotTo(BeNil())
+			Expect(sourceConnection.Port).To(Equal(5432))
+			Expect(sourceConnection.DBName).To(Equal("postgres"))
+			Expect(sourceConnection.User).To(Equal("test_os_user"))
+			Expect(checkmigrate.GetShouldScrapeDatabaseNames()).To(BeTrue())
 
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 		})
@@ -86,11 +86,11 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			checkmigrate.CreateConnectionPool()
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
 
-			sourcePool := checkmigrate.GetSourceConnectionPool()
-			Expect(sourcePool).NotTo(BeNil())
-			Expect(sourcePool.Port).To(Equal(6000))
+			sourceConnection := checkmigrate.GetSourceConnection()
+			Expect(sourceConnection).NotTo(BeNil())
+			Expect(sourceConnection.Port).To(Equal(6000))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 		})
 
@@ -103,9 +103,9 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			checkmigrate.CreateConnectionPool()
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
 
-			Expect(checkmigrate.GetSourceConnectionPool().Port).To(Equal(7000))
+			Expect(checkmigrate.GetSourceConnection().Port).To(Equal(7000))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 		})
 
@@ -117,20 +117,52 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockSource
 			})
 
-			checkmigrate.CreateConnectionPool()
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
 
-			Expect(checkmigrate.GetSourceConnectionPool().Port).To(Equal(5432))
+			Expect(checkmigrate.GetSourceConnection().Port).To(Equal(5432))
+			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
+		})
+
+		It("uses template1 when postgres does not accept connections", func() {
+			failingSource, _ := testhelper.CreateMockDBConn(errors.New("postgres connection failed"))
+			DeferCleanup(failingSource.Close)
+			GinkgoT().Setenv("USER", "test_os_user")
+
+			connectionCount := 0
+			checkmigrate.SetCreateDBConn(func(dbName, username, host string, port int) *dbconn.DBConn {
+				connectionCount++
+				if connectionCount == 1 {
+					Expect(dbName).To(Equal("postgres"))
+					return failingSource
+				}
+
+				mockSource.DBName = dbName
+				mockSource.User = username
+				mockSource.Host = host
+				mockSource.Port = port
+				return mockSource
+			})
+
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
+
+			sourceConnection := checkmigrate.GetSourceConnection()
+			Expect(sourceConnection.DBName).To(Equal("template1"))
+			Expect(sourceConnection.User).To(Equal("test_os_user"))
+			Expect(sourceConnection.Port).To(Equal(5432))
+			Expect(checkmigrate.GetShouldScrapeDatabaseNames()).To(BeTrue())
+			Expect(connectionCount).To(Equal(2))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 		})
 
 		It("returns execution error code for a source connection failure", func() {
+			_ = cmdFlags.Set(options.SOURCE_DATABASE, "application")
 			failingSource, _ := testhelper.CreateMockDBConn(errors.New("source connection failed"))
 			DeferCleanup(failingSource.Close)
 			checkmigrate.SetCreateDBConn(func(dbName, username, host string, port int) *dbconn.DBConn {
 				return failingSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool).To(Panic())
+			Expect(checkmigrate.CreateConnections()).To(MatchError("source connection failed (testhost:5432)"))
 			Expect(gplog.GetErrorCode()).To(Equal(5))
 		})
 
@@ -142,9 +174,22 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return invalidSource
 			})
 
-			Expect(checkmigrate.CreateConnectionPool).To(PanicWith(MatchError("This utility can only check for migrate from Greengage version 6")))
+			Expect(checkmigrate.CreateConnections()).To(MatchError("this utility can only check for migrate from Greengage version 6"))
 			Expect(gplog.GetErrorCode()).To(Equal(2))
 			Expect(invalidSourceMock.ExpectationsWereMet()).To(Succeed())
+		})
+
+		It("returns the source version error below version 6.27.1", func() {
+			oldSource, oldSourceMock := testhelper.CreateMockDBConn()
+			testhelper.ExpectVersionQuery(oldSourceMock, "6.27.0")
+			DeferCleanup(oldSource.Close)
+			checkmigrate.SetCreateDBConn(func(dbName, username, host string, port int) *dbconn.DBConn {
+				return oldSource
+			})
+
+			Expect(checkmigrate.CreateConnections()).To(MatchError("this utility requires Greengage version 6.27.1 or newer"))
+			Expect(gplog.GetErrorCode()).To(Equal(2))
+			Expect(oldSourceMock.ExpectationsWereMet()).To(Succeed())
 		})
 
 		It("successfully creates both source and target connections when target-host and target-port are provided", func() {
@@ -168,12 +213,12 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return mockTarget
 			})
 
-			checkmigrate.CreateConnectionPool()
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
 
-			targetPool := checkmigrate.GetTargetConnectionPool()
-			Expect(targetPool).NotTo(BeNil())
-			Expect(targetPool.Host).To(Equal("localhost"))
-			Expect(targetPool.Port).To(Equal(7000))
+			targetConnection := checkmigrate.GetTargetConnection()
+			Expect(targetConnection).NotTo(BeNil())
+			Expect(targetConnection.Host).To(Equal("localhost"))
+			Expect(targetConnection.Port).To(Equal(7000))
 
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 			Expect(targetMock.ExpectationsWereMet()).To(Succeed())
@@ -195,7 +240,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return failingTarget
 			})
 
-			Expect(checkmigrate.CreateConnectionPool).To(Panic())
+			Expect(checkmigrate.CreateConnections()).To(MatchError("target connection failed (testhost:5432)"))
 			Expect(gplog.GetErrorCode()).To(Equal(5))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 		})
@@ -217,7 +262,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return invalidTarget
 			})
 
-			Expect(checkmigrate.CreateConnectionPool).To(PanicWith(MatchError("This utility can only check for migrate to Greengage version 7")))
+			Expect(checkmigrate.CreateConnections()).To(MatchError("this utility can only check for migrate to Greengage version 7"))
 			Expect(gplog.GetErrorCode()).To(Equal(3))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 			Expect(invalidTargetMock.ExpectationsWereMet()).To(Succeed())
