@@ -24,6 +24,7 @@ Start Greengage 6 and Greengage 7 clusters with reachable TCP endpoints. Run the
 GGCHECKMIGRATE_SOURCE_HOST=127.0.0.1 \
 GGCHECKMIGRATE_SOURCE_PORT=26000 \
 GGCHECKMIGRATE_SOURCE_USER=gpadmin \
+GGCHECKMIGRATE_DATABASE=ggcheckmigrate_test \
 GGCHECKMIGRATE_TARGET_HOST=127.0.0.1 \
 GGCHECKMIGRATE_TARGET_PORT=27000 \
 GGCHECKMIGRATE_TARGET_USER=gpadmin \
@@ -33,6 +34,6 @@ ci/scripts/test-ggcheckmigrate.bash
 
 The source and target credentials can be stored in `.pgpass`. The utility also uses `PGPASSWORD` and the configured ident, peer, or trust authentication methods. It does not accept a password flag.
 
-An explicit `--source-database` checks one database. When the flag is omitted, every connectable database except `template0` is checked. The initial catalog connection uses `postgres` and falls back to `template1`. At least one of these databases must accept connections.
+Set `GGCHECKMIGRATE_DATABASE` to change the temporary source database name. Its default value is `ggcheckmigrate_test`.
 
-The source-only fixture validates the per-database catalog checks and the cluster resource group check. The required library check runs when the Greengage 7 target variables are set. Other migration problems can exist, and a clean result does not guarantee a successful restore.
+The source-only fixture validates the retained per-database catalog checks and cluster configuration checks. The required library check runs when the Greengage 7 target variables are set. Other migration problems can exist, and a clean result does not guarantee a successful restore.

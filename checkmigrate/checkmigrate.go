@@ -86,15 +86,11 @@ func DoCheckMigrate() {
 	unavailableDatabaseCheckCount := 0
 	findingCount := 0
 	hasExecutionError := false
-	hasCheckResultIssue := false
 
 	clusterSummary, clusterExecutionError := runClusterChecks(bootstrapSourceConnection, clusterChecks)
 	completedClusterCheckCount = clusterSummary.completedCheckCount
 	failedClusterCheckCount = clusterSummary.failedCheckCount
 	findingCount += clusterSummary.findingCount
-	if clusterSummary.failedCheckCount > 0 {
-		hasCheckResultIssue = true
-	}
 	if clusterExecutionError != nil {
 		hasExecutionError = true
 		gplog.Error("Cluster checks could not complete with %v", clusterExecutionError)
@@ -103,7 +99,6 @@ func DoCheckMigrate() {
 	for _, database := range databaseNames {
 		gplog.Debug("Starting checks for database %q", database.DatabaseName)
 		databaseConnection := bootstrapSourceConnection
-		shouldCloseConnection := false
 		if database.DatabaseName != bootstrapSourceConnection.DBName {
 			databaseConnection = createDBConn(
 				database.DatabaseName,
@@ -127,11 +122,10 @@ func DoCheckMigrate() {
 
 				continue
 			}
-			shouldCloseConnection = true
 		}
 
 		databaseSummary, databaseExecutionError := runMigrationChecks(databaseConnection, targetConnection)
-		if shouldCloseConnection {
+		if database.DatabaseName != bootstrapSourceConnection.DBName {
 			databaseConnection.Close()
 		}
 		if databaseExecutionError != nil {
@@ -151,9 +145,6 @@ func DoCheckMigrate() {
 		failedDatabaseCheckCount += databaseSummary.failedCheckCount
 		unavailableDatabaseCheckCount += databaseSummary.unavailableCheckCount
 		findingCount += databaseSummary.findingCount
-		if databaseSummary.failedCheckCount > 0 || databaseSummary.unavailableCheckCount > 0 {
-			hasCheckResultIssue = true
-		}
 		gplog.Debug(
 			"Completed checks for database %q with %d completed checks, %d failed checks, "+
 				"%d unavailable checks, and %d findings",
@@ -165,6 +156,9 @@ func DoCheckMigrate() {
 		)
 	}
 
+	hasCheckResultIssue := failedClusterCheckCount > 0 ||
+		failedDatabaseCheckCount > 0 ||
+		unavailableDatabaseCheckCount > 0
 	summaryShellVerbosity := gplog.LOGINFO
 	if findingCount > 0 || hasCheckResultIssue || hasExecutionError {
 		summaryShellVerbosity = gplog.LOGERROR
@@ -187,7 +181,7 @@ func DoCheckMigrate() {
 	var summaryOutput strings.Builder
 	summaryOutput.WriteString("Execution summary:")
 	for _, row := range summaryRows {
-		fmt.Fprintf(&summaryOutput, "\n  %-31s%2d", row.label, row.count)
+		fmt.Fprintf(&summaryOutput, "\n  %-31s%5d", row.label, row.count)
 	}
 	gplog.Custom(
 		gplog.LOGINFO,

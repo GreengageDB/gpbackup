@@ -29,32 +29,6 @@ type sourceCheckTestCase struct {
 
 var sourceCheckTestCases = []sourceCheckTestCase{
 	{
-		name:        "multi-column LIST partitions",
-		check:       checkMultiColumnListPartitions,
-		query:       multiColumnListPartitionQuery,
-		columns:     []string{"schema_name", "object_name"},
-		rows:        [][]driver.Value{{"sales", "orders"}, {"warehouse", "inventory"}},
-		problemText: "partitioned tables with a LIST partition key containing multiple columns",
-		expectedObjects: []string{
-			`Object "orders" has type "partitioned table" in schema "sales"`,
-			`Object "inventory" has type "partitioned table" in schema "warehouse"`,
-		},
-	},
-	{
-		name:        "plpython2 functions",
-		check:       checkPlpython2DependentFunctions,
-		query:       plpython2DependentFunctionQuery,
-		columns:     []string{"schema_name", "object_name", "identity_arguments"},
-		rows:        [][]driver.Value{{"analytics", "forecast", "integer"}, {"public", "legacy_python", "text, integer"}},
-		problemText: "PL/Python functions that rely on Python 2",
-		expectedObjects: []string{
-			`Object "forecast" has type "function" in schema "analytics"`,
-			`Object "legacy_python" has type "function" in schema "public"`,
-			`identity arguments are "integer"`,
-			`identity arguments are "text, integer"`,
-		},
-	},
-	{
 		name:        "views with removed operators",
 		check:       checkViewsWithRemovedOperators,
 		query:       removedOperatorViewQuery,
@@ -121,124 +95,6 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		problemText: "views that reference system relations removed from version 7",
 		expectedObjects: []string{
 			`Object "removed_relation_view" has type "view" in schema "public"`,
-		},
-	},
-	{
-		name:        "removed data types",
-		check:       checkRemovedDataTypes,
-		query:       removedDataTypeQuery,
-		columns:     []string{"schema_name", "object_name", "column_name"},
-		rows:        [][]driver.Value{{"public", "events", "created_at"}, {"archive", "old_events", "expired_at"}},
-		problemText: "removed abstime, reltime, tinterval, or unknown data types",
-		expectedObjects: []string{
-			`Object "created_at" has type "column" in schema "public"`,
-			`Object "expired_at" has type "column" in schema "archive"`,
-		},
-	},
-	{
-		name:        "missing AO options",
-		check:       checkMissingAOOptions,
-		query:       missingAOOptionQuery,
-		columns:     []string{"parent_schema", "parent_name", "child_schema", "child_name", "parent_option"},
-		rows:        [][]driver.Value{{"public", "ao_parent", "public", "ao_child_one", "compresstype=zlib"}, {"archive", "ao_parent_two", "archive", "ao_child_two", "compresslevel=5"}},
-		problemText: "child partitions that do not define the parent table settings",
-		expectedObjects: []string{
-			`Object "ao_child_one" has type "partition" in schema "public"`,
-			`Object "ao_child_two" has type "partition" in schema "archive"`,
-		},
-	},
-	{
-		name:        "restricted EXECUTE ON functions",
-		check:       checkRestrictedExecuteOnFunctions,
-		query:       restrictedExecuteOnFunctionQuery,
-		columns:     []string{"schema_name", "object_name", "identity_arguments"},
-		rows:        [][]driver.Value{{"public", "master_function", "integer"}, {"analytics", "segment_function", "text, integer"}},
-		problemText: "functions that are not set-returning and use MASTER, ALL SEGMENTS, or INITPLAN EXECUTE ON",
-		expectedObjects: []string{
-			`Object "master_function" has type "function" in schema "public"`,
-			`Object "segment_function" has type "function" in schema "analytics"`,
-			`identity arguments are "integer"`,
-			`identity arguments are "text, integer"`,
-		},
-	},
-	{
-		name:        "incomplete partition indexes",
-		check:       checkIncompletePartitionIndexes,
-		query:       incompletePartitionIndexQuery,
-		columns:     []string{"schema_name", "table_name", "index_name"},
-		rows:        [][]driver.Value{{"public", "sales", "sales_unique"}, {"archive", "orders", "orders_primary"}},
-		problemText: "partitioned tables with unique indexes that omit partition keys",
-		expectedObjects: []string{
-			`Object "sales_unique" has type "index" in schema "public"`,
-			`Object "orders_primary" has type "index" in schema "archive"`,
-		},
-	},
-	{
-		name:        "incompatible range partitions",
-		check:       checkIncompatibleRangePartitions,
-		query:       incompatibleRangePartitionQuery,
-		columns:     []string{"parent_schema", "table_name", "type_name", "partition_schema", "partition_name"},
-		rows:        [][]driver.Value{{"public", "prices", "numeric", "sales", "prices_1_prt_low"}, {"archive", "labels", "text", "history", "labels_1_prt_a"}},
-		problemText: "range partitions that use START EXCLUSIVE or END INCLUSIVE boundaries",
-		expectedObjects: []string{
-			`Object "prices_1_prt_low" has type "partition" in schema "sales"`,
-			`Object "labels_1_prt_a" has type "partition" in schema "history"`,
-		},
-	},
-	{
-		name:        "statement triggers",
-		check:       checkStatementTriggers,
-		query:       statementTriggerQuery,
-		columns:     []string{"schema_name", "table_name", "trigger_name"},
-		rows:        [][]driver.Value{{"public", "orders", "orders_statement"}, {"audit", "events", "events_statement"}},
-		problemText: "Your cluster contains statement triggers",
-		expectedObjects: []string{
-			`Object "orders_statement" has type "trigger" in schema "public"`,
-			`Object "events_statement" has type "trigger" in schema "audit"`,
-		},
-	},
-	{
-		name:        "removed extensions",
-		check:       checkRemovedExtensions,
-		query:       removedExtensionQuery,
-		columns:     []string{"schema_name", "object_name"},
-		rows:        [][]driver.Value{{"public", "gp_array_agg"}},
-		problemText: "extensions that are absent from version 7",
-		expectedObjects: []string{
-			`Object "gp_array_agg" has type "extension" in schema "public"`,
-		},
-	},
-	{
-		name:        "arenadata toolkit schema",
-		check:       checkArenadataToolkitSchema,
-		query:       arenadataToolkitSchemaQuery,
-		columns:     []string{"schema_name", "object_name"},
-		rows:        [][]driver.Value{{"arenadata_toolkit", "arenadata_toolkit"}},
-		problemText: "contains the arenadata_toolkit schema",
-		expectedObjects: []string{
-			`Object "arenadata_toolkit" has type "schema" in schema "arenadata_toolkit"`,
-		},
-	},
-	{
-		name:        "system object dependencies",
-		check:       checkSystemObjectDependencies,
-		query:       systemObjectDependencyQuery,
-		columns:     []string{"schema_name", "object_name", "relation_kind", "referenced_object"},
-		rows:        [][]driver.Value{{"public", "catalog_view", "v", "pg_catalog.pg_class"}},
-		problemText: "user objects that reference system relations",
-		expectedObjects: []string{
-			`Object "catalog_view" has type "view" in schema "public"`,
-		},
-	},
-	{
-		name:        "deep partition templates",
-		check:       checkDeepPartitionTemplates,
-		query:       deepPartitionTemplateQuery,
-		columns:     []string{"schema_name", "object_name"},
-		rows:        [][]driver.Value{{"public", "deep_parts"}},
-		problemText: "subpartition templates deeper than the second partition level",
-		expectedObjects: []string{
-			`Object "deep_parts" has type "partitioned table" in schema "public"`,
 		},
 	},
 	{
@@ -331,7 +187,7 @@ func expectAllSourceChecksEmpty(mock sqlmock.Sqlmock) {
 }
 
 func expectMigrationSetupQueries(mock sqlmock.Sqlmock) {
-	for _, setupQuery := range []string{migrationCheckSetupQuery, migrationCheckSetupCatalogQuery, migrationCheckSetupTypesQuery} {
+	for _, setupQuery := range []string{migrationCheckSetupQuery, migrationCheckSetupCatalogQuery} {
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec(regexp.QuoteMeta(setupQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -349,7 +205,6 @@ func expectReadOnlyMigrationTransaction(mock sqlmock.Sqlmock) {
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta(setTransactionReadOnlyQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(setLocalTrackCountsQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
 }
 
 func expectMigrationTransaction(mock sqlmock.Sqlmock) {
@@ -359,12 +214,10 @@ func expectMigrationTransaction(mock sqlmock.Sqlmock) {
 
 func expectClusterChecksEmpty(mock sqlmock.Sqlmock) {
 	expectReadOnlyMigrationTransaction(mock)
-	for _, query := range []string{resourceGroupQuery, incompatibleStorageOptionQuery, removedGUCSettingQuery} {
+	for _, query := range []string{incompatibleStorageOptionQuery, removedGUCSettingQuery} {
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 		var columns []string
 		switch query {
-		case resourceGroupQuery:
-			columns = []string{"object_name"}
 		case incompatibleStorageOptionQuery:
 			columns = []string{"database_name", "role_name", "setting", "option_name"}
 		default:
@@ -584,22 +437,10 @@ func TestMigrationSetupUsesTemporarySchema(t *testing.T) {
 	if !strings.Contains(migrationCheckSetupQuery, "pg_temp") {
 		t.Fatal("The migration setup does not use the temporary schema")
 	}
-	if strings.Contains(migrationCheckSetupQuery, "track_counts") {
-		t.Fatal("The migration setup changes track_counts outside the read-only check transaction")
-	}
-	for _, query := range []string{removedOperatorViewQuery, removedFunctionViewQuery, removedTypeViewQuery, changedFunctionSignatureViewQuery, removedCatalogColumnViewQuery, removedCatalogRelationViewQuery, removedDataTypeQuery} {
+	for _, query := range []string{removedOperatorViewQuery, removedFunctionViewQuery, removedTypeViewQuery, changedFunctionSignatureViewQuery, removedCatalogColumnViewQuery, removedCatalogRelationViewQuery} {
 		if !strings.Contains(query, "pg_temp") {
 			t.Fatalf("The support query does not use the temporary schema in %q", query)
 		}
-	}
-}
-
-func TestPlpythonCheckUsesLanguageHandler(t *testing.T) {
-	if !strings.Contains(plpython2DependentFunctionQuery, "lanplcallfoid") {
-		t.Fatal("The PL/Python check does not inspect the language handler")
-	}
-	if strings.Contains(plpython2DependentFunctionQuery, "pg_pltemplate") {
-		t.Fatal("The PL/Python check still depends on the language template")
 	}
 }
 
@@ -623,23 +464,13 @@ func TestSourceDatabaseEnumerationIncludesConnectableTemplateDatabases(t *testin
 
 func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 	queries := []string{
-		multiColumnListPartitionQuery,
-		plpython2DependentFunctionQuery,
 		removedOperatorViewQuery,
 		removedFunctionViewQuery,
 		removedTypeViewQuery,
 		changedFunctionSignatureViewQuery,
 		removedCatalogColumnViewQuery,
 		removedCatalogRelationViewQuery,
-		migrationCheckSetupTypesQuery,
 		requiredLibraryQuery,
-		missingAOOptionQuery,
-		restrictedExecuteOnFunctionQuery,
-		incompletePartitionIndexQuery,
-		incompatibleRangePartitionQuery,
-		statementTriggerQuery,
-		systemObjectDependencyQuery,
-		deepPartitionTemplateQuery,
 		disallowedArrowOperatorQuery,
 		partitionOpfamilyQuery,
 	}
@@ -647,23 +478,6 @@ func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 		if !strings.Contains(query, "pg_temp_") || !strings.Contains(query, "information_schema") {
 			t.Fatalf("The source check does not filter non-user schemas in %q", query)
 		}
-	}
-}
-
-func TestSystemViewDependenciesSeedDefinitionsAndUseCatalogDependencies(t *testing.T) {
-	for _, catalog := range []string{"pg_catalog.pg_rewrite", "pg_catalog.pg_depend"} {
-		if !strings.Contains(systemObjectDependencyQuery, catalog) {
-			t.Fatalf("The system dependency check does not use %s", catalog)
-		}
-	}
-	if !strings.Contains(systemObjectDependencyQuery, "pg_catalog.pg_get_viewdef") {
-		t.Fatal("The system dependency check does not inspect definitions for pinned catalog relations")
-	}
-	if !strings.Contains(systemObjectDependencyQuery, "catalog_dependency.refobjid = dependency.oid") {
-		t.Fatal("The system dependency check does not traverse dependent views")
-	}
-	if !strings.Contains(systemObjectDependencyQuery, "rewrite_rule.rulename = '_RETURN'") {
-		t.Fatal("The system dependency check traverses rules outside view definitions")
 	}
 }
 
@@ -678,14 +492,6 @@ func TestRequiredLibrariesMatchBackedUpFunctionScope(t *testing.T) {
 	}
 }
 
-func TestResourceGroupsExcludeBuiltInGroups(t *testing.T) {
-	for _, groupName := range []string{"admin_group", "default_group"} {
-		if !strings.Contains(resourceGroupQuery, groupName) {
-			t.Fatalf("The resource group check includes built-in group %s", groupName)
-		}
-	}
-}
-
 func TestConfigurationQueriesUseValidCoalesceExpressions(t *testing.T) {
 	for _, query := range []string{incompatibleStorageOptionQuery, removedGUCSettingQuery} {
 		if strings.Contains(query, "pg_catalog.coalesce") {
@@ -694,24 +500,7 @@ func TestConfigurationQueriesUseValidCoalesceExpressions(t *testing.T) {
 	}
 }
 
-func TestMissingAOOptionsUseImmediateAOParents(t *testing.T) {
-	for _, catalog := range []string{"pg_catalog.pg_partition_rule", "pg_catalog.pg_partition"} {
-		if !strings.Contains(missingAOOptionQuery, catalog) {
-			t.Fatalf("The AO option check does not use %s", catalog)
-		}
-	}
-	if !strings.Contains(missingAOOptionQuery, "parent_rule.parchildrelid, root_partition.parrelid") {
-		t.Fatal("The AO option check does not resolve immediate partition parents")
-	}
-	if !strings.Contains(missingAOOptionQuery, "child_relation.relstorage IN ('a', 'c')") {
-		t.Fatal("The AO option check includes heap or external child partitions")
-	}
-	if strings.Contains(missingAOOptionQuery, "pg_catalog.pg_partitions") {
-		t.Fatal("The AO option check still resolves parents through the root-only view")
-	}
-}
-
-func TestDoCheckMigrateChecksRequiredLibrariesBeforeSourceChecks(t *testing.T) {
+func TestDoCheckMigrateChecksRequiredLibrariesAfterSourceChecks(t *testing.T) {
 	sourceConnection, sourceMock, _ := setupCheckTest(t)
 	targetDatabaseConnection, targetMock, _, stderr, _ := testhelper.SetupTestEnvironment()
 	targetDatabaseConnection.DBName = "target_database"
@@ -730,24 +519,25 @@ func TestDoCheckMigrateChecksRequiredLibrariesBeforeSourceChecks(t *testing.T) {
 
 	expectClusterChecksEmpty(sourceMock)
 	expectMigrationTransaction(sourceMock)
+	expectAllSourceChecksEmpty(sourceMock)
 	sourceMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	sourceMock.ExpectQuery(regexp.QuoteMeta(requiredLibraryQuery)).WillReturnRows(
 		sqlmock.NewRows([]string{"schema_name", "object_name", "identity_arguments", "library_name"}).AddRow("public", "missing_fn", "integer", "$libdir/missing"),
 	)
 	targetMock.ExpectExec(regexp.QuoteMeta("LOAD '$libdir/missing'")).WillReturnError(errors.New("missing library"))
-	targetMock.ExpectExec(regexp.QuoteMeta("SELECT 1")).WillReturnResult(sqlmock.NewResult(0, 0))
+	targetMock.ExpectExec(regexp.QuoteMeta("SELECT 1")).WillReturnError(errors.New("target database unavailable"))
+	sourceMock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	sourceMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
-	expectAllSourceChecksEmpty(sourceMock)
 	sourceMock.ExpectRollback()
 
 	if recoveredValue := callDoCheckMigrate(); recoveredValue != nil {
 		t.Fatalf("DoCheckMigrate panicked with %v", recoveredValue)
 	}
-	if gplog.GetErrorCode() != 1 {
-		t.Fatalf("The missing library run returned exit code %d", gplog.GetErrorCode())
+	if gplog.GetErrorCode() != 5 {
+		t.Fatalf("The target outage run returned exit code %d", gplog.GetErrorCode())
 	}
-	if !strings.Contains(string(stderr.Contents()), "$libdir/missing") {
-		t.Fatalf("The missing library run did not print the library in %q", stderr.Contents())
+	if !strings.Contains(string(stderr.Contents()), "target database unavailable") {
+		t.Fatalf("The target outage run did not print the database error in %q", stderr.Contents())
 	}
 }
 
@@ -844,16 +634,16 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 		t.Fatalf("The multi-database run printed an unexpected summary count in %q", output)
 	}
 	expectedSummary := "Execution summary:\n" +
-		"  enumerated databases:           2\n" +
-		"  checked databases:              2\n" +
-		"  unreachable databases:          0\n" +
-		"  unavailable databases:          0\n" +
-		"  completed cluster checks:       3\n" +
-		"  failed cluster checks:          0\n" +
-		"  completed database checks:     40\n" +
-		"  failed database checks:         0\n" +
-		"  unavailable database checks:    0\n" +
-		"  findings:                       2"
+		"  enumerated databases:              2\n" +
+		"  checked databases:                 2\n" +
+		"  unreachable databases:             0\n" +
+		"  unavailable databases:             0\n" +
+		"  completed cluster checks:          2\n" +
+		"  failed cluster checks:             0\n" +
+		"  completed database checks:        16\n" +
+		"  failed database checks:            0\n" +
+		"  unavailable database checks:       0\n" +
+		"  findings:                          2"
 	if !strings.Contains(output, expectedSummary) {
 		t.Fatalf("The multi-database run printed an unexpected summary in %q", output)
 	}
@@ -996,9 +786,6 @@ func TestRunMigrationChecksKeepsIndependentChecksAfterCatalogSetupFailure(t *tes
 	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupCatalogQuery)).WillReturnError(errors.New("catalog support unavailable"))
 	mock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupTypesQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 	expectReadOnlyMigrationTransaction(mock)
 	for _, testCase := range sourceCheckTestCases {
@@ -1015,7 +802,7 @@ func TestRunMigrationChecksKeepsIndependentChecksAfterCatalogSetupFailure(t *tes
 	if executionError != nil {
 		t.Fatalf("The partial capability run returned an error with %v", executionError)
 	}
-	if summary.completedCheckCount != 18 || summary.unavailableCheckCount != 2 || summary.failedCheckCount != 0 {
+	if summary.completedCheckCount != 6 || summary.unavailableCheckCount != 2 || summary.failedCheckCount != 0 {
 		t.Fatalf("The partial capability summary was %+v", summary)
 	}
 }
@@ -1128,27 +915,6 @@ func TestRunMigrationChecksRollsBackAfterReadOnlyFailure(t *testing.T) {
 	}
 }
 
-func TestRunMigrationChecksRollsBackAfterTrackCountsFailure(t *testing.T) {
-	connection, mock, _ := setupCheckTest(t)
-	expectMigrationSetupTransaction(mock)
-	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(setTransactionReadOnlyQuery)).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(setLocalTrackCountsQuery)).
-		WillReturnError(errors.New("track counts failed"))
-	mock.ExpectRollback()
-
-	_, executionError := runMigrationChecks(connection, nil)
-	if executionError == nil || !strings.Contains(executionError.Error(), "track counts failed") {
-		t.Fatalf("The track counts failure was not reported: %v", executionError)
-	}
-	if connection.Tx[0] != nil {
-		t.Fatal("The failed read-only transaction remained installed")
-	}
-}
-
 func TestRunMigrationChecksReportsRollbackFailureAfterBeginFailure(t *testing.T) {
 	connection, mock, _ := setupCheckTest(t)
 	isolationError := errors.New("isolation failed")
@@ -1168,10 +934,12 @@ func TestRunClusterChecksPreservesCheckRecoveryAndRollbackFailures(t *testing.T)
 	connection, mock, _ := setupCheckTest(t)
 	checkError := errors.New("check failed")
 	recoveryError := errors.New("recovery failed")
+	releaseError := errors.New("release failed")
 	rollbackError := errors.New("rollback failed")
 	expectReadOnlyMigrationTransaction(mock)
 	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_check")).WillReturnError(recoveryError)
+	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnError(releaseError)
 	mock.ExpectRollback().WillReturnError(rollbackError)
 
 	summary, executionError := runClusterChecks(
@@ -1189,8 +957,9 @@ func TestRunClusterChecksPreservesCheckRecoveryAndRollbackFailures(t *testing.T)
 	}
 	if !errors.Is(executionError, checkError) ||
 		!errors.Is(executionError, recoveryError) ||
+		!errors.Is(executionError, releaseError) ||
 		!errors.Is(executionError, rollbackError) {
-		t.Fatalf("The check, recovery, and rollback errors were not preserved: %v", executionError)
+		t.Fatalf("The check, recovery, release, and rollback errors were not preserved: %v", executionError)
 	}
 }
 
@@ -1226,7 +995,12 @@ func TestRunClusterChecksRollsBackAfterIsolationFailure(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnError(errors.New("isolation failed"))
 	mock.ExpectRollback()
 
-	summary, executionError := runClusterChecks(connection, []migrationCheck{{name: "cluster check", doRunCheck: checkResourceGroups}})
+	summary, executionError := runClusterChecks(connection, []migrationCheck{{
+		name: "cluster check",
+		doRunCheck: func(*dbconn.DBConn) (int, error) {
+			return 0, nil
+		},
+	}})
 	if executionError == nil || !strings.Contains(executionError.Error(), "isolation failed") {
 		t.Fatalf("The cluster isolation failure was not reported: %v", executionError)
 	}
@@ -1309,10 +1083,10 @@ func TestDoCheckMigrateContinuesAfterDatabaseConnectionFailure(t *testing.T) {
 	}
 	output := string(stderr.Contents())
 	if !strings.Contains(output, "Execution summary:\n") ||
-		!strings.Contains(output, "  enumerated databases:           2\n") ||
-		!strings.Contains(output, "  checked databases:              1\n") ||
-		!strings.Contains(output, "  unreachable databases:          1\n") ||
-		!strings.Contains(output, "  completed database checks:     20\n") {
+		!strings.Contains(output, "  enumerated databases:              2\n") ||
+		!strings.Contains(output, "  checked databases:                 1\n") ||
+		!strings.Contains(output, "  unreachable databases:             1\n") ||
+		!strings.Contains(output, "  completed database checks:         8\n") {
 		t.Fatalf("The partial run printed an unexpected summary in %q", output)
 	}
 }

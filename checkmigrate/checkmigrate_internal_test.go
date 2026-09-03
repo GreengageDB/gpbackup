@@ -1,18 +1,11 @@
 package checkmigrate
 
 import (
-	"strings"
 	"sync"
 	"testing"
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 )
-
-func TestIncompatibleRangePartitionQueryFiltersPartitionKind(t *testing.T) {
-	if !strings.Contains(incompatibleRangePartitionQuery, "p.parkind = 'r'") {
-		t.Fatal("incompatible range partition query must exclude non-range partitions")
-	}
-}
 
 func TestDoCleanupRunsOnce(t *testing.T) {
 	gplog.InitializeLogging("ggcheckmigrate-test", t.TempDir())

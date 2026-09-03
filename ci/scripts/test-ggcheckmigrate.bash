@@ -60,14 +60,14 @@ check_command=(
   --source-database "${database_name}"
   --debug
 )
-expected_database_check_count=20
+expected_database_check_count=8
 if [[ -n ${target_host} ]]; then
   check_command+=(
     --target-host "${target_host}"
     --target-port "${target_port}"
     --target-user "${target_user}"
   )
-  expected_database_check_count=21
+  expected_database_check_count=9
 fi
 
 fail_with_output() {
@@ -81,9 +81,6 @@ fail_with_output() {
 
 "${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${database_name}"
 "${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${enumeration_database_name}"
-if [[ $("${source_psql[@]}" postgres -Atc "SELECT count(*) FROM pg_catalog.pg_resgroup WHERE rsgname = 'ggcheckmigrate_fixture_group'") -gt 0 ]]; then
-  "${source_psql[@]}" postgres -c "DROP RESOURCE GROUP ggcheckmigrate_fixture_group"
-fi
 
 all_database_exit_code=0
 all_database_command=(
@@ -110,9 +107,6 @@ done
 cleanup_fixture() {
   "${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${database_name}"
   "${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${enumeration_database_name}"
-  if [[ $("${source_psql[@]}" postgres -Atc "SELECT count(*) FROM pg_catalog.pg_resgroup WHERE rsgname = 'ggcheckmigrate_fixture_group'") -gt 0 ]]; then
-    "${source_psql[@]}" postgres -c "DROP RESOURCE GROUP ggcheckmigrate_fixture_group"
-  fi
   cleanup_output
 }
 trap cleanup_fixture EXIT
@@ -174,11 +168,6 @@ fi
 
 "${source_psql[@]}" "${database_name}" <<'SQL'
 CREATE SCHEMA ggcheckmigrate_fixture;
-CREATE SCHEMA arenadata_toolkit;
-CREATE EXTENSION plpython2u;
-CREATE EXTENSION gp_array_agg;
-CREATE VIEW ggcheckmigrate_fixture.catalog_view AS SELECT relname FROM pg_catalog.pg_class;
-CREATE VIEW ggcheckmigrate_fixture.transitive_catalog_view AS SELECT * FROM ggcheckmigrate_fixture.catalog_view;
 CREATE VIEW ggcheckmigrate_fixture.removed_operator_view AS
 SELECT '1 2'::pg_catalog.int2vector = '1 2'::pg_catalog.int2vector AS matched;
 CREATE VIEW ggcheckmigrate_fixture.removed_function_view AS
@@ -194,21 +183,6 @@ CREATE VIEW ggcheckmigrate_fixture.removed_column_view AS
 SELECT relhasoids FROM pg_catalog.pg_class;
 CREATE VIEW ggcheckmigrate_fixture.removed_relation_view AS
 SELECT * FROM pg_catalog.pg_partition;
-CREATE TABLE ggcheckmigrate_fixture.rule_table (id integer) DISTRIBUTED BY (id);
-CREATE RULE unrelated_catalog_rule AS ON INSERT TO ggcheckmigrate_fixture.rule_table
-DO ALSO SELECT count(*) FROM pg_catalog.pg_class;
-CREATE VIEW ggcheckmigrate_fixture.rule_table_view AS SELECT * FROM ggcheckmigrate_fixture.rule_table;
-CREATE FUNCTION ggcheckmigrate_fixture.catalog_function() RETURNS bigint
-LANGUAGE SQL AS 'SELECT count(*) FROM pg_catalog.pg_class';
-CREATE FUNCTION ggcheckmigrate_fixture.fixture_plpython2(value integer)
-RETURNS integer
-AS 'return args[0]'
-LANGUAGE plpython2u;
-CREATE FUNCTION ggcheckmigrate_fixture.restricted_execute(integer, integer)
-RETURNS integer
-AS 'SELECT $1 + $2'
-LANGUAGE SQL WINDOW
-EXECUTE ON ALL SEGMENTS;
 CREATE FUNCTION ggcheckmigrate_fixture.missing_library()
 RETURNS text
 AS '$libdir/gp_check_functions', 'get_tablespace_version_directory_name'
@@ -222,74 +196,6 @@ CREATE OPERATOR ggcheckmigrate_fixture.=> (
 );
 ALTER DATABASE :"database_name" SET gp_default_storage_options TO 'appendonly=true,compresstype=zlib';
 ALTER DATABASE :"database_name" SET password_hash_algorithm TO 'md5';
-CREATE RESOURCE GROUP ggcheckmigrate_fixture_group WITH (CPU_RATE_LIMIT=1, MEMORY_LIMIT=1, CONCURRENCY=1);
-CREATE TABLE ggcheckmigrate_fixture.multi_list (id integer, key_a text, key_b integer)
-DISTRIBUTED BY (id)
-PARTITION BY LIST (key_a, key_b) (
-  PARTITION p1 VALUES (('a', 1)),
-  DEFAULT PARTITION other
-);
-CREATE TABLE ggcheckmigrate_fixture.incomplete_index (id integer NOT NULL, partition_key integer)
-DISTRIBUTED BY (id)
-PARTITION BY RANGE (partition_key) (START (1) END (3) EVERY (1));
-CREATE UNIQUE INDEX incomplete_index_unique ON ggcheckmigrate_fixture.incomplete_index (id);
-CREATE TABLE ggcheckmigrate_fixture.removed_data_types (
-  abstime_column pg_catalog.abstime,
-  reltime_column pg_catalog.reltime,
-  tinterval_column pg_catalog.tinterval,
-  unknown_column pg_catalog.unknown
-)
-DISTRIBUTED RANDOMLY;
-CREATE TABLE ggcheckmigrate_fixture.ao_missing_options (id integer, partition_key integer)
-WITH (appendonly=true, compresstype=zlib, compresslevel=5, blocksize=65536)
-DISTRIBUTED BY (id)
-PARTITION BY RANGE (partition_key) (
-  PARTITION ao_child START (0) END (10) WITH (appendonly=true)
-);
-CREATE TABLE ggcheckmigrate_fixture.bad_range (id integer, partition_key numeric)
-DISTRIBUTED BY (id)
-PARTITION BY RANGE (partition_key) (
-  PARTITION p1 START (0) EXCLUSIVE END (10)
-);
-CREATE TABLE ggcheckmigrate_fixture.deep_templates (
-  id integer,
-  partition_date date,
-  region integer,
-  department text,
-  category text
-)
-WITH (appendonly=true, orientation=column)
-DISTRIBUTED BY (id)
-PARTITION BY RANGE (partition_date)
-SUBPARTITION BY LIST (region)
-SUBPARTITION TEMPLATE (
-  SUBPARTITION l VALUES (1),
-  SUBPARTITION r VALUES (2)
-)
-SUBPARTITION BY LIST (department)
-SUBPARTITION TEMPLATE (
-  SUBPARTITION e VALUES ('engineering'),
-  SUBPARTITION q VALUES ('quality')
-)
-SUBPARTITION BY LIST (category)
-SUBPARTITION TEMPLATE (
-  SUBPARTITION p VALUES ('primary'),
-  SUBPARTITION s VALUES ('secondary')
-)
-(
-  START (DATE '2020-01-01') END (DATE '2022-01-01') EVERY (INTERVAL '1 year')
-);
-CREATE TABLE ggcheckmigrate_fixture.ao_with_heap_child (id integer, partition_key integer)
-WITH (appendonly=true, compresstype=zlib)
-DISTRIBUTED BY (id)
-PARTITION BY RANGE (partition_key) (
-  PARTITION heap_child START (1) END (2) WITH (appendonly=false)
-);
-CREATE TABLE ggcheckmigrate_fixture.statement_trigger_table (id integer) DISTRIBUTED BY (id);
-CREATE FUNCTION ggcheckmigrate_fixture.statement_trigger_fn() RETURNS trigger
-LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END; $$;
-CREATE TRIGGER statement_trigger AFTER INSERT ON ggcheckmigrate_fixture.statement_trigger_table
-FOR EACH STATEMENT EXECUTE PROCEDURE ggcheckmigrate_fixture.statement_trigger_fn();
 CREATE TYPE ggcheckmigrate_fixture.partition_key_type AS (value integer);
 CREATE FUNCTION ggcheckmigrate_fixture.partition_key_less_than(
   ggcheckmigrate_fixture.partition_key_type,
@@ -342,27 +248,12 @@ if ! grep -Fq 'CheckMigrate completed with exit code 1' "${output_path}"; then
 fi
 
 for expected_text in \
-  'multi_list' \
-  'fixture_plpython2' \
   'removed_operator_view' \
   'removed_function_view' \
   'removed_type_view' \
   'changed_signature_view' \
   'removed_column_view' \
   'removed_relation_view' \
-  'removed_data_types' \
-  'ao_missing_options' \
-  'restricted_execute' \
-  'incomplete_index_unique' \
-  'bad_range' \
-  'arenadata_toolkit' \
-  'gp_array_agg' \
-  'catalog_view' \
-  'transitive_catalog_view' \
-  'catalog_function' \
-  'statement_trigger' \
-  'deep_templates' \
-  'ggcheckmigrate_fixture_group' \
   'gp_default_storage_options' \
   'password_hash_algorithm' \
   'partition_opfamily_table' \
@@ -381,27 +272,14 @@ if [[ -n ${target_host} ]] && ! grep -Fq 'missing_library' "${output_path}"; the
 fi
 
 expected_checks=(
-  "resource groups"
   "incompatible storage options"
   "removed GUC settings"
-  "multi-column LIST partitions"
-  "PL/Python 2 functions"
   "views with removed operators"
   "views with removed functions"
   "views with removed types"
   "views with changed function signatures"
   "views with removed catalog columns"
   "views with removed catalog relations"
-  "removed data types"
-  "missing AO options"
-  "restricted EXECUTE ON functions"
-  "incomplete partition indexes"
-  "incompatible range partitions"
-  "statement triggers"
-  "removed extensions"
-  "arenadata_toolkit schema"
-  "system object dependencies"
-  "deep partition templates"
   "disallowed arrow operators"
   "partition operator families"
 )
@@ -417,7 +295,7 @@ for expected_check in "${expected_checks[@]}"; do
   fi
 done
 
-if ! grep -Eq 'completed cluster checks:[[:space:]]+3$' "${output_path}" ||
+if ! grep -Eq 'completed cluster checks:[[:space:]]+2$' "${output_path}" ||
   ! grep -Eq 'failed cluster checks:[[:space:]]+0$' "${output_path}" ||
   ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
   ! grep -Eq 'failed database checks:[[:space:]]+0$' "${output_path}" ||
@@ -426,16 +304,6 @@ if ! grep -Eq 'completed cluster checks:[[:space:]]+3$' "${output_path}" ||
   cat "${output_path}" >&2
   exit 1
 fi
-
-for unexpected_text in \
-  'rule_table_view' \
-  'heap_child'; do
-  if grep -Fq "${unexpected_text}" "${output_path}"; then
-    echo "The report unexpectedly named ${unexpected_text}" >&2
-    cat "${output_path}" >&2
-    exit 1
-  fi
-done
 
 if ! grep -Eq 'findings:[[:space:]]+[1-9][0-9]*$' "${output_path}"; then
   echo "The summary does not report a positive finding count" >&2
@@ -459,12 +327,8 @@ fi
 
 "${source_psql[@]}" "${database_name}" <<'SQL'
 DROP SCHEMA ggcheckmigrate_fixture CASCADE;
-DROP SCHEMA arenadata_toolkit CASCADE;
-DROP EXTENSION gp_array_agg;
-DROP EXTENSION plpython2u;
 ALTER DATABASE :"database_name" RESET gp_default_storage_options;
 ALTER DATABASE :"database_name" RESET password_hash_algorithm;
-DROP RESOURCE GROUP ggcheckmigrate_fixture_group;
 SQL
 
 post_cleanup_exit_code=0
@@ -481,7 +345,7 @@ for expected_check in "${expected_checks[@]}"; do
   fi
 done
 
-if ! grep -Eq 'completed cluster checks:[[:space:]]+3$' "${output_path}" ||
+if ! grep -Eq 'completed cluster checks:[[:space:]]+2$' "${output_path}" ||
   ! grep -Eq 'failed cluster checks:[[:space:]]+0$' "${output_path}" ||
   ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
   ! grep -Eq 'failed database checks:[[:space:]]+0$' "${output_path}" ||
@@ -491,3 +355,5 @@ if ! grep -Eq 'completed cluster checks:[[:space:]]+3$' "${output_path}" ||
   cat "${output_path}" >&2
   exit 1
 fi
+
+echo "All ggcheckmigrate tests passed"

@@ -17,17 +17,8 @@ var migrationCheckSetupQuery string
 //go:embed sql/migration_check_setup_catalog.sql
 var migrationCheckSetupCatalogQuery string
 
-//go:embed sql/migration_check_setup_types.sql
-var migrationCheckSetupTypesQuery string
-
 //go:embed sql/source_database_names.sql
 var sourceDatabaseNamesQuery string
-
-//go:embed sql/multi_column_list_partitions.sql
-var multiColumnListPartitionQuery string
-
-//go:embed sql/plpython2_dependent_functions.sql
-var plpython2DependentFunctionQuery string
 
 //go:embed sql/removed_operator_views.sql
 var removedOperatorViewQuery string
@@ -38,41 +29,8 @@ var removedFunctionViewQuery string
 //go:embed sql/removed_type_views.sql
 var removedTypeViewQuery string
 
-//go:embed sql/removed_data_types.sql
-var removedDataTypeQuery string
-
 //go:embed sql/required_libraries.sql
 var requiredLibraryQuery string
-
-//go:embed sql/missing_ao_options.sql
-var missingAOOptionQuery string
-
-//go:embed sql/restricted_execute_on_functions.sql
-var restrictedExecuteOnFunctionQuery string
-
-//go:embed sql/incomplete_partition_indexes.sql
-var incompletePartitionIndexQuery string
-
-//go:embed sql/incompatible_range_partitions.sql
-var incompatibleRangePartitionQuery string
-
-//go:embed sql/statement_triggers.sql
-var statementTriggerQuery string
-
-//go:embed sql/removed_extensions.sql
-var removedExtensionQuery string
-
-//go:embed sql/arenadata_toolkit_schema.sql
-var arenadataToolkitSchemaQuery string
-
-//go:embed sql/resource_groups.sql
-var resourceGroupQuery string
-
-//go:embed sql/system_object_dependencies.sql
-var systemObjectDependencyQuery string
-
-//go:embed sql/deep_partition_templates.sql
-var deepPartitionTemplateQuery string
 
 //go:embed sql/incompatible_storage_options.sql
 var incompatibleStorageOptionQuery string
@@ -104,50 +62,10 @@ type databaseNameResult struct {
 	DatabaseName string `db:"database_name"`
 }
 
-type functionResult struct {
-	SchemaName        string `db:"schema_name"`
-	ObjectName        string `db:"object_name"`
-	IdentityArguments string `db:"identity_arguments"`
-}
-
 type viewResult struct {
 	SchemaName   string `db:"schema_name"`
 	ObjectName   string `db:"object_name"`
 	RelationKind string `db:"relation_kind"`
-}
-
-type removedDataTypeResult struct {
-	SchemaName string `db:"schema_name"`
-	ObjectName string `db:"object_name"`
-	ColumnName string `db:"column_name"`
-}
-
-type missingAOOptionResult struct {
-	ParentSchema string `db:"parent_schema"`
-	ParentName   string `db:"parent_name"`
-	ChildSchema  string `db:"child_schema"`
-	ChildName    string `db:"child_name"`
-	ParentOption string `db:"parent_option"`
-}
-
-type incompletePartitionIndexResult struct {
-	SchemaName string `db:"schema_name"`
-	TableName  string `db:"table_name"`
-	IndexName  string `db:"index_name"`
-}
-
-type incompatibleRangePartitionResult struct {
-	ParentSchema    string `db:"parent_schema"`
-	TableName       string `db:"table_name"`
-	TypeName        string `db:"type_name"`
-	PartitionSchema string `db:"partition_schema"`
-	PartitionName   string `db:"partition_name"`
-}
-
-type statementTriggerResult struct {
-	SchemaName  string `db:"schema_name"`
-	TableName   string `db:"table_name"`
-	TriggerName string `db:"trigger_name"`
 }
 
 type requiredLibraryResult struct {
@@ -155,17 +73,6 @@ type requiredLibraryResult struct {
 	ObjectName        string `db:"object_name"`
 	IdentityArguments string `db:"identity_arguments"`
 	LibraryName       string `db:"library_name"`
-}
-
-type resourceGroupResult struct {
-	ObjectName string `db:"object_name"`
-}
-
-type systemObjectDependencyResult struct {
-	SchemaName       string `db:"schema_name"`
-	ObjectName       string `db:"object_name"`
-	RelationKind     string `db:"relation_kind"`
-	ReferencedObject string `db:"referenced_object"`
 }
 
 type configurationSettingResult struct {
@@ -238,15 +145,12 @@ type migrationCheck struct {
 
 // Cluster checks inspect shared catalogs or settings through the bootstrap connection.
 var clusterChecks = []migrationCheck{
-	{name: "resource groups", doRunCheck: checkResourceGroups},
 	{name: "incompatible storage options", doRunCheck: checkIncompatibleStorageOptions},
 	{name: "removed GUC settings", doRunCheck: checkRemovedGUCSettings},
 }
 
 // Database checks inspect catalogs whose contents are scoped to the current database.
 var databaseChecks = []migrationCheck{
-	{name: "multi-column LIST partitions", doRunCheck: checkMultiColumnListPartitions},
-	{name: "PL/Python 2 functions", doRunCheck: checkPlpython2DependentFunctions},
 	{
 		name:               "views with removed operators",
 		requiredCapability: migrationSupportCapability,
@@ -277,16 +181,6 @@ var databaseChecks = []migrationCheck{
 		requiredCapability: catalogSupportCapability,
 		doRunCheck:         checkViewsWithRemovedCatalogRelations,
 	},
-	{name: "removed data types", requiredCapability: dataTypeSupportCapability, doRunCheck: checkRemovedDataTypes},
-	{name: "missing AO options", doRunCheck: checkMissingAOOptions},
-	{name: "restricted EXECUTE ON functions", doRunCheck: checkRestrictedExecuteOnFunctions},
-	{name: "incomplete partition indexes", doRunCheck: checkIncompletePartitionIndexes},
-	{name: "incompatible range partitions", doRunCheck: checkIncompatibleRangePartitions},
-	{name: "statement triggers", doRunCheck: checkStatementTriggers},
-	{name: "removed extensions", doRunCheck: checkRemovedExtensions},
-	{name: "arenadata_toolkit schema", doRunCheck: checkArenadataToolkitSchema},
-	{name: "system object dependencies", doRunCheck: checkSystemObjectDependencies},
-	{name: "deep partition templates", doRunCheck: checkDeepPartitionTemplates},
 	{name: "disallowed arrow operators", doRunCheck: checkDisallowedArrowOperators},
 	{name: "partition operator families", doRunCheck: checkPartitionOpfamilies},
 }
@@ -294,9 +188,7 @@ var databaseChecks = []migrationCheck{
 const (
 	migrationSupportCapability  = "migration support functions"
 	catalogSupportCapability    = "catalog support functions"
-	dataTypeSupportCapability   = "data type support function"
 	setTransactionReadOnlyQuery = "SET TRANSACTION READ ONLY"
-	setLocalTrackCountsQuery    = "SET LOCAL track_counts TO off"
 )
 
 type migrationCheckSummary struct {
@@ -331,13 +223,6 @@ func beginReadOnlyMigrationTransaction(connection *dbconn.DBConn) error {
 			fmt.Errorf("setting source transaction read only failed with %w", readOnlyError),
 		)
 	}
-	if _, trackCountsError := connection.Exec(setLocalTrackCountsQuery); trackCountsError != nil {
-		return rollbackMigrationTransactionAfterError(
-			connection,
-			fmt.Errorf("disabling source transaction statistics failed with %w", trackCountsError),
-		)
-	}
-
 	return nil
 }
 
@@ -364,7 +249,6 @@ func prepareMigrationCheckCapabilities(connection *dbconn.DBConn) (map[string]bo
 	}{
 		{capability: migrationSupportCapability, query: migrationCheckSetupQuery},
 		{capability: catalogSupportCapability, query: migrationCheckSetupCatalogQuery},
-		{capability: dataTypeSupportCapability, query: migrationCheckSetupTypesQuery},
 	}
 	availableCapabilities := make(map[string]bool, len(setupQueries))
 	for _, setup := range setupQueries {
@@ -409,6 +293,56 @@ func prepareMigrationCheckCapabilities(connection *dbconn.DBConn) (map[string]bo
 	return availableCapabilities, nil
 }
 
+func runMigrationCheck(connection *dbconn.DBConn, check migrationCheck) (
+	summary migrationCheckSummary,
+	executionError error,
+) {
+	if _, savepointError := connection.Exec("SAVEPOINT ggcheckmigrate_check"); savepointError != nil {
+		return summary, fmt.Errorf("check %q savepoint failed with %w", check.name, savepointError)
+	}
+
+	var checkError error
+	defer func() {
+		if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
+			if executionError == nil && checkError != nil {
+				executionError = fmt.Errorf("check %q failed with %w", check.name, checkError)
+			}
+			executionError = errors.Join(
+				executionError,
+				fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError),
+			)
+		}
+	}()
+
+	findingCount := 0
+	findingCount, checkError = check.doRunCheck(connection)
+	summary.findingCount = findingCount
+	if checkError != nil {
+		if _, recoveryError := connection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_check"); recoveryError != nil {
+			executionError = errors.Join(
+				fmt.Errorf("check %q failed with %w", check.name, checkError),
+				fmt.Errorf("check %q savepoint recovery failed with %w", check.name, recoveryError),
+			)
+
+			return summary, executionError
+		}
+		if errors.Is(checkError, errTargetDatabaseUnavailable) {
+			return summary, fmt.Errorf("check %q failed with %w", check.name, checkError)
+		}
+
+		summary.failedCheckCount++
+		gplog.Error("Database %q failed check %q with %v", connection.DBName, check.name, checkError)
+		gplog.Debug("Database %q completed check %q with an execution failure", connection.DBName, check.name)
+
+		return summary, nil
+	}
+
+	summary.completedCheckCount++
+	gplog.Debug("Database %q completed check %q with %d findings", connection.DBName, check.name, findingCount)
+
+	return summary, nil
+}
+
 func runMigrationCheckPlan(
 	connection *dbconn.DBConn,
 	checks []migrationCheck,
@@ -429,45 +363,14 @@ func runMigrationCheckPlan(
 		}
 
 		gplog.Debug("Database %q is starting check %q", connection.DBName, check.name)
-		if _, savepointError := connection.Exec("SAVEPOINT ggcheckmigrate_check"); savepointError != nil {
-			return summary, fmt.Errorf("check %q savepoint failed with %w", check.name, savepointError)
+		checkSummary, executionError := runMigrationCheck(connection, check)
+		summary.completedCheckCount += checkSummary.completedCheckCount
+		summary.failedCheckCount += checkSummary.failedCheckCount
+		summary.unavailableCheckCount += checkSummary.unavailableCheckCount
+		summary.findingCount += checkSummary.findingCount
+		if executionError != nil {
+			return summary, executionError
 		}
-		findingCount, checkError := check.doRunCheck(connection)
-		if checkError != nil {
-			if _, recoveryError := connection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_check"); recoveryError != nil {
-				return summary, errors.Join(
-					fmt.Errorf("check %q failed with %w", check.name, checkError),
-					fmt.Errorf("check %q savepoint recovery failed with %w", check.name, recoveryError),
-				)
-			}
-			summary.findingCount += findingCount
-			if errors.Is(checkError, errTargetDatabaseUnavailable) {
-				if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
-					return summary, errors.Join(
-						fmt.Errorf("check %q failed with %w", check.name, checkError),
-						fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError),
-					)
-				}
-
-				return summary, fmt.Errorf("check %q failed with %w", check.name, checkError)
-			}
-
-			summary.failedCheckCount++
-			gplog.Error("Database %q failed check %q with %v", connection.DBName, check.name, checkError)
-			if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
-				return summary, fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError)
-			}
-			gplog.Debug("Database %q completed check %q with an execution failure", connection.DBName, check.name)
-
-			continue
-		}
-
-		summary.findingCount += findingCount
-		summary.completedCheckCount++
-		if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_check"); releaseError != nil {
-			return summary, fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError)
-		}
-		gplog.Debug("Database %q completed check %q with %d findings", connection.DBName, check.name, findingCount)
 	}
 
 	return summary, nil
@@ -517,78 +420,17 @@ func runMigrationChecks(
 		}
 	}()
 
-	checks := databaseChecks
+	checks := append([]migrationCheck(nil), databaseChecks...)
 	if targetConnection != nil {
-		checks = append([]migrationCheck{
-			{
-				name: "required libraries",
-				doRunCheck: func(connection *dbconn.DBConn) (int, error) {
-					return checkRequiredLibraries(connection, targetConnection)
-				},
+		checks = append(checks, migrationCheck{
+			name: "required libraries",
+			doRunCheck: func(connection *dbconn.DBConn) (int, error) {
+				return checkRequiredLibraries(connection, targetConnection)
 			},
-		}, checks...)
+		})
 	}
 
 	return runMigrationCheckPlan(sourceConnection, checks, availableCapabilities)
-}
-
-func checkMultiColumnListPartitions(connection *dbconn.DBConn) (int, error) {
-	results := make([]namedObjectResult, 0)
-	if queryError := connection.Select(&results, multiColumnListPartitionQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains partitioned tables with a LIST partition key containing multiple columns. " +
-			"Modify the partition key to use one column or drop the affected tables.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ObjectName,
-			"partitioned table",
-			result.SchemaName,
-			"The LIST partition key contains multiple columns.",
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkPlpython2DependentFunctions(connection *dbconn.DBConn) (int, error) {
-	results := make([]functionResult, 0)
-	if queryError := connection.Select(&results, plpython2DependentFunctionQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains PL/Python functions that rely on Python 2. " +
-			"Update the functions to use Python 3 or drop them before migration.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ObjectName,
-			"function",
-			result.SchemaName,
-			"The function depends on plpython2 and its identity arguments are %q.",
-			result.IdentityArguments,
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
 }
 
 func checkViewsWithRemovedOperators(connection *dbconn.DBConn) (int, error) {
@@ -767,193 +609,6 @@ func checkViewsWithRemovedCatalogRelations(connection *dbconn.DBConn) (int, erro
 	return len(results), nil
 }
 
-func checkRemovedDataTypes(connection *dbconn.DBConn) (int, error) {
-	results := make([]removedDataTypeResult, 0)
-	if queryError := connection.Select(&results, removedDataTypeQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains user columns that depend on the removed abstime, reltime, tinterval, " +
-			"or unknown data types. Convert each column to a supported type or drop the affected column.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ColumnName,
-			"column",
-			result.SchemaName,
-			"Relation %q contains the affected column.",
-			result.ObjectName,
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkMissingAOOptions(connection *dbconn.DBConn) (int, error) {
-	results := make([]missingAOOptionResult, 0)
-	if queryError := connection.Select(&results, missingAOOptionQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains child partitions that do not define the parent table settings. " +
-			"Version 7 inherits these settings from the parent table. " +
-			"Recreate the affected tables with explicit settings.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ChildName,
-			"partition",
-			result.ChildSchema,
-			"Parent table %q in schema %q defines option %q.",
-			result.ParentName,
-			result.ParentSchema,
-			result.ParentOption,
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkRestrictedExecuteOnFunctions(connection *dbconn.DBConn) (int, error) {
-	results := make([]functionResult, 0)
-	if queryError := connection.Select(&results, restrictedExecuteOnFunctionQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains functions that are not set-returning and use MASTER, ALL SEGMENTS, " +
-			"or INITPLAN EXECUTE ON. Make each function set-returning or change EXECUTE ON to ANY.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ObjectName,
-			"function",
-			result.SchemaName,
-			"The function uses a restricted EXECUTE ON location and its identity arguments are %q.",
-			result.IdentityArguments,
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkIncompletePartitionIndexes(connection *dbconn.DBConn) (int, error) {
-	results := make([]incompletePartitionIndexResult, 0)
-	if queryError := connection.Select(&results, incompletePartitionIndexQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains partitioned tables with unique indexes that omit partition keys. " +
-			"Version 7 requires every partition key in each unique index. " +
-			"Recreate the affected indexes with every partition key.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.IndexName,
-			"index",
-			result.SchemaName,
-			"Partitioned table %q owns the index.",
-			result.TableName,
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkIncompatibleRangePartitions(connection *dbconn.DBConn) (int, error) {
-	results := make([]incompatibleRangePartitionResult, 0)
-	if queryError := connection.Select(&results, incompatibleRangePartitionQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains range partitions that use START EXCLUSIVE or END INCLUSIVE boundaries " +
-			"on float, numeric, or text columns. Version 7 does not support these boundaries. " +
-			"Recreate the affected tables without them.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.PartitionName,
-			"partition",
-			result.PartitionSchema,
-			"Parent table %q in schema %q uses key type %q.",
-			result.TableName,
-			result.ParentSchema,
-			result.TypeName,
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkStatementTriggers(connection *dbconn.DBConn) (int, error) {
-	results := make([]statementTriggerResult, 0)
-	if queryError := connection.Select(&results, statementTriggerQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains statement triggers. Version 7 does not support them. " +
-			"Replace the affected triggers with row triggers.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.TriggerName,
-			"trigger",
-			result.SchemaName,
-			"Table %q owns the trigger.",
-			result.TableName,
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
 func checkRequiredLibraries(sourceConnection *dbconn.DBConn, targetConnection *dbconn.DBConn) (int, error) {
 	results := make([]requiredLibraryResult, 0)
 	if queryError := sourceConnection.Select(&results, requiredLibraryQuery); queryError != nil {
@@ -1010,150 +665,6 @@ func checkRequiredLibraries(sourceConnection *dbconn.DBConn, targetConnection *d
 	logFindingOutput(&output)
 
 	return len(missingFunctions), targetExecutionError
-}
-
-func checkRemovedExtensions(connection *dbconn.DBConn) (int, error) {
-	results := make([]namedObjectResult, 0)
-	if queryError := connection.Select(&results, removedExtensionQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains extensions that are absent from version 7 because their functionality " +
-			"moved into the server. Drop the affected extensions before running gpbackup.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ObjectName,
-			"extension",
-			result.SchemaName,
-			"The extension must be dropped before migration.",
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkArenadataToolkitSchema(connection *dbconn.DBConn) (int, error) {
-	results := make([]namedObjectResult, 0)
-	if queryError := connection.Select(&results, arenadataToolkitSchemaQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains the arenadata_toolkit schema. " +
-			"Exclude this schema from the backup with --exclude-schema arenadata_toolkit.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ObjectName,
-			"schema",
-			result.SchemaName,
-			"Version 7 provides a different schema definition.",
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkResourceGroups(connection *dbconn.DBConn) (int, error) {
-	results := make([]resourceGroupResult, 0)
-	if queryError := connection.Select(&results, resourceGroupQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains resource groups whose settings changed in version 7. " +
-			"Run gpbackup with --without-globals and recreate global objects on the target cluster.\n",
-	)
-	for _, result := range results {
-		fmt.Fprintf(
-			&output,
-			"The cluster contains object %q of type %q. The resource group requires version 7 settings.\n",
-			result.ObjectName,
-			"resource group",
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkSystemObjectDependencies(connection *dbconn.DBConn) (int, error) {
-	results := make([]systemObjectDependencyResult, 0)
-	if queryError := connection.Select(&results, systemObjectDependencyQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains user objects that reference system relations. " +
-			"Review each definition against the version 7 system catalog.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ObjectName,
-			getRelationKindLabel(result.RelationKind),
-			result.SchemaName,
-			"The object references %q.",
-			result.ReferencedObject,
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkDeepPartitionTemplates(connection *dbconn.DBConn) (int, error) {
-	results := make([]namedObjectResult, 0)
-	if queryError := connection.Select(&results, deepPartitionTemplateQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains subpartition templates deeper than the second partition level. " +
-			"Save and remove these templates before backup, then recreate them with version 7 syntax.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ObjectName,
-			"partitioned table",
-			result.SchemaName,
-			"The table has a deep subpartition template.",
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
 }
 
 func checkIncompatibleStorageOptions(connection *dbconn.DBConn) (int, error) {
