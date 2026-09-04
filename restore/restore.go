@@ -499,6 +499,20 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 		}
 	}
 
+	// A table with nothing left to restore (no rows to begin with, or skipped
+	// under --on-error-continue) doesn't need to run at all. Dropped here,
+	// before the progress bar/execution, rather than only at the final count
+	// below, so the progress bar's total matches what actually gets reported
+	// as restored.
+	nonEmpty := statements[:0]
+	for _, statement := range statements {
+		if statement.Statement == "" {
+			continue
+		}
+		nonEmpty = append(nonEmpty, statement)
+	}
+	statements = nonEmpty
+
 	numErrors := int32(0)
 	if len(statements) == 0 {
 		gplog.Verbose("No QD-only tables to restore")
@@ -517,19 +531,14 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 		gplog.Info("QD-only tables restore complete")
 	}
 
-	restoredCount := 0
-	dataEntries := make([]toc.CoordinatorDataEntry, 0, len(statements))
-	for _, statement := range statements {
-		if statement.Statement == "" {
-			continue
-		}
-		restoredCount++
-		dataEntries = append(dataEntries, toc.CoordinatorDataEntry{Schema: statement.Schema, Name: statement.Name})
-	}
-	if restoredCount == 0 {
+	if len(statements) == 0 {
 		return 0, nil
 	}
-	return restoredCount, map[string][]toc.CoordinatorDataEntry{globalFPInfo.Timestamp: dataEntries}
+	dataEntries := make([]toc.CoordinatorDataEntry, len(statements))
+	for i, statement := range statements {
+		dataEntries[i] = toc.CoordinatorDataEntry{Schema: statement.Schema, Name: statement.Name}
+	}
+	return len(statements), map[string][]toc.CoordinatorDataEntry{globalFPInfo.Timestamp: dataEntries}
 }
 
 func editStatementsRedirectSchema(statements []toc.StatementWithType, redirectSchema string) {
