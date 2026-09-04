@@ -493,12 +493,6 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 		}
 	}
 
-	for i := range statements {
-		if statements[i].Statement != "" {
-			statements[i].Statement = fmt.Sprintf("BEGIN;\n%s\nCOMMIT;", statements[i].Statement)
-		}
-	}
-
 	// A table with nothing left to restore (no rows to begin with, or skipped
 	// under --on-error-continue) doesn't need to run at all. Dropped here,
 	// before the progress bar/execution, rather than only at the final count
@@ -509,6 +503,7 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 		if statement.Statement == "" {
 			continue
 		}
+		statement.Statement = fmt.Sprintf("BEGIN;\n%s\nCOMMIT;", statement.Statement)
 		nonEmpty = append(nonEmpty, statement)
 	}
 	statements = nonEmpty
