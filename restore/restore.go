@@ -503,12 +503,18 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 	// before the progress bar/execution, rather than only at the final count
 	// below, so the progress bar's total matches what actually gets reported
 	// as restored.
+	// No explicit BEGIN/COMMIT here: connectionPool.Exec sends this whole string as a
+	// single simple-query message, which Postgres already wraps in an implicit
+	// transaction on its own - same per-table atomicity, but one that Postgres closes
+	// out cleanly at the end of the message even on failure. An explicit BEGIN would
+	// instead leave the connection in an aborted-transaction state past this call,
+	// with nothing to issue the matching ROLLBACK, poisoning it for whatever statement
+	// runs on it next.
 	nonEmpty := statements[:0]
 	for _, statement := range statements {
 		if statement.Statement == "" {
 			continue
 		}
-		statement.Statement = fmt.Sprintf("BEGIN;\n%s\nCOMMIT;", statement.Statement)
 		nonEmpty = append(nonEmpty, statement)
 	}
 	statements = nonEmpty
