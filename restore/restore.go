@@ -435,13 +435,15 @@ func restoreSequenceValues(metadataFilename string) {
 	}
 }
 
+const extensionTableConditionNotFound = "not found"
+
 func getExtensionTableCondition(tableFQN string) (string, error) {
 	return dbconn.SelectString(connectionPool, fmt.Sprintf(`
 		SELECT coalesce((
 			SELECT condition
 			FROM (SELECT unnest(extconfig) AS reloid, unnest(extcondition) AS condition FROM pg_catalog.pg_extension) cfg
 			WHERE reloid = '%s'::regclass
-		), '') AS string`, utils.EscapeSingleQuotes(tableFQN)))
+		), '%s') AS string`, utils.EscapeSingleQuotes(tableFQN), extensionTableConditionNotFound))
 }
 
 func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.CoordinatorDataEntry) {
@@ -479,6 +481,9 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 		for i := range statements {
 			tableName := utils.MakeFQN(statements[i].Schema, statements[i].Name)
 			condition, err := getExtensionTableCondition(tableName)
+			if err == nil && condition == extensionTableConditionNotFound {
+				err = errors.Errorf("table %s is not registered as an extension configuration table on the target database", tableName)
+			}
 			if err != nil {
 				if MustGetFlagBool(options.ON_ERROR_CONTINUE) {
 					gplog.Error("Unable to determine extension config condition for %s, skipping: %s", tableName, err.Error())
