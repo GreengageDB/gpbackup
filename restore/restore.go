@@ -537,6 +537,19 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 		gplog.Info("QD-only tables restore complete")
 	}
 
+	// A statement that failed during execution (tracked in errorTablesData by
+	// executeStatementsForConn under --on-error-continue) was not actually
+	// restored - exclude it here so it isn't counted, reported as restored, or
+	// queued for --run-analyze.
+	restoredStatements := statements[:0]
+	for _, statement := range statements {
+		if _, failed := errorTablesData[statement.Schema+"."+statement.Name]; failed {
+			continue
+		}
+		restoredStatements = append(restoredStatements, statement)
+	}
+	statements = restoredStatements
+
 	if len(statements) == 0 {
 		return 0, nil
 	}
