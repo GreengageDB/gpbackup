@@ -331,8 +331,13 @@ func backupQDOnlyData(metadataFile *utils.FileWithByteCount, tables []TableQDOnl
 		selectList := strings.Join(quoted, " || ',' || ")
 		// ORDER BY 1 orders by this same concatenated row text - the only column in
 		// the result set - so two backups of unchanged data always emit rows in the
-		// same order, regardless of physical storage order on the source.
-		query := fmt.Sprintf(`SELECT %s FROM %s %s ORDER BY 1`, selectList, tableName, *table.ExtensionTableConfig)
+		// same order, regardless of physical storage order on the source. Applied to
+		// an outer wrapping SELECT, not appended directly after *table.ExtensionTableConfig:
+		// that condition is arbitrary text supplied by the extension author (documented
+		// only as "syntax appropriate for a WHERE clause"), so it could itself end in a
+		// LIMIT or ORDER BY, which our own trailing ORDER BY would then be appended after,
+		// producing invalid SQL.
+		query := fmt.Sprintf(`SELECT * FROM (SELECT %s FROM %s %s) qd_only_row ORDER BY 1`, selectList, tableName, *table.ExtensionTableConfig)
 
 		var rows []string
 		err := connectionPool.Select(&rows, query)
