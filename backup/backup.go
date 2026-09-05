@@ -319,7 +319,10 @@ func backupQDOnlyData(metadataFile *utils.FileWithByteCount, tables []TableQDOnl
 			}
 		}
 		selectList := strings.Join(quoted, " || ',' || ")
-		query := fmt.Sprintf(`SELECT %s FROM %s %s`, selectList, tableName, *table.ExtensionTableConfig)
+		// ORDER BY 1 orders by this same concatenated row text - the only column in
+		// the result set - so two backups of unchanged data always emit rows in the
+		// same order, regardless of physical storage order on the source.
+		query := fmt.Sprintf(`SELECT %s FROM %s %s ORDER BY 1`, selectList, tableName, *table.ExtensionTableConfig)
 
 		var rows []string
 		err := connectionPool.Select(&rows, query)
