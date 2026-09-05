@@ -300,6 +300,16 @@ func backupQDOnlyData(metadataFile *utils.FileWithByteCount, tables []TableQDOnl
 
 	wroteHeaderComment := false
 
+	// OVERRIDING SYSTEM VALUE: harmless when a table has no identity column, but
+	// without it a GENERATED ALWAYS AS IDENTITY column would reject the explicit
+	// captured value that COPY (used for every other table type) tolerates without
+	// complaint. Identity columns (and this syntax) don't exist before PG10 /
+	// GPDB7, so this must stay conditional - GPDB6 doesn't parse it at all.
+	overridingClause := ""
+	if connectionPool.Version.AtLeast("7") {
+		overridingClause = "OVERRIDING SYSTEM VALUE "
+	}
+
 	for _, table := range tables {
 		columnNames := ConstructTableAttributesList(table.ColumnDefs)
 		tableName := table.FQN()
@@ -349,7 +359,7 @@ func backupQDOnlyData(metadataFile *utils.FileWithByteCount, tables []TableQDOnl
 		// default 'hex' bytea_output, which never emits a raw NUL either) - so it's
 		// unambiguous no matter what a row's own data contains.
 		for _, row := range rows {
-			metadataFile.MustPrintf("%s VALUES(%s);\x00\n", columnNames, row)
+			metadataFile.MustPrintf("%s %sVALUES(%s);\x00\n", columnNames, overridingClause, row)
 		}
 
 		section, entry := table.GetMetadataEntry()
