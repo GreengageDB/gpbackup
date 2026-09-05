@@ -293,6 +293,9 @@ func backupPredata(metadataFile *utils.FileWithByteCount, tables []Table, tableO
 }
 
 func backupQDOnlyData(metadataFile *utils.FileWithByteCount, tables []TableQDOnly) {
+	if wasTerminated.Load() {
+		return
+	}
 	gplog.Verbose("Writing QD-only tables data to metadata file")
 
 	wroteHeaderComment := false
