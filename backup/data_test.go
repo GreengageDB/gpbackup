@@ -243,4 +243,58 @@ var _ = Describe("backup/data tests", func() {
 			Expect(numExtOrForeignTables).To(Equal(int64(0)))
 		})
 	})
+	Describe("SplitOutQDOnlyTables", func() {
+		config := history.BackupConfig{}
+		condition := ""
+		var qdOnlyTable, regularTable backup.Table
+		BeforeEach(func() {
+			config.MetadataOnly = false
+			backup.SetReport(&report.Report{BackupConfig: config})
+			qdOnlyTable = backup.Table{
+				Relation: backup.Relation{Schema: "local_ext", Name: "cfg"},
+				TableDefinition: backup.TableDefinition{
+					ExtensionTableConfig: &condition,
+				},
+			}
+			regularTable = backup.Table{
+				Relation:        backup.Relation{Schema: "public", Name: "testtable"},
+				TableDefinition: backup.TableDefinition{},
+			}
+		})
+		It("separates QD-only tables from regular tables", func() {
+			tables := []backup.Table{qdOnlyTable, regularTable}
+
+			qdOnlyTables, remaining := backup.SplitOutQDOnlyTables(tables)
+
+			Expect(qdOnlyTables).To(HaveLen(1))
+			Expect(qdOnlyTables[0].Table).To(Equal(qdOnlyTable))
+			Expect(remaining).To(Equal([]backup.Table{regularTable}))
+		})
+		It("does not treat a distributed table with an extension config as QD-only", func() {
+			distributedExtTable := qdOnlyTable
+			distributedExtTable.DistPolicy = backup.DistPolicy{Policy: "DISTRIBUTED BY (id)"}
+			tables := []backup.Table{distributedExtTable}
+
+			qdOnlyTables, remaining := backup.SplitOutQDOnlyTables(tables)
+
+			Expect(qdOnlyTables).To(BeEmpty())
+			Expect(remaining).To(Equal([]backup.Table{distributedExtTable}))
+		})
+		It("treats every table as regular during a metadata-only backup, even one that would otherwise be QD-only", func() {
+			config.MetadataOnly = true
+			backup.SetReport(&report.Report{BackupConfig: config})
+			tables := []backup.Table{qdOnlyTable, regularTable}
+
+			qdOnlyTables, remaining := backup.SplitOutQDOnlyTables(tables)
+
+			Expect(qdOnlyTables).To(BeEmpty())
+			Expect(remaining).To(Equal(tables))
+		})
+		It("returns nothing for an empty input", func() {
+			qdOnlyTables, remaining := backup.SplitOutQDOnlyTables([]backup.Table{})
+
+			Expect(qdOnlyTables).To(BeEmpty())
+			Expect(remaining).To(BeEmpty())
+		})
+	})
 })

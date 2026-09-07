@@ -1,8 +1,11 @@
 package restore
 
 import (
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
+	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/pkg/errors"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -257,6 +260,47 @@ var _ = Describe("restore internal tests", func() {
 				//fmt.Println("\n\nACTUAL\n", statements[i], "\nEXPECTED\n", expectedStatements[i])
 				Expect(statements[i]).To(Equal(expectedStatements[i]))
 			}
+		})
+	})
+	Describe("getExtensionTableCondition", func() {
+		// This function's own SQL round-trip is mocked directly here (a private
+		// dbconn.DBConn/sqlmock pair, swapped in and restored around each test)
+		// rather than sharing the outer restore_test suite's connectionPool: that
+		// would create an import cycle (testutils, which builds the shared one,
+		// imports this package).
+		var localMock sqlmock.Sqlmock
+		BeforeEach(func() {
+			var localConn *dbconn.DBConn
+			localConn, localMock = testhelper.CreateAndConnectMockDB(1)
+			oldConn := connectionPool
+			connectionPool = localConn
+			DeferCleanup(func() { connectionPool = oldConn })
+		})
+		It("returns the extension's condition when the table is registered", func() {
+			localMock.ExpectQuery("SELECT coalesce").
+				WillReturnRows(sqlmock.NewRows([]string{"string"}).AddRow("WHERE active"))
+
+			condition, err := getExtensionTableCondition("local_ext.test_local_cfg_filtered")
+
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(condition).To(Equal("WHERE active"))
+		})
+		It("returns the not-found sentinel when the table isn't registered in any extension's extconfig", func() {
+			localMock.ExpectQuery("SELECT coalesce").
+				WillReturnRows(sqlmock.NewRows([]string{"string"}).AddRow(extensionTableConditionNotFound))
+
+			condition, err := getExtensionTableCondition("local_ext.orphaned_table")
+
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(condition).To(Equal(extensionTableConditionNotFound))
+		})
+		It("propagates a query error", func() {
+			localMock.ExpectQuery("SELECT coalesce").
+				WillReturnError(errors.New("relation \"local_ext.missing\" does not exist"))
+
+			_, err := getExtensionTableCondition("local_ext.missing")
+
+			Expect(err).To(HaveOccurred())
 		})
 	})
 })

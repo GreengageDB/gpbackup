@@ -1347,6 +1347,564 @@ var _ = Describe("backup and restore end to end tests", func() {
 			assertArtifactsCleaned(timestamp)
 		})
 	})
+	Describe("Local extension config table data", func() {
+		// Dedicated schema for the extension's objects, rather than public:
+		// keeps every test in this block (especially the --include-schema/
+		// --redirect-schema ones) isolated from the rest of the suite's
+		// public-schema fixture tables/sequences and whatever pre-existing,
+		// unrelated bugs they might carry.
+		const (
+			localExtSchema          = "local_ext"
+			localExtTable           = localExtSchema + ".test_local_cfg"
+			localExtFilteredTable   = localExtSchema + ".test_local_cfg_filtered"
+			localExtQuotedColsTable = localExtSchema + ".test_local_cfg_quoted_cols"
+		)
+
+		// Seeded here rather than in test_ext_local--1.0.sql: the script
+		// re-runs on every CREATE EXTENSION (including the one gprestore
+		// replays), so a seed INSERT included into the script would collide
+		// with gpbackup's own restored copy of the same pg_extension_config_dump()'d
+		// rows and silently duplicate them.
+		localExtSeedData := fmt.Sprintf(`
+			INSERT INTO %s VALUES
+				(1, 'alpha', NULL, decode('00010203', 'hex')),
+				(2, '', 'empty string, distinct from NULL', decode('deadbeef', 'hex')),
+				(3, E'quote'' semi; back\\slash', 'special chars', decode('277b7d3b5c', 'hex')),
+				(4, 'unicode: héllo wörld 你好', 'utf8', NULL);
+			INSERT INTO %s VALUES
+				(1, true),
+				(2, false),
+				(3, true);
+			INSERT INTO %s VALUES
+				(1, 'comma_val', 'paren_val', 'quote_val', 'dot_space_val', 'unicode_val');
+		`, localExtTable, localExtFilteredTable, localExtQuotedColsTable)
+
+		// Every spec in this block needs the extension's control/SQL files
+		// installed; the install itself is idempotent and doesn't depend on
+		// anything the individual spec bodies set up.
+		BeforeEach(func() {
+			_ = os.Chdir("resources")
+			command := exec.Command("make", "USE_PGXS=1", "install")
+			mustRunCommand(command)
+			_ = os.Chdir("..")
+		})
+
+		// createLocalExt creates test_ext_local on conn inside localExtSchema,
+		// seeding it with localExtSeedData if seed is true. Skips the running
+		// spec if the cluster doesn't recognize the gg_local control-file flag
+		// (this is a capability probe rather than a version check, since
+		// gg_local hasn't landed in any Greengage release yet and may never
+		// map to a version number gpbackup could branch on). Returns a cleanup
+		// func for the caller to defer.
+		createLocalExt := func(conn *dbconn.DBConn, seed bool) func() {
+			testhelper.AssertQueryRuns(conn, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", localExtSchema))
+			_, err := conn.Exec(fmt.Sprintf("CREATE EXTENSION test_ext_local SCHEMA %s;", localExtSchema))
+			if err != nil {
+				Skip(fmt.Sprintf("local extension support (gg_local) not available on this cluster: %v", err))
+			}
+			if seed {
+				testhelper.AssertQueryRuns(conn, localExtSeedData)
+			}
+			return func() {
+				testhelper.AssertQueryRuns(conn, "DROP EXTENSION test_ext_local;")
+				// DROP EXTENSION already cascaded away the schema's only
+				// contents (the 3 member tables), so this is a plain drop,
+				// no CASCADE needed.
+				testhelper.AssertQueryRuns(conn, fmt.Sprintf("DROP SCHEMA %s", localExtSchema))
+			}
+		}
+
+		// A full/unfiltered restore creates test_ext_local in restoredb via
+		// CREATE EXTENSION during predata replay, but most specs never call
+		// createLocalExt(restoreConn, ...) themselves (only the
+		// pre-existing-schema ones do), so nothing tears that copy down.
+		// Since an extension name is unique per database regardless of its
+		// target schema, a leftover copy collides with the next spec's
+		// CREATE EXTENSION -- silently inside gprestore's predata batch
+		// (whose failure doesn't stop restoreQDOnlyTablesData from then
+		// inserting another copy of rows on top of what's already there,
+		// producing escalating row counts spec over spec), or loudly for a
+		// redirect-target test's direct CREATE EXTENSION call. Belt-and-
+		// suspenders cleanup on both connections after every spec here,
+		// tolerant of there being nothing to drop.
+		AfterEach(func() {
+			testhelper.AssertQueryRuns(backupConn, "DROP EXTENSION IF EXISTS test_ext_local;")
+			testhelper.AssertQueryRuns(backupConn, fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", localExtSchema))
+			testhelper.AssertQueryRuns(restoreConn, "DROP EXTENSION IF EXISTS test_ext_local;")
+			testhelper.AssertQueryRuns(restoreConn, fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", localExtSchema))
+		})
+
+		// assertQDOnlyPolicy confirms tableName has no gp_distribution_policy
+		// row, i.e. it's still coordinator-only after the restore under test.
+		assertQDOnlyPolicy := func(tableName string) {
+			hasPolicy := dbconn.MustSelectString(restoreConn, fmt.Sprintf(`
+				SELECT EXISTS (
+					SELECT 1 FROM gp_distribution_policy WHERE localoid = '%s'::regclass
+				)::text AS string`, tableName))
+			Expect(hasPolicy).To(Equal("false"))
+		}
+
+		// assertFilteredTableRestored confirms test_local_cfg_filtered's two
+		// extcondition-matching rows survived, and that the row
+		// failing "WHERE active" did not come through.
+		assertFilteredTableRestored := func() {
+			filteredActive1 := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf("SELECT active::text AS string FROM %s WHERE id = 1", localExtFilteredTable))
+			Expect(filteredActive1).To(Equal("true"))
+
+			filteredActive3 := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf("SELECT active::text AS string FROM %s WHERE id = 3", localExtFilteredTable))
+			Expect(filteredActive3).To(Equal("true"))
+
+			excludedRowPresent := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM %s WHERE id = 2)::text AS string", localExtFilteredTable))
+			Expect(excludedRowPresent).To(Equal("false"))
+
+			// Row 4 is seeded by the script itself (not by gpbackup) and
+			// must appear exactly once, not duplicated.
+			seededCount := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf("SELECT count(*) AS string FROM %s WHERE id = 4", localExtFilteredTable))
+			Expect(seededCount).To(Equal("1"))
+		}
+
+		// assertLocalCfgContentRestored confirms all four of
+		// test_local_cfg's rows survived an INSERT-based restore.
+		assertLocalCfgContentRestored := func() {
+			noteIsNull := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf("SELECT (note IS NULL)::text AS string FROM %s WHERE id = 1", localExtTable))
+			Expect(noteIsNull).To(Equal("true"))
+
+			emptyVal := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf("SELECT (val = '')::text AS string FROM %s WHERE id = 2", localExtTable))
+			Expect(emptyVal).To(Equal("true"))
+
+			specialVal := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf("SELECT val AS string FROM %s WHERE id = 3", localExtTable))
+			Expect(specialVal).To(Equal("quote' semi; back\\slash"))
+
+			unicodeVal := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf("SELECT val AS string FROM %s WHERE id = 4", localExtTable))
+			Expect(unicodeVal).To(Equal("unicode: héllo wörld 你好"))
+
+			binVal1 := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf("SELECT encode(data, 'hex') AS string FROM %s WHERE id = 1", localExtTable))
+			Expect(binVal1).To(Equal("00010203"))
+
+			binVal2 := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf("SELECT encode(data, 'hex') AS string FROM %s WHERE id = 2", localExtTable))
+			Expect(binVal2).To(Equal("deadbeef"))
+
+			binVal3 := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf("SELECT encode(data, 'hex') AS string FROM %s WHERE id = 3", localExtTable))
+			Expect(binVal3).To(Equal("277b7d3b5c"))
+
+			binVal4IsNull := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf("SELECT (data IS NULL)::text AS string FROM %s WHERE id = 4", localExtTable))
+			Expect(binVal4IsNull).To(Equal("true"))
+		}
+
+		// assertQuotedColsTableRestored confirms an INSERT built around
+		// double-quoted column names restores correctly.
+		assertQuotedColsTableRestored := func() {
+			commaVal := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf(`SELECT "comma,name" AS string FROM %s WHERE id = 1`, localExtQuotedColsTable))
+			Expect(commaVal).To(Equal("comma_val"))
+
+			parenVal := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf(`SELECT "paren(name)" AS string FROM %s WHERE id = 1`, localExtQuotedColsTable))
+			Expect(parenVal).To(Equal("paren_val"))
+
+			quoteVal := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf(`SELECT "quote'name" AS string FROM %s WHERE id = 1`, localExtQuotedColsTable))
+			Expect(quoteVal).To(Equal("quote_val"))
+
+			dotSpaceVal := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf(`SELECT "dot.and space" AS string FROM %s WHERE id = 1`, localExtQuotedColsTable))
+			Expect(dotSpaceVal).To(Equal("dot_space_val"))
+
+			unicodeVal := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf(`SELECT "unicode_名前" AS string FROM %s WHERE id = 1`, localExtQuotedColsTable))
+			Expect(unicodeVal).To(Equal("unicode_val"))
+		}
+
+		It("backs up and restores QD-only config table data", func() {
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb")
+
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable:           4,
+				localExtFilteredTable:   3,
+				localExtQuotedColsTable: 1,
+			})
+
+			assertLocalCfgContentRestored()
+			assertFilteredTableRestored()
+			assertQuotedColsTableRestored()
+			assertQDOnlyPolicy(localExtTable)
+			assertQDOnlyPolicy(localExtFilteredTable)
+			assertQDOnlyPolicy(localExtQuotedColsTable)
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("excludes QD-only table data from --metadata-only backup", func() {
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--metadata-only")
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb")
+
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable:         0,
+				localExtFilteredTable: 1, // row 4, seeded by the script itself
+			})
+
+			assertQDOnlyPolicy(localExtTable)
+			assertQDOnlyPolicy(localExtFilteredTable)
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("restores QD-only config table data with --data-only --include-table against a pre-existing schema", func() {
+			defer createLocalExt(backupConn, true)()
+
+			// Pre-existing schema on the restore target: a --data-only
+			// backup captures no CREATE EXTENSION/CREATE TABLE statements,
+			// so the extension must already exist on restoredb for the
+			// --data-only restore to have anywhere to put the data.
+			defer createLocalExt(restoreConn, false)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--data-only")
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--data-only",
+				"--include-table", localExtTable,
+				"--include-table", localExtFilteredTable)
+
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable:         4,
+				localExtFilteredTable: 3,
+			})
+
+			assertLocalCfgContentRestored()
+			assertFilteredTableRestored()
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("excludes QD-only table data when restoring a full backup with --metadata-only", func() {
+			defer createLocalExt(backupConn, true)()
+
+			// Unlike the "--metadata-only backup" test above, this backup
+			// is a normal full one, the exclusion under test happens on
+			// the restore side.
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--metadata-only")
+
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable:         0,
+				localExtFilteredTable: 1, // row 4, seeded by the script itself
+			})
+
+			// The tables (and the extension that owns them) must still be
+			// created.
+			Expect(checkTableExists(restoreConn, localExtTable)).To(BeTrue())
+			Expect(checkTableExists(restoreConn, localExtFilteredTable)).To(BeTrue())
+
+			assertQDOnlyPolicy(localExtTable)
+			assertQDOnlyPolicy(localExtFilteredTable)
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("skips the named table's data with --exclude-table", func() {
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--exclude-table", localExtTable)
+
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable:         0,
+				localExtFilteredTable: 3,
+			})
+
+			// The excluded table still gets created (CREATE EXTENSION isn't
+			// table-scoped), it just ends up empty.
+			Expect(checkTableExists(restoreConn, localExtTable)).To(BeTrue())
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("restores nothing from the extension with --include-schema for an unrelated schema", func() {
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--include-schema", "schema2")
+
+			// Extension.GetMetadataEntry() has no schema of its own (it's
+			// tagged with an empty string), which doesn't match an
+			// --include-schema list, so CREATE EXTENSION never runs,
+			// and neither table (nor its data) exists.
+			Expect(checkTableExists(restoreConn, localExtTable)).To(BeFalse())
+			Expect(checkTableExists(restoreConn, localExtFilteredTable)).To(BeFalse())
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("restores QD-only data with --include-schema for the extension's own schema", func() {
+			defer createLocalExt(backupConn, true)()
+
+			// Same issue as with '--include-table': CREATE
+			// EXTENSION would be dropped even though the tables it owns
+			// live in the included schema. Pre-create the extension so this
+			// test isolates the QD-only data-filtering behavior under test.
+			defer createLocalExt(restoreConn, false)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--include-schema", localExtSchema)
+
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable:         4,
+				localExtFilteredTable: 3,
+			})
+
+			assertLocalCfgContentRestored()
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("restores the extension normally with --exclude-schema for an unrelated schema", func() {
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--exclude-schema", "schema2")
+
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable:         4,
+				localExtFilteredTable: 3,
+			})
+
+			assertLocalCfgContentRestored()
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("runs ANALYZE on QD-only tables after a full restore with --run-analyze", func() {
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--run-analyze")
+
+			// test_local_cfg has 4 columns (id, val, note, data); ANALYZE
+			// should have produced one pg_statistic row per column.
+			actualStatisticCount := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf(`SELECT count(*) FROM pg_statistic WHERE starelid='%s'::regclass::oid`, localExtTable))
+			Expect(actualStatisticCount).To(Equal("4"))
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("runs ANALYZE on QD-only tables after a --data-only restore with --run-analyze", func() {
+			defer createLocalExt(backupConn, true)()
+			defer createLocalExt(restoreConn, false)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--data-only")
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--data-only",
+				"--include-table", localExtTable,
+				"--run-analyze")
+
+			actualStatisticCount := dbconn.MustSelectString(restoreConn,
+				fmt.Sprintf(`SELECT count(*) FROM pg_statistic WHERE starelid='%s'::regclass::oid`, localExtTable))
+			Expect(actualStatisticCount).To(Equal("4"))
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("redirects QD-only table data to another schema with --redirect-schema on a --data-only restore", func() {
+			defer createLocalExt(backupConn, true)()
+
+			// --data-only never issues CREATE EXTENSION/CREATE TABLE, so (as
+			// with the "pre-existing schema" test above) the destination must
+			// already exist - this time installed into the redirect target
+			// schema rather than public, to prove the INSERT statements
+			// actually land there.
+			testhelper.AssertQueryRuns(restoreConn, "CREATE SCHEMA redirect_local_ext")
+			defer testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA redirect_local_ext")
+			_, err := restoreConn.Exec("CREATE EXTENSION test_ext_local SCHEMA redirect_local_ext;")
+			Expect(err).ToNot(HaveOccurred())
+			defer testhelper.AssertQueryRuns(restoreConn, "DROP EXTENSION test_ext_local;")
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--data-only")
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--data-only",
+				"--include-table", localExtTable,
+				"--redirect-schema", "redirect_local_ext")
+
+			redirectedCount := dbconn.MustSelectString(restoreConn,
+				"SELECT count(*) AS string FROM redirect_local_ext.test_local_cfg")
+			Expect(redirectedCount).To(Equal("4"))
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("redirects QD-only table data to another schema with --redirect-schema on a full restore", func() {
+			defer createLocalExt(backupConn, true)()
+
+			// Unlike --data-only, --include-table can't be used on a full
+			// restore here: ValidateRelationsInRestoreDatabase requires it
+			// not already exist, but nothing creates a QD-only table's own
+			// relation (CREATE EXTENSION is excluded by the filter). Use
+			// --include-schema instead, which doesn't hit that check.
+			testhelper.AssertQueryRuns(restoreConn, "CREATE SCHEMA redirect_local_ext_full")
+			defer testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA redirect_local_ext_full")
+			_, err := restoreConn.Exec("CREATE EXTENSION test_ext_local SCHEMA redirect_local_ext_full;")
+			Expect(err).ToNot(HaveOccurred())
+			defer testhelper.AssertQueryRuns(restoreConn, "DROP EXTENSION test_ext_local;")
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--include-schema", localExtSchema,
+				"--redirect-schema", "redirect_local_ext_full")
+
+			redirectedCount := dbconn.MustSelectString(restoreConn,
+				"SELECT count(*) AS string FROM redirect_local_ext_full.test_local_cfg")
+			Expect(redirectedCount).To(Equal("4"))
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("does not corrupt row data containing an INSERT INTO target string during --redirect-schema", func() {
+			defer createLocalExt(backupConn, true)()
+
+			poisonVal := fmt.Sprintf("INSERT INTO %s poisoned", localExtTable)
+			testhelper.AssertQueryRuns(backupConn,
+				fmt.Sprintf("INSERT INTO %s VALUES (99, '%s', NULL, NULL)", localExtTable, poisonVal))
+
+			testhelper.AssertQueryRuns(restoreConn, "CREATE SCHEMA redirect_local_ext_poison")
+			defer testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA redirect_local_ext_poison")
+			_, err := restoreConn.Exec("CREATE EXTENSION test_ext_local SCHEMA redirect_local_ext_poison;")
+			Expect(err).ToNot(HaveOccurred())
+			defer testhelper.AssertQueryRuns(restoreConn, "DROP EXTENSION test_ext_local;")
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--data-only")
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--data-only",
+				"--include-table", localExtTable,
+				"--redirect-schema", "redirect_local_ext_poison")
+
+			redirectedCount := dbconn.MustSelectString(restoreConn,
+				"SELECT count(*) AS string FROM redirect_local_ext_poison.test_local_cfg")
+			Expect(redirectedCount).To(Equal("5"))
+
+			restoredVal := dbconn.MustSelectString(restoreConn,
+				"SELECT val AS string FROM redirect_local_ext_poison.test_local_cfg WHERE id = 99")
+			Expect(restoredVal).To(Equal(poisonVal))
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("truncates only backed-up rows before restoring QD-only table data with --truncate-table", func() {
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath)
+			timestamp := getBackupTimestamp(string(output))
+
+			// First restore just the metadata: creates the extension (and
+			// its tables) via its own install script, exactly as a real
+			// deployment would - seeding test_local_cfg_filtered's row 4
+			// (active=false) itself, not via our createLocalExt helper.
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--metadata-only")
+
+			// Simulate data that accumulated since that restore - exactly
+			// what --truncate-table is meant to clear away.
+			testhelper.AssertQueryRuns(restoreConn,
+				fmt.Sprintf("INSERT INTO %s VALUES (99, 'stale', NULL, NULL)", localExtTable))
+
+			// Now restore just the data, with --truncate-table, from the
+			// same backup.
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--data-only", "--truncate-table",
+				"--include-table", localExtTable,
+				"--include-table", localExtFilteredTable)
+
+			// Exactly 4 rows, not 5: the stale row is gone, replaced by the
+			// backup's own content.
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable:         4,
+				localExtFilteredTable: 3,
+			})
+			assertLocalCfgContentRestored()
+			// Also confirms row 4, seeded only by the --metadata-only
+			// restore's CREATE EXTENSION and never part of the backup's
+			// own data, survived the truncate untouched.
+			assertFilteredTableRestored()
+
+			assertArtifactsCleaned(timestamp)
+		})
+
+		It("does not duplicate QD-only config table data across an incremental restore", func() {
+			defer createLocalExt(backupConn, true)()
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--leaf-partition-data")
+			fullTimestamp := getBackupTimestamp(string(output))
+
+			// Simulate data that accumulated on the source since the full
+			// backup - exactly what an incremental backup is meant to
+			// capture.
+			testhelper.AssertQueryRuns(backupConn,
+				fmt.Sprintf("INSERT INTO %s VALUES (5, 'incremental', NULL, NULL)", localExtTable))
+
+			output = gpbackup(gpbackupPath, backupHelperPath,
+				"--incremental", "--leaf-partition-data", "--from-timestamp", fullTimestamp)
+			incrementalTimestamp := getBackupTimestamp(string(output))
+
+			gprestore(gprestorePath, restoreHelperPath, fullTimestamp,
+				"--redirect-db", "restoredb")
+
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable: 4,
+			})
+
+			gprestore(gprestorePath, restoreHelperPath, incrementalTimestamp,
+				"--redirect-db", "restoredb", "--incremental", "--data-only")
+
+			assertDataRestored(restoreConn, map[string]int{
+				localExtTable: 5,
+			})
+
+			assertArtifactsCleaned(fullTimestamp)
+			assertArtifactsCleaned(incrementalTimestamp)
+		})
+	})
 	Describe("Restore with truncate-table", func() {
 		It("runs gpbackup and gprestore with truncate-table and include-table flags", func() {
 			output := gpbackup(gpbackupPath, backupHelperPath)

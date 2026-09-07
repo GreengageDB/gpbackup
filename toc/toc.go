@@ -120,6 +120,7 @@ const (
 	OBJ_TYPE                      = "TYPE"
 	OBJ_USER_MAPPING              = "USER MAPPING"
 	OBJ_VIEW                      = "VIEW"
+	OBJ_QD_ONLY_TABLE_DATA        = "QD ONLY TABLE DATA"
 )
 
 func NewTOC(filename string) *TOC {

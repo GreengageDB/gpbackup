@@ -387,6 +387,25 @@ func printDataBackupWarnings(numExtTables int64) {
 	}
 }
 
+// SplitOutQDOnlyTables pulls the QD-only tables out of tables, so
+// SkipDataBackup() never has to know about QD-only tables at all.
+func SplitOutQDOnlyTables(tables []Table) ([]TableQDOnly, []Table) {
+	var qdOnlyTables []TableQDOnly
+	var remaining []Table
+
+	if backupReport.MetadataOnly {
+		return qdOnlyTables, tables
+	}
+	for _, table := range tables {
+		if table.IsQDOnly() {
+			qdOnlyTables = append(qdOnlyTables, TableQDOnly{Table: table})
+		} else {
+			remaining = append(remaining, table)
+		}
+	}
+	return qdOnlyTables, remaining
+}
+
 // Remove external/foreign tables from the data backup set
 func GetBackupDataSet(tables []Table) ([]Table, int64) {
 	var backupDataSet []Table

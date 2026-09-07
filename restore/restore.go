@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
+	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gpbackup/filepath"
@@ -152,6 +153,8 @@ func DoSetup() {
 
 func DoRestore() {
 	var filteredDataEntries map[string][]toc.CoordinatorDataEntry
+	var qdOnlyTablesRestored int
+	var qdOnlyDataEntries map[string][]toc.CoordinatorDataEntry
 	metadataFilename := globalFPInfo.GetMetadataFilePath()
 	isDataOnly := backupConfig.DataOnly || MustGetFlagBool(options.DATA_ONLY)
 	isMetadataOnly := backupConfig.MetadataOnly || MustGetFlagBool(options.METADATA_ONLY)
@@ -162,12 +165,14 @@ func DoRestore() {
 	}
 
 	if !isDataOnly && !isIncremental {
-		restorePredata(metadataFilename)
+		qdOnlyTablesRestored, qdOnlyDataEntries = restorePredata(metadataFilename)
 	} else if isDataOnly {
 		// The sequence setval commands need to be run during data only restores since
 		// they are arguably the data of the sequence relations and can affect user tables
 		// containing columns that reference those sequence relations.
 		restoreSequenceValues(metadataFilename)
+		// The data of QD-only tables also reside in the metadata, and it should be restored.
+		qdOnlyTablesRestored, qdOnlyDataEntries = restoreQDOnlyTablesData(metadataFilename)
 	}
 
 	totalTablesRestored := 0
@@ -176,6 +181,16 @@ func DoRestore() {
 			VerifyBackupFileCountOnSegments()
 		}
 		totalTablesRestored, filteredDataEntries = restoreData()
+	}
+
+	totalTablesRestored += qdOnlyTablesRestored
+	if len(qdOnlyDataEntries) > 0 {
+		if filteredDataEntries == nil {
+			filteredDataEntries = make(map[string][]toc.CoordinatorDataEntry)
+		}
+		for timestamp, entries := range qdOnlyDataEntries {
+			filteredDataEntries[timestamp] = append(filteredDataEntries[timestamp], entries...)
+		}
 	}
 
 	if !isDataOnly && !isIncremental {
@@ -289,9 +304,9 @@ func verifyIncrementalState() {
 	}
 }
 
-func restorePredata(metadataFilename string) {
+func restorePredata(metadataFilename string) (int, map[string][]toc.CoordinatorDataEntry) {
 	if wasTerminated.Load() {
-		return
+		return 0, nil
 	}
 	var numErrors int32
 	gplog.Info("Restoring pre-data metadata")
@@ -301,7 +316,11 @@ func restorePredata(metadataFilename string) {
 	if opts.RedirectSchema == "" {
 		schemaStatements = GetRestoreMetadataStatementsFiltered("predata", metadataFilename, []string{toc.OBJ_SCHEMA}, []string{}, filters)
 	}
-	statements := GetRestoreMetadataStatementsFiltered("predata", metadataFilename, []string{}, []string{toc.OBJ_SCHEMA}, filters)
+	// QD-only table data is restored separately via restoreQDOnlyTablesData below, so that
+	// it (and its associated report/ANALYZE tracking) is handled consistently whether or not
+	// this is a --data-only restore.
+	excludeObjectTypes := []string{toc.OBJ_SCHEMA, toc.OBJ_QD_ONLY_TABLE_DATA}
+	statements := GetRestoreMetadataStatementsFiltered("predata", metadataFilename, []string{}, excludeObjectTypes, filters)
 
 	editStatementsRedirectSchema(statements, opts.RedirectSchema)
 	progressBar := utils.NewProgressBar(len(schemaStatements)+len(statements), "Pre-data objects restored: ", utils.PB_VERBOSE)
@@ -364,6 +383,16 @@ func restorePredata(metadataFilename string) {
 	} else {
 		gplog.Info("Pre-data metadata restore complete")
 	}
+
+	if backupConfig.MetadataOnly || MustGetFlagBool(options.METADATA_ONLY) {
+		// QD-only table data is not real schema/DDL content; a metadata-only
+		// restore should not replay it.
+		return 0, nil
+	}
+	// The data of QD-only tables also reside in the metadata, and it should be restored.
+	// This runs after the statements above so that CREATE EXTENSION (which may seed the
+	// table) has already executed.
+	return restoreQDOnlyTablesData(metadataFilename)
 }
 
 func restoreSequenceValues(metadataFilename string) {
@@ -404,6 +433,131 @@ func restoreSequenceValues(metadataFilename string) {
 	} else {
 		gplog.Info("Sequence values restore complete")
 	}
+}
+
+const extensionTableConditionNotFound = "not found"
+
+func getExtensionTableCondition(tableFQN string) (string, error) {
+	return dbconn.SelectString(connectionPool, fmt.Sprintf(`
+		SELECT coalesce((
+			SELECT condition
+			FROM (SELECT unnest(extconfig) AS reloid, unnest(extcondition) AS condition FROM pg_catalog.pg_extension) cfg
+			WHERE reloid = '%s'::regclass
+		), '%s') AS string`, utils.EscapeSingleQuotes(tableFQN), extensionTableConditionNotFound))
+}
+
+func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.CoordinatorDataEntry) {
+	if wasTerminated.Load() {
+		return 0, nil
+	}
+	gplog.Info("Restoring data of QD-only tables")
+
+	filters := NewFilters(opts.IncludedSchemas, opts.ExcludedSchemas, opts.IncludedRelations, opts.ExcludedRelations)
+	statements := GetRestoreMetadataStatementsFiltered("predata", metadataFilename, []string{toc.OBJ_QD_ONLY_TABLE_DATA}, []string{}, filters)
+
+	// Unlike other object types, this statement's data (one "<columns> VALUES(<row>);"
+	// per row, terminated with a NUL byte plus a newline - see backupQDOnlyData) has
+	// no INSERT INTO <schema>.<table> prefix. We add it here in order to
+	// properly handle schema redirection, splitting back apart on the NUL byte rather
+	// than the newline alone so that a row's own text data (which can contain a
+	// literal embedded newline) can never be mistaken for a row boundary.
+	for i := range statements {
+		if opts.RedirectSchema != "" {
+			statements[i].Schema = opts.RedirectSchema
+		}
+		if statements[i].Statement == "" {
+			continue
+		}
+		tableName := utils.MakeFQN(statements[i].Schema, statements[i].Name)
+		insertPrefix := fmt.Sprintf("INSERT INTO %s ", tableName)
+		rows := strings.Split(strings.TrimRight(statements[i].Statement, "\x00\n"), "\x00\n")
+		for j, row := range rows {
+			rows[j] = insertPrefix + row
+		}
+		statements[i].Statement = strings.Join(rows, "\n")
+	}
+
+	if MustGetFlagBool(options.TRUNCATE_TABLE) || MustGetFlagBool(options.INCREMENTAL) {
+		for i := range statements {
+			tableName := utils.MakeFQN(statements[i].Schema, statements[i].Name)
+			condition, err := getExtensionTableCondition(tableName)
+			if err == nil && condition == extensionTableConditionNotFound {
+				err = errors.Errorf("table %s is not registered as an extension configuration table on the target database", tableName)
+			}
+			if err != nil {
+				if MustGetFlagBool(options.ON_ERROR_CONTINUE) {
+					gplog.Error("Unable to determine extension config condition for %s, skipping: %s", tableName, err.Error())
+					errorTablesData[tableName] = Empty{}
+					statements[i].Statement = ""
+					continue
+				}
+				gplog.Fatal(err, fmt.Sprintf("Unable to determine extension config condition for %s", tableName))
+			}
+			// Use DELETE FROM instead of TRUNCATE to keep values seeded by the install script of extension
+			statements[i].Statement = fmt.Sprintf("DELETE FROM %s %s;\n%s", tableName, condition, statements[i].Statement)
+		}
+	}
+
+	// A table with nothing left to restore (no rows to begin with, or skipped
+	// under --on-error-continue) doesn't need to run at all. Dropped here,
+	// before the progress bar/execution, rather than only at the final count
+	// below, so the progress bar's total matches what actually gets reported
+	// as restored.
+	// No explicit BEGIN/COMMIT here: connectionPool.Exec sends this whole string as a
+	// single simple-query message, which Postgres already wraps in an implicit
+	// transaction on its own - same per-table atomicity, but one that Postgres closes
+	// out cleanly at the end of the message even on failure. An explicit BEGIN would
+	// instead leave the connection in an aborted-transaction state past this call,
+	// with nothing to issue the matching ROLLBACK, poisoning it for whatever statement
+	// runs on it next.
+	nonEmpty := statements[:0]
+	for _, statement := range statements {
+		if statement.Statement == "" {
+			continue
+		}
+		nonEmpty = append(nonEmpty, statement)
+	}
+	statements = nonEmpty
+
+	numErrors := int32(0)
+	if len(statements) == 0 {
+		gplog.Verbose("No QD-only tables to restore")
+	} else {
+		progressBar := utils.NewProgressBar(len(statements), "QD-only tables restored: ", utils.PB_VERBOSE)
+		progressBar.Start()
+		numErrors = ExecuteRestoreMetadataStatements("data", statements, "QD-only tables", progressBar, utils.PB_VERBOSE, connectionPool.NumConns > 1)
+		progressBar.Finish()
+	}
+
+	if wasTerminated.Load() {
+		gplog.Info("QD-only tables restore incomplete")
+	} else if numErrors > 0 {
+		gplog.Info("QD-only tables restore completed with failures")
+	} else {
+		gplog.Info("QD-only tables restore complete")
+	}
+
+	// A statement that failed during execution (tracked in errorTablesData by
+	// executeStatementsForConn under --on-error-continue) was not actually
+	// restored - exclude it here so it isn't counted, reported as restored, or
+	// queued for --run-analyze.
+	restoredStatements := statements[:0]
+	for _, statement := range statements {
+		if _, failed := errorTablesData[statement.Schema+"."+statement.Name]; failed {
+			continue
+		}
+		restoredStatements = append(restoredStatements, statement)
+	}
+	statements = restoredStatements
+
+	if len(statements) == 0 {
+		return 0, nil
+	}
+	dataEntries := make([]toc.CoordinatorDataEntry, len(statements))
+	for i, statement := range statements {
+		dataEntries[i] = toc.CoordinatorDataEntry{Schema: statement.Schema, Name: statement.Name}
+	}
+	return len(statements), map[string][]toc.CoordinatorDataEntry{globalFPInfo.Timestamp: dataEntries}
 }
 
 func editStatementsRedirectSchema(statements []toc.StatementWithType, redirectSchema string) {

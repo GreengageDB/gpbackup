@@ -172,7 +172,8 @@ func getFilterRelationsInBackupSet(relationList []string) []string {
 		relationMap[relation] = true
 	}
 	for _, entry := range globalTOC.PredataEntries {
-		if entry.ObjectType != toc.OBJ_TABLE && entry.ObjectType != toc.OBJ_SEQUENCE && entry.ObjectType != toc.OBJ_VIEW && entry.ObjectType != toc.OBJ_MATERIALIZED_VIEW {
+		if entry.ObjectType != toc.OBJ_TABLE && entry.ObjectType != toc.OBJ_SEQUENCE && entry.ObjectType != toc.OBJ_VIEW &&
+			entry.ObjectType != toc.OBJ_MATERIALIZED_VIEW && entry.ObjectType != toc.OBJ_QD_ONLY_TABLE_DATA {
 			continue
 		}
 		fqn := utils.MakeFQN(entry.Schema, entry.Name)

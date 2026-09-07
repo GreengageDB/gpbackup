@@ -130,8 +130,9 @@ func DoBackup() {
 
 	gplog.Info("Gathering table state information")
 	metadataTables, dataTables, allTables := RetrieveAndProcessTables()
+	dataTablesQDOnly, dataTables := SplitOutQDOnlyTables(dataTables)
 	dataTables, numExtOrForeignTables := GetBackupDataSet(dataTables)
-	if len(dataTables) == 0 && !backupReport.MetadataOnly {
+	if len(dataTables) == 0 && len(dataTablesQDOnly) == 0 && !backupReport.MetadataOnly {
 		gplog.Warn("No tables in backup set contain data. Performing metadata-only backup instead.")
 		backupReport.MetadataOnly = true
 	}
@@ -192,6 +193,7 @@ func DoBackup() {
 
 	if !backupReport.MetadataOnly {
 		backupData(backupSetTables)
+		backupQDOnlyData(metadataFile, dataTablesQDOnly)
 	}
 
 	printDataBackupWarnings(numExtOrForeignTables)
@@ -288,6 +290,87 @@ func backupPredata(metadataFile *utils.FileWithByteCount, tables []Table, tableO
 	backupViewsDependingOnConstraints(metadataFile, viewsDependingOnConstraints)
 
 	logCompletionMessage("Pre-data metadata metadata backup")
+}
+
+func backupQDOnlyData(metadataFile *utils.FileWithByteCount, tables []TableQDOnly) {
+	if wasTerminated.Load() {
+		return
+	}
+	gplog.Verbose("Writing QD-only tables data to metadata file")
+
+	wroteHeaderComment := false
+
+	// OVERRIDING SYSTEM VALUE: harmless when a table has no identity column, but
+	// without it a GENERATED ALWAYS AS IDENTITY column would reject the explicit
+	// captured value that COPY (used for every other table type) tolerates without
+	// complaint. Identity columns (and this syntax) don't exist before PG10 /
+	// GPDB7, so this must stay conditional - GPDB6 doesn't parse it at all.
+	overridingClause := ""
+	if connectionPool.Version.AtLeast("7") {
+		overridingClause = "OVERRIDING SYSTEM VALUE "
+	}
+
+	for _, table := range tables {
+		columnNames := ConstructTableAttributesList(table.ColumnDefs)
+		tableName := table.FQN()
+		if columnNames == "" {
+			gplog.Fatal(fmt.Errorf("QD-only table %s has no non-generated columns to back up", tableName), "")
+		}
+
+		var quoted []string
+		for _, col := range table.ColumnDefs {
+			if col.AttGenerated == "" {
+				// Cast to text explicitly: quote_nullable() is overloaded as
+				// both quote_nullable(text) and quote_nullable(anyelement) in
+				// Postgres's own catalog, and for some argument types (e.g.
+				// integer) both become viable via implicit casting, causing
+				// "function quote_nullable(...) is not unique".
+				quoted = append(quoted, fmt.Sprintf("quote_nullable(%s::text)", col.Name))
+			}
+		}
+		selectList := strings.Join(quoted, " || ',' || ")
+		// ORDER BY 1 orders by this same concatenated row text - the only column in
+		// the result set - so two backups of unchanged data always emit rows in the
+		// same order, regardless of physical storage order on the source. Applied to
+		// an outer wrapping SELECT, not appended directly after *table.ExtensionTableConfig:
+		// that condition is arbitrary text supplied by the extension author (documented
+		// only as "syntax appropriate for a WHERE clause"), so it could itself end in a
+		// LIMIT or ORDER BY, which our own trailing ORDER BY would then be appended after,
+		// producing invalid SQL.
+		query := fmt.Sprintf(`SELECT * FROM (SELECT %s FROM %s %s) qd_only_row ORDER BY 1`, selectList, tableName, *table.ExtensionTableConfig)
+
+		var rows []string
+		err := connectionPool.Select(&rows, query)
+		gplog.FatalOnError(err)
+
+		if len(rows) > 0 && !wroteHeaderComment {
+			metadataFile.MustPrintf("-- QD-only table data: rows are NUL (\\x00) separated, not newline separated.\n")
+			wroteHeaderComment = true
+		}
+
+		start := metadataFile.ByteCount
+
+		// Deliberately not prefixed with "INSERT INTO <schema>.<table> " here: that
+		// prefix is reconstructed fresh at restore time from this table's own
+		// structural Schema/Name (redirect-schema aware).
+		//
+		// Terminated with a NUL byte (plus a trailing newline purely so the metadata
+		// file stays readable when viewed directly), not a bare newline: a row's own
+		// text data can contain a literal embedded newline (quote_nullable() doesn't
+		// escape them), which would make restore misread it as a row boundary when
+		// splitting the text back apart. A NUL byte can't have that problem -
+		// Postgres's wire format cannot represent one inside a text value at all, and
+		// every column here is cast to ::text before quoting (bytea included, via its
+		// default 'hex' bytea_output, which never emits a raw NUL either) - so it's
+		// unambiguous no matter what a row's own data contains.
+		for _, row := range rows {
+			metadataFile.MustPrintf("%s %sVALUES(%s);\x00\n", columnNames, overridingClause, row)
+		}
+
+		section, entry := table.GetMetadataEntry()
+		tier := globalTierMap[table.GetUniqueID()]
+		globalTOC.AddMetadataEntry(section, entry, start, metadataFile.ByteCount, tier)
+	}
 }
 
 func backupData(tables []Table) {
