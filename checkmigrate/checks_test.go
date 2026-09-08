@@ -29,36 +29,77 @@ type sourceCheckTestCase struct {
 
 var sourceCheckTestCases = []sourceCheckTestCase{
 	{
-		name:        "views with removed operators",
-		check:       checkViewsWithRemovedOperators,
-		query:       removedOperatorViewQuery,
-		columns:     []string{"schema_name", "object_name", "relation_kind"},
-		rows:        [][]driver.Value{{"public", "operator_view", "v"}, {"reports", "operator_materialized_view", "m"}},
-		problemText: "views that use removed operators",
+		name:    "multi-column LIST partitions",
+		check:   checkMultiColumnListPartitions,
+		query:   multiColumnListPartitionQuery,
+		columns: []string{"schema_name", "object_name"},
+		rows:    [][]driver.Value{{"sales", "orders"}, {"warehouse", "inventory"}},
+		problemText: "Your installation contains partitioned tables with a LIST partition key containing multiple " +
+			"columns, which is not supported anymore. Consider modifying the partition key to use a single column " +
+			"or dropping the tables.\n",
+		expectedObjects: []string{
+			`Object "orders" has type "partitioned table" in schema "sales"`,
+			`Object "inventory" has type "partitioned table" in schema "warehouse"`,
+		},
+	},
+	{
+		name:    "plpython2 functions",
+		check:   checkPlpython2DependentFunctions,
+		query:   plpython2DependentFunctionQuery,
+		columns: []string{"schema_name", "object_name", "identity_arguments"},
+		rows: [][]driver.Value{
+			{"analytics", "forecast", "integer"},
+			{"public", "legacy_python", "text, integer"},
+		},
+		problemText: "Your installation contains \"plpython\" functions which rely on Python 2. " +
+			"These functions must be either updated to use Python 3 or dropped before upgrade.\n",
+		expectedObjects: []string{
+			`Object "forecast" has type "function" in schema "analytics"`,
+			`Object "legacy_python" has type "function" in schema "public"`,
+			`identity arguments are "integer"`,
+			`identity arguments are "text, integer"`,
+		},
+	},
+	{
+		name:    "views with removed operators",
+		check:   checkViewsWithRemovedOperators,
+		query:   removedOperatorViewQuery,
+		columns: []string{"schema_name", "object_name", "relation_kind"},
+		rows:    [][]driver.Value{{"public", "operator_view", "v"}, {"reports", "operator_materialized_view", "m"}},
+		problemText: "Your installation contains views using removed operators. " +
+			"These operators are no longer present on the target version. " +
+			"These views must be updated to use operators supported in the target version or removed before " +
+			"upgrade can continue.\n",
 		expectedObjects: []string{
 			`Object "operator_view" has type "view" in schema "public"`,
 			`Object "operator_materialized_view" has type "materialized view" in schema "reports"`,
 		},
 	},
 	{
-		name:        "views with removed functions",
-		check:       checkViewsWithRemovedFunctions,
-		query:       removedFunctionViewQuery,
-		columns:     []string{"schema_name", "object_name", "relation_kind"},
-		rows:        [][]driver.Value{{"public", "function_view", "v"}, {"reports", "function_materialized_view", "m"}},
-		problemText: "views that use removed functions",
+		name:    "views with removed functions",
+		check:   checkViewsWithRemovedFunctions,
+		query:   removedFunctionViewQuery,
+		columns: []string{"schema_name", "object_name", "relation_kind"},
+		rows:    [][]driver.Value{{"public", "function_view", "v"}, {"reports", "function_materialized_view", "m"}},
+		problemText: "Your installation contains views using removed functions. " +
+			"These functions are no longer present on the target version. " +
+			"These views must be updated to use functions supported in the target version or removed before " +
+			"upgrade can continue.\n",
 		expectedObjects: []string{
 			`Object "function_view" has type "view" in schema "public"`,
 			`Object "function_materialized_view" has type "materialized view" in schema "reports"`,
 		},
 	},
 	{
-		name:        "views with removed types",
-		check:       checkViewsWithRemovedTypes,
-		query:       removedTypeViewQuery,
-		columns:     []string{"schema_name", "object_name", "relation_kind"},
-		rows:        [][]driver.Value{{"public", "type_view", "v"}, {"reports", "type_materialized_view", "m"}},
-		problemText: "views that use removed types",
+		name:    "views with removed types",
+		check:   checkViewsWithRemovedTypes,
+		query:   removedTypeViewQuery,
+		columns: []string{"schema_name", "object_name", "relation_kind"},
+		rows:    [][]driver.Value{{"public", "type_view", "v"}, {"reports", "type_materialized_view", "m"}},
+		problemText: "Your installation contains views using removed types. " +
+			"These types are no longer present on the target version. " +
+			"These views must be updated to use types supported in the target version or removed before upgrade " +
+			"can continue.\n",
 		expectedObjects: []string{
 			`Object "type_view" has type "view" in schema "public"`,
 			`Object "type_materialized_view" has type "materialized view" in schema "reports"`,
@@ -95,6 +136,103 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		problemText: "views that reference system relations removed from version 7",
 		expectedObjects: []string{
 			`Object "removed_relation_view" has type "view" in schema "public"`,
+		},
+	},
+	{
+		name:    "removed data types",
+		check:   checkRemovedDataTypes,
+		query:   removedDataTypeQuery,
+		columns: []string{"schema_name", "object_name", "column_name"},
+		rows:    [][]driver.Value{{"public", "events", "created_at"}, {"archive", "old_events", "expired_at"}},
+		problemText: "Your installation contains the \"abstime\", \"reltime\", \"tinterval\", or \"unknown\" data " +
+			"type in user tables. These data types have been removed in version 7. Drop the problem columns or " +
+			"change them to another data type.\n",
+		expectedObjects: []string{
+			`Object "created_at" has type "column" in schema "public"`,
+			`Object "expired_at" has type "column" in schema "archive"`,
+		},
+	},
+	{
+		name:    "missing AO options",
+		check:   checkMissingAOOptions,
+		query:   missingAOOptionQuery,
+		columns: []string{"parent_schema", "parent_name", "child_schema", "child_name", "parent_option"},
+		rows: [][]driver.Value{
+			{"public", "ao_parent", "public", "ao_child_one", "compresstype=zlib"},
+			{"archive", "ao_parent_two", "archive", "ao_child_two", "compresslevel=5"},
+		},
+		problemText: "Your cluster contains partitioned tables with child partitions, which do not have the parent " +
+			"table's settings defined.\nIn version 7, they will be inherited from the parent table instead of being " +
+			"taken by default.\nYou can recreate following tables with defined setting.\n" +
+			"List of partitioned tables, partitions, and settings with the specified problem:\n",
+		expectedObjects: []string{
+			`Object "ao_child_one" has type "partition" in schema "public"`,
+			`Object "ao_child_two" has type "partition" in schema "archive"`,
+		},
+	},
+	{
+		name:    "restricted EXECUTE ON functions",
+		check:   checkRestrictedExecuteOnFunctions,
+		query:   restrictedExecuteOnFunctionQuery,
+		columns: []string{"schema_name", "object_name", "identity_arguments"},
+		rows: [][]driver.Value{
+			{"public", "master_function", "integer"},
+			{"analytics", "segment_function", "text, integer"},
+		},
+		problemText: "Your cluster contains not set-returning functions with MASTER, ALL SEGMENTS or INITPLAN " +
+			"EXECUTE ON.\nYou need to make the function set-returning or change EXECUTE ON to ANY.\n" +
+			"List of functions with the specified problem:\n",
+		expectedObjects: []string{
+			`Object "master_function" has type "function" in schema "public"`,
+			`Object "segment_function" has type "function" in schema "analytics"`,
+			`identity arguments are "integer"`,
+			`identity arguments are "text, integer"`,
+		},
+	},
+	{
+		name:    "incomplete partition indexes",
+		check:   checkIncompletePartitionIndexes,
+		query:   incompletePartitionIndexQuery,
+		columns: []string{"schema_name", "table_name", "index_name"},
+		rows:    [][]driver.Value{{"public", "sales", "sales_unique"}, {"archive", "orders", "orders_primary"}},
+		problemText: "Your cluster contains partitioned tables with unique indexes, which do not have all partition " +
+			"keys.\nIn version 7, unique index on partitioned table must include all partitioning keys.\n" +
+			"You can recreate following indexes with all partitioning keys.\n" +
+			"List of partitioned tables and indexes with the specified problem:\n",
+		expectedObjects: []string{
+			`Object "sales_unique" has type "index" in schema "public"`,
+			`Object "orders_primary" has type "index" in schema "archive"`,
+		},
+	},
+	{
+		name:    "incompatible range partitions",
+		check:   checkIncompatibleRangePartitions,
+		query:   incompatibleRangePartitionQuery,
+		columns: []string{"parent_schema", "table_name", "type_name", "partition_schema", "partition_name"},
+		rows: [][]driver.Value{
+			{"public", "prices", "numeric", "sales", "prices_1_prt_low"},
+			{"archive", "labels", "text", "history", "labels_1_prt_a"},
+		},
+		problemText: "In version 7, range partitions don't support `START EXCLUSIVE` or `END INCLUSIVE` for " +
+			"columns with types float and text.\nYou can recreate following tables without `START EXCLUSIVE` and " +
+			"`END INCLUSIVE`.\nList of partitioned tables with the specified problem:\n",
+		expectedObjects: []string{
+			`Object "prices_1_prt_low" has type "partition" in schema "sales"`,
+			`Object "labels_1_prt_a" has type "partition" in schema "history"`,
+		},
+	},
+	{
+		name:    "statement triggers",
+		check:   checkStatementTriggers,
+		query:   statementTriggerQuery,
+		columns: []string{"schema_name", "table_name", "trigger_name"},
+		rows:    [][]driver.Value{{"public", "orders", "orders_statement"}, {"audit", "events", "events_statement"}},
+		problemText: "In version 7, statements triggers are not supported.\n" +
+			"You can use row triggers.\n" +
+			"List of triggers with the specified problem:\n",
+		expectedObjects: []string{
+			`Object "orders_statement" has type "trigger" in schema "public"`,
+			`Object "events_statement" has type "trigger" in schema "audit"`,
 		},
 	},
 	{
@@ -187,7 +325,12 @@ func expectAllSourceChecksEmpty(mock sqlmock.Sqlmock) {
 }
 
 func expectMigrationSetupQueries(mock sqlmock.Sqlmock) {
-	for _, setupQuery := range []string{migrationCheckSetupQuery, migrationCheckSetupCatalogQuery} {
+	setupQueries := []string{
+		migrationCheckSetupQuery,
+		migrationCheckSetupCatalogQuery,
+		migrationCheckSetupTypesQuery,
+	}
+	for _, setupQuery := range setupQueries {
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec(regexp.QuoteMeta(setupQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -332,6 +475,13 @@ func TestRequiredLibrariesReportsEveryFailedLoad(t *testing.T) {
 		t.Fatal("The library check did not report failed loads")
 	}
 	output := string(stderr.Contents())
+	expectedProblemText := "Your cluster references loadable libraries that are missing from the new cluster.\n" +
+		"You can add these libraries to the new installation,\n" +
+		"or remove the functions using them from the old installation.\n" +
+		"A list of problems libraries are:\n"
+	if strings.Count(output, expectedProblemText) != 1 {
+		t.Fatalf("The problem text occurred an unexpected number of times in %q", output)
+	}
 	for _, expectedLibrary := range []string{"$libdir/missing", "odd'lib"} {
 		if !strings.Contains(output, expectedLibrary) {
 			t.Errorf("The output %q did not contain library %q", output, expectedLibrary)
@@ -437,10 +587,28 @@ func TestMigrationSetupUsesTemporarySchema(t *testing.T) {
 	if !strings.Contains(migrationCheckSetupQuery, "pg_temp") {
 		t.Fatal("The migration setup does not use the temporary schema")
 	}
-	for _, query := range []string{removedOperatorViewQuery, removedFunctionViewQuery, removedTypeViewQuery, changedFunctionSignatureViewQuery, removedCatalogColumnViewQuery, removedCatalogRelationViewQuery} {
+	queries := []string{
+		removedOperatorViewQuery,
+		removedFunctionViewQuery,
+		removedTypeViewQuery,
+		changedFunctionSignatureViewQuery,
+		removedCatalogColumnViewQuery,
+		removedCatalogRelationViewQuery,
+		removedDataTypeQuery,
+	}
+	for _, query := range queries {
 		if !strings.Contains(query, "pg_temp") {
 			t.Fatalf("The support query does not use the temporary schema in %q", query)
 		}
+	}
+}
+
+func TestPlpythonCheckUsesLanguageHandler(t *testing.T) {
+	if !strings.Contains(plpython2DependentFunctionQuery, "lanplcallfoid") {
+		t.Fatal("The PL/Python check does not inspect the language handler")
+	}
+	if strings.Contains(plpython2DependentFunctionQuery, "pg_pltemplate") {
+		t.Fatal("The PL/Python check still depends on the language template")
 	}
 }
 
@@ -464,13 +632,21 @@ func TestSourceDatabaseEnumerationIncludesConnectableTemplateDatabases(t *testin
 
 func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 	queries := []string{
+		multiColumnListPartitionQuery,
+		plpython2DependentFunctionQuery,
 		removedOperatorViewQuery,
 		removedFunctionViewQuery,
 		removedTypeViewQuery,
 		changedFunctionSignatureViewQuery,
 		removedCatalogColumnViewQuery,
 		removedCatalogRelationViewQuery,
+		migrationCheckSetupTypesQuery,
 		requiredLibraryQuery,
+		missingAOOptionQuery,
+		restrictedExecuteOnFunctionQuery,
+		incompletePartitionIndexQuery,
+		incompatibleRangePartitionQuery,
+		statementTriggerQuery,
 		disallowedArrowOperatorQuery,
 		partitionOpfamilyQuery,
 	}
@@ -497,6 +673,23 @@ func TestConfigurationQueriesUseValidCoalesceExpressions(t *testing.T) {
 		if strings.Contains(query, "pg_catalog.coalesce") {
 			t.Fatal("The configuration check schema-qualifies the COALESCE expression")
 		}
+	}
+}
+
+func TestMissingAOOptionsUseImmediateAOParents(t *testing.T) {
+	for _, catalog := range []string{"pg_catalog.pg_partition_rule", "pg_catalog.pg_partition"} {
+		if !strings.Contains(missingAOOptionQuery, catalog) {
+			t.Fatalf("The AO option check does not use %s", catalog)
+		}
+	}
+	if !strings.Contains(missingAOOptionQuery, "parent_rule.parchildrelid, root_partition.parrelid") {
+		t.Fatal("The AO option check does not resolve immediate partition parents")
+	}
+	if !strings.Contains(missingAOOptionQuery, "child_relation.relstorage IN ('a', 'c')") {
+		t.Fatal("The AO option check includes heap or external child partitions")
+	}
+	if strings.Contains(missingAOOptionQuery, "pg_catalog.pg_partitions") {
+		t.Fatal("The AO option check still resolves parents through the root-only view")
 	}
 }
 
@@ -640,7 +833,7 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 		"  unavailable databases:             0\n" +
 		"  completed cluster checks:          2\n" +
 		"  failed cluster checks:             0\n" +
-		"  completed database checks:        16\n" +
+		"  completed database checks:        32\n" +
 		"  failed database checks:            0\n" +
 		"  unavailable database checks:       0\n" +
 		"  findings:                          2"
@@ -786,6 +979,9 @@ func TestRunMigrationChecksKeepsIndependentChecksAfterCatalogSetupFailure(t *tes
 	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupCatalogQuery)).WillReturnError(errors.New("catalog support unavailable"))
 	mock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupTypesQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 	expectReadOnlyMigrationTransaction(mock)
 	for _, testCase := range sourceCheckTestCases {
@@ -802,7 +998,7 @@ func TestRunMigrationChecksKeepsIndependentChecksAfterCatalogSetupFailure(t *tes
 	if executionError != nil {
 		t.Fatalf("The partial capability run returned an error with %v", executionError)
 	}
-	if summary.completedCheckCount != 6 || summary.unavailableCheckCount != 2 || summary.failedCheckCount != 0 {
+	if summary.completedCheckCount != 14 || summary.unavailableCheckCount != 2 || summary.failedCheckCount != 0 {
 		t.Fatalf("The partial capability summary was %+v", summary)
 	}
 }
@@ -1086,7 +1282,7 @@ func TestDoCheckMigrateContinuesAfterDatabaseConnectionFailure(t *testing.T) {
 		!strings.Contains(output, "  enumerated databases:              2\n") ||
 		!strings.Contains(output, "  checked databases:                 1\n") ||
 		!strings.Contains(output, "  unreachable databases:             1\n") ||
-		!strings.Contains(output, "  completed database checks:         8\n") {
+		!strings.Contains(output, "  completed database checks:        16\n") {
 		t.Fatalf("The partial run printed an unexpected summary in %q", output)
 	}
 }
