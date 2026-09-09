@@ -544,12 +544,17 @@ func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 	}
 }
 
-func TestRequiredLibrariesIncludeExtensionOwnedFunctions(t *testing.T) {
+func TestRequiredLibrariesIncludePersistentExtensionOwnedFunctions(t *testing.T) {
 	if !strings.Contains(requiredLibraryQuery, "p.oid >= 16384") {
 		t.Fatal("The required library check does not select user-defined functions")
 	}
 	if strings.Contains(requiredLibraryQuery, "dependency.deptype = 'e'") {
 		t.Fatal("The required library check excludes extension-owned functions")
+	}
+	for _, temporarySchemaPrefix := range []string{"pg_temp_", "pg_toast_temp_"} {
+		if !strings.Contains(requiredLibraryQuery, temporarySchemaPrefix) {
+			t.Fatalf("The required library check includes temporary schema prefix %q", temporarySchemaPrefix)
+		}
 	}
 }
 

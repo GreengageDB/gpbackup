@@ -334,8 +334,8 @@ if [[ ${first_exit_code} -ne 1 || ${second_exit_code} -ne 1 ]]; then
 fi
 
 "${source_psql[@]}" "${database_name}" <<'SQL'
-DROP SCHEMA ggcheckmigrate_fixture CASCADE;
 DROP EXTENSION plpython2u;
+DROP SCHEMA ggcheckmigrate_fixture CASCADE;
 SQL
 
 post_cleanup_exit_code=0
