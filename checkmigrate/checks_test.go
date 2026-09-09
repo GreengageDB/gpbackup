@@ -518,6 +518,9 @@ func TestSourceDatabaseEnumerationExcludesTemplateDatabases(t *testing.T) {
 	if !strings.Contains(sourceDatabaseNamesQuery, "NOT datistemplate") {
 		t.Fatal("The source database enumeration does not exclude template databases")
 	}
+	if !strings.Contains(sourceDatabaseNamesQuery, "datname = 'postgres'") {
+		t.Fatal("The source database enumeration excludes postgres on Greengage 6")
+	}
 }
 
 func TestSourceChecksUseNamespaceFilters(t *testing.T) {
