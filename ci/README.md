@@ -36,4 +36,4 @@ The source and target credentials can be stored in `.pgpass`. The utility also u
 
 Set `GGCHECKMIGRATE_DATABASE` to change the temporary source database name. Its default value is `ggcheckmigrate_test`.
 
-The source-only fixture validates the retained per-database catalog checks and cluster configuration checks. The required library check runs when the Greengage 7 target variables are set. Other migration problems can exist, and a clean result does not guarantee a successful restore.
+The source-only fixture validates the retained per-database catalog checks. The required library check runs when the Greengage 7 target variables are set. Other migration problems can exist, and a clean result does not guarantee a successful restore.

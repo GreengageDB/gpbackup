@@ -62,16 +62,6 @@ func DoCheckMigrate() {
 
 			return
 		}
-		if len(databaseNames) == 0 {
-			databaseNames = append(
-				databaseNames,
-				databaseNameResult{DatabaseName: bootstrapSourceConnection.DBName},
-			)
-			gplog.Warn(
-				"Source database enumeration returned no rows. Database %q will be checked.",
-				bootstrapSourceConnection.DBName,
-			)
-		}
 		gplog.Debug("Completed source database enumeration with %d databases", len(databaseNames))
 	}
 

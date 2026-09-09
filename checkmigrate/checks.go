@@ -190,12 +190,12 @@ var databaseChecks = []migrationCheck{
 	},
 	{name: "The difference in the AO parameters of partitioned tables", doRunCheck: checkMissingAOOptions},
 	{
-		name:       "In the functions specified by `EXECUTE ON`, only `RETURNS SETOF` is used",
+		name:       "In the functions specified by EXECUTE ON, only RETURNS SETOF is used",
 		doRunCheck: checkRestrictedExecuteOnFunctions,
 	},
 	{name: "Unique constraint must include all partitioning keys", doRunCheck: checkIncompletePartitionIndexes},
 	{
-		name:       "Range partitions don't support START EXCLUSIVE or END INCLUSIVE for `float` and `text`",
+		name:       "Range partitions don't support START EXCLUSIVE or END INCLUSIVE for float and text",
 		doRunCheck: checkIncompatibleRangePartitions,
 	},
 	{name: "Not supported triggers for statements", doRunCheck: checkStatementTriggers},
@@ -439,7 +439,7 @@ func checkMultiColumnListPartitions(connection *dbconn.DBConn) (int, error) {
 
 	var output strings.Builder
 	output.WriteString(
-		"Your installation contains partitioned tables with a LIST partition key containing multiple columns, " +
+		"Your cluster contains partitioned tables with a LIST partition key containing multiple columns, " +
 			"which is not supported anymore. Consider modifying the partition key to use a single column or " +
 			"dropping the tables.\n",
 	)
@@ -469,7 +469,7 @@ func checkPlpython2DependentFunctions(connection *dbconn.DBConn) (int, error) {
 
 	var output strings.Builder
 	output.WriteString(
-		"Your installation contains \"plpython\" functions which rely on Python 2. " +
+		"Your cluster contains \"plpython\" functions which rely on Python 2. " +
 			"These functions must be either updated to use Python 3 or dropped before upgrade.\n",
 	)
 	writeDatabaseFindingHeader(&output, connection.DBName)
@@ -499,7 +499,7 @@ func checkViewsWithRemovedOperators(connection *dbconn.DBConn) (int, error) {
 
 	var output strings.Builder
 	output.WriteString(
-		"Your installation contains views using removed operators. " +
+		"Your cluster contains views using removed operators. " +
 			"These operators are no longer present on the target version. " +
 			"These views must be updated to use operators supported in the target version or removed before " +
 			"upgrade can continue.\n",
@@ -530,7 +530,7 @@ func checkViewsWithRemovedFunctions(connection *dbconn.DBConn) (int, error) {
 
 	var output strings.Builder
 	output.WriteString(
-		"Your installation contains views using removed functions. " +
+		"Your cluster contains views using removed functions. " +
 			"These functions are no longer present on the target version. " +
 			"These views must be updated to use functions supported in the target version or removed before " +
 			"upgrade can continue.\n",
@@ -561,7 +561,7 @@ func checkViewsWithRemovedTypes(connection *dbconn.DBConn) (int, error) {
 
 	var output strings.Builder
 	output.WriteString(
-		"Your installation contains views using removed types. " +
+		"Your cluster contains views using removed types. " +
 			"These types are no longer present on the target version. " +
 			"These views must be updated to use types supported in the target version or removed before upgrade " +
 			"can continue.\n",
@@ -592,7 +592,7 @@ func checkRemovedDataTypes(connection *dbconn.DBConn) (int, error) {
 
 	var output strings.Builder
 	output.WriteString(
-		"Your installation contains the \"abstime\", \"reltime\", \"tinterval\", or \"unknown\" data type " +
+		"Your cluster contains the \"abstime\", \"reltime\", \"tinterval\", or \"unknown\" data type " +
 			"in user tables. These data types have been removed in version 7. Drop the problem columns or " +
 			"change them to another data type.\n",
 	)
@@ -720,9 +720,9 @@ func checkIncompatibleRangePartitions(connection *dbconn.DBConn) (int, error) {
 
 	var output strings.Builder
 	output.WriteString(
-		"In version 7, range partitions don't support `START EXCLUSIVE` or `END INCLUSIVE` for columns with " +
-			"types float and text.\nYou can recreate following tables without `START EXCLUSIVE` and " +
-			"`END INCLUSIVE`.\nList of partitioned tables with the specified problem:\n",
+		"In version 7, range partitions don't support START EXCLUSIVE or END INCLUSIVE for columns with " +
+			"types float and text.\nYou can recreate following tables without START EXCLUSIVE and " +
+			"END INCLUSIVE.\nList of partitioned tables with the specified problem:\n",
 	)
 	writeDatabaseFindingHeader(&output, connection.DBName)
 	for _, result := range results {
@@ -753,7 +753,7 @@ func checkStatementTriggers(connection *dbconn.DBConn) (int, error) {
 
 	var output strings.Builder
 	output.WriteString(
-		"In version 7, statements triggers are not supported.\n" +
+		"In version 7, statement triggers are not supported.\n" +
 			"You can use row triggers.\n" +
 			"List of triggers with the specified problem:\n",
 	)
@@ -814,7 +814,7 @@ func checkRequiredLibraries(sourceConnection *dbconn.DBConn, targetConnection *d
 		"Your cluster references loadable libraries that are missing from the new cluster.\n" +
 			"You can add these libraries to the new installation,\n" +
 			"or remove the functions using them from the old installation.\n" +
-			"A list of problems libraries are:\n",
+			"The problematic libraries are:\n",
 	)
 	writeDatabaseFindingHeader(&output, sourceConnection.DBName)
 	for _, result := range missingFunctions {

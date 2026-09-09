@@ -94,13 +94,16 @@ all_database_command=(
 if [[ ${all_database_exit_code} -gt 1 ]]; then
   fail_with_output "The check of all connectable databases" "0 or 1" "${all_database_exit_code}"
 fi
-for expected_database in postgres template1; do
-  if ! grep -Fq "Starting checks for database \"${expected_database}\"" "${output_path}"; then
-    echo "The fresh cluster run did not check ${expected_database}" >&2
-    cat "${output_path}" >&2
-    exit 1
-  fi
-done
+if ! grep -Fq 'Starting checks for database "postgres"' "${output_path}"; then
+  echo "The fresh cluster run did not check postgres" >&2
+  cat "${output_path}" >&2
+  exit 1
+fi
+if grep -Fq 'Starting checks for database "template1"' "${output_path}"; then
+  echo "The fresh cluster run checked template1" >&2
+  cat "${output_path}" >&2
+  exit 1
+fi
 
 "${source_psql[@]}" postgres -c "CREATE DATABASE ${database_name}"
 "${source_psql[@]}" postgres -c "CREATE DATABASE ${enumeration_database_name}"
@@ -191,6 +194,7 @@ CREATE FUNCTION ggcheckmigrate_fixture.missing_library()
 RETURNS text
 AS '$libdir/gp_check_functions', 'get_tablespace_version_directory_name'
 LANGUAGE C;
+ALTER EXTENSION plpython2u ADD FUNCTION ggcheckmigrate_fixture.missing_library();
 CREATE TABLE ggcheckmigrate_fixture.multi_list (id integer, key_a text, key_b integer)
 DISTRIBUTED BY (id)
 PARTITION BY LIST (key_a, key_b) (
@@ -276,9 +280,9 @@ expected_checks=(
   "Checking for views with removed types"
   'Checking for removed \\"abstime\\", \\"reltime\\", \\"tinterval\\", \\"unknown\\" data type in user tables'
   "The difference in the AO parameters of partitioned tables"
-  'In the functions specified by `EXECUTE ON`, only `RETURNS SETOF` is used'
+  "In the functions specified by EXECUTE ON, only RETURNS SETOF is used"
   "Unique constraint must include all partitioning keys"
-  "Range partitions don't support START EXCLUSIVE or END INCLUSIVE for \`float\` and \`text\`"
+  "Range partitions don't support START EXCLUSIVE or END INCLUSIVE for float and text"
   "Not supported triggers for statements"
 )
 if [[ -n ${target_host} ]]; then

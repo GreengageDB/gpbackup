@@ -179,16 +179,16 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 			Expect(invalidSourceMock.ExpectationsWereMet()).To(Succeed())
 		})
 
-		It("returns the source version error below version 6.27.1", func() {
+		It("accepts an older version 6 source", func() {
 			oldSource, oldSourceMock := testhelper.CreateMockDBConn()
-			testhelper.ExpectVersionQuery(oldSourceMock, "6.27.0")
+			testhelper.ExpectVersionQuery(oldSourceMock, "6.0.0")
 			DeferCleanup(oldSource.Close)
 			checkmigrate.SetCreateDBConn(func(dbName, username, host string, port int) *dbconn.DBConn {
 				return oldSource
 			})
 
-			Expect(checkmigrate.CreateConnections()).To(MatchError("this utility requires Greengage version 6.27.1 or newer"))
-			Expect(gplog.GetErrorCode()).To(Equal(2))
+			Expect(checkmigrate.CreateConnections()).To(Succeed())
+			Expect(gplog.GetErrorCode()).To(Equal(0))
 			Expect(oldSourceMock.ExpectationsWereMet()).To(Succeed())
 		})
 

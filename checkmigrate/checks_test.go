@@ -33,7 +33,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		query:   multiColumnListPartitionQuery,
 		columns: []string{"schema_name", "object_name"},
 		rows:    [][]driver.Value{{"sales", "orders"}, {"warehouse", "inventory"}},
-		problemText: "Your installation contains partitioned tables with a LIST partition key containing multiple " +
+		problemText: "Your cluster contains partitioned tables with a LIST partition key containing multiple " +
 			"columns, which is not supported anymore. Consider modifying the partition key to use a single column " +
 			"or dropping the tables.\n",
 		expectedObjects: []string{
@@ -50,7 +50,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 			{"analytics", "forecast", "integer"},
 			{"public", "legacy_python", "text, integer"},
 		},
-		problemText: "Your installation contains \"plpython\" functions which rely on Python 2. " +
+		problemText: "Your cluster contains \"plpython\" functions which rely on Python 2. " +
 			"These functions must be either updated to use Python 3 or dropped before upgrade.\n",
 		expectedObjects: []string{
 			`Object "forecast" has type "function" in schema "analytics"`,
@@ -65,7 +65,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		query:   removedOperatorViewQuery,
 		columns: []string{"schema_name", "object_name", "relation_kind"},
 		rows:    [][]driver.Value{{"public", "operator_view", "v"}, {"reports", "operator_materialized_view", "m"}},
-		problemText: "Your installation contains views using removed operators. " +
+		problemText: "Your cluster contains views using removed operators. " +
 			"These operators are no longer present on the target version. " +
 			"These views must be updated to use operators supported in the target version or removed before " +
 			"upgrade can continue.\n",
@@ -80,7 +80,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		query:   removedFunctionViewQuery,
 		columns: []string{"schema_name", "object_name", "relation_kind"},
 		rows:    [][]driver.Value{{"public", "function_view", "v"}, {"reports", "function_materialized_view", "m"}},
-		problemText: "Your installation contains views using removed functions. " +
+		problemText: "Your cluster contains views using removed functions. " +
 			"These functions are no longer present on the target version. " +
 			"These views must be updated to use functions supported in the target version or removed before " +
 			"upgrade can continue.\n",
@@ -95,7 +95,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		query:   removedTypeViewQuery,
 		columns: []string{"schema_name", "object_name", "relation_kind"},
 		rows:    [][]driver.Value{{"public", "type_view", "v"}, {"reports", "type_materialized_view", "m"}},
-		problemText: "Your installation contains views using removed types. " +
+		problemText: "Your cluster contains views using removed types. " +
 			"These types are no longer present on the target version. " +
 			"These views must be updated to use types supported in the target version or removed before upgrade " +
 			"can continue.\n",
@@ -110,7 +110,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		query:   removedDataTypeQuery,
 		columns: []string{"schema_name", "object_name", "column_name"},
 		rows:    [][]driver.Value{{"public", "events", "created_at"}, {"archive", "old_events", "expired_at"}},
-		problemText: "Your installation contains the \"abstime\", \"reltime\", \"tinterval\", or \"unknown\" data " +
+		problemText: "Your cluster contains the \"abstime\", \"reltime\", \"tinterval\", or \"unknown\" data " +
 			"type in user tables. These data types have been removed in version 7. Drop the problem columns or " +
 			"change them to another data type.\n",
 		expectedObjects: []string{
@@ -179,9 +179,9 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 			{"public", "prices", "numeric", "sales", "prices_1_prt_low"},
 			{"archive", "labels", "text", "history", "labels_1_prt_a"},
 		},
-		problemText: "In version 7, range partitions don't support `START EXCLUSIVE` or `END INCLUSIVE` for " +
-			"columns with types float and text.\nYou can recreate following tables without `START EXCLUSIVE` and " +
-			"`END INCLUSIVE`.\nList of partitioned tables with the specified problem:\n",
+		problemText: "In version 7, range partitions don't support START EXCLUSIVE or END INCLUSIVE for " +
+			"columns with types float and text.\nYou can recreate following tables without START EXCLUSIVE and " +
+			"END INCLUSIVE.\nList of partitioned tables with the specified problem:\n",
 		expectedObjects: []string{
 			`Object "prices_1_prt_low" has type "partition" in schema "sales"`,
 			`Object "labels_1_prt_a" has type "partition" in schema "history"`,
@@ -193,7 +193,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		query:   statementTriggerQuery,
 		columns: []string{"schema_name", "table_name", "trigger_name"},
 		rows:    [][]driver.Value{{"public", "orders", "orders_statement"}, {"audit", "events", "events_statement"}},
-		problemText: "In version 7, statements triggers are not supported.\n" +
+		problemText: "In version 7, statement triggers are not supported.\n" +
 			"You can use row triggers.\n" +
 			"List of triggers with the specified problem:\n",
 		expectedObjects: []string{
@@ -374,7 +374,7 @@ func TestRequiredLibrariesReportsEveryFailedLoad(t *testing.T) {
 	expectedProblemText := "Your cluster references loadable libraries that are missing from the new cluster.\n" +
 		"You can add these libraries to the new installation,\n" +
 		"or remove the functions using them from the old installation.\n" +
-		"A list of problems libraries are:\n"
+		"The problematic libraries are:\n"
 	if strings.Count(output, expectedProblemText) != 1 {
 		t.Fatalf("The problem text occurred an unexpected number of times in %q", output)
 	}
@@ -511,15 +511,12 @@ func TestUnknownRelationKindUsesCatalogCode(t *testing.T) {
 	}
 }
 
-func TestSourceDatabaseEnumerationIncludesConnectableTemplateDatabases(t *testing.T) {
+func TestSourceDatabaseEnumerationExcludesTemplateDatabases(t *testing.T) {
 	if !strings.Contains(sourceDatabaseNamesQuery, "datallowconn") {
 		t.Fatal("The source database enumeration does not require connectable databases")
 	}
-	if !strings.Contains(sourceDatabaseNamesQuery, "datname <> 'template0'") {
-		t.Fatal("The source database enumeration does not exclude template0")
-	}
-	if strings.Contains(sourceDatabaseNamesQuery, "datistemplate") {
-		t.Fatal("The source database enumeration excludes connectable template databases")
+	if !strings.Contains(sourceDatabaseNamesQuery, "NOT datistemplate") {
+		t.Fatal("The source database enumeration does not exclude template databases")
 	}
 }
 
@@ -531,7 +528,6 @@ func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 		removedFunctionViewQuery,
 		removedTypeViewQuery,
 		migrationCheckSetupTypesQuery,
-		requiredLibraryQuery,
 		missingAOOptionQuery,
 		restrictedExecuteOnFunctionQuery,
 		incompletePartitionIndexQuery,
@@ -545,14 +541,12 @@ func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 	}
 }
 
-func TestRequiredLibrariesMatchBackedUpFunctionScope(t *testing.T) {
-	for _, schemaName := range []string{"gp_toolkit", "pg_aoseg", "pg_bitmapindex"} {
-		if !strings.Contains(requiredLibraryQuery, schemaName) {
-			t.Fatalf("The required library check includes excluded schema %s", schemaName)
-		}
+func TestRequiredLibrariesIncludeExtensionOwnedFunctions(t *testing.T) {
+	if !strings.Contains(requiredLibraryQuery, "p.oid >= 16384") {
+		t.Fatal("The required library check does not select user-defined functions")
 	}
-	if !strings.Contains(requiredLibraryQuery, "dependency.deptype = 'e'") {
-		t.Fatal("The required library check includes extension-owned functions")
+	if strings.Contains(requiredLibraryQuery, "dependency.deptype = 'e'") {
+		t.Fatal("The required library check excludes extension-owned functions")
 	}
 }
 
@@ -745,7 +739,7 @@ func TestDoCheckMigrateReportsDatabaseEnumerationFailure(t *testing.T) {
 	}
 }
 
-func TestDoCheckMigrateChecksBootstrapDatabaseWhenEnumerationIsEmpty(t *testing.T) {
+func TestDoCheckMigrateDoesNotCheckBootstrapDatabaseWhenEnumerationIsEmpty(t *testing.T) {
 	connection, mock, stdout, _, _ := testhelper.SetupTestEnvironment()
 	connection.DBName = "source_database"
 	gplog.SetErrorCode(0)
@@ -766,19 +760,24 @@ func TestDoCheckMigrateChecksBootstrapDatabaseWhenEnumerationIsEmpty(t *testing.
 	mock.ExpectQuery(regexp.QuoteMeta(sourceDatabaseNamesQuery)).WillReturnRows(
 		sqlmock.NewRows([]string{"database_name"}),
 	)
-	expectMigrationTransaction(mock)
-	expectAllSourceChecksEmpty(mock)
-	mock.ExpectRollback()
 
 	if recoveredValue := callDoCheckMigrate(); recoveredValue != nil {
 		t.Fatalf("DoCheckMigrate panicked with %v", recoveredValue)
 	}
 	if gplog.GetErrorCode() != 0 {
-		t.Fatalf("The bootstrap database run returned exit code %d", gplog.GetErrorCode())
+		t.Fatalf("The empty database run returned exit code %d", gplog.GetErrorCode())
 	}
-	expectedWarning := `Source database enumeration returned no rows. Database "source_database" will be checked.`
-	if !strings.Contains(string(stdout.Contents()), expectedWarning) {
-		t.Fatalf("The bootstrap database run did not print %q in %q", expectedWarning, stdout.Contents())
+	for _, expectedText := range []string{
+		"enumerated databases:              0",
+		"checked databases:                 0",
+		"completed database checks:         0",
+	} {
+		if !strings.Contains(string(stdout.Contents()), expectedText) {
+			t.Fatalf("The empty database run did not print %q in %q", expectedText, stdout.Contents())
+		}
+	}
+	if strings.Contains(string(stdout.Contents()), "Starting checks for database") {
+		t.Fatalf("The empty database run checked a database in %q", stdout.Contents())
 	}
 }
 

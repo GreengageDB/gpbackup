@@ -145,7 +145,7 @@ func SetCheckMigrateFlagDefaults(flagSet *pflag.FlagSet) {
 		SOURCE_DATABASE,
 		"d",
 		"",
-		"The database of the cluster being checked, or all connectable databases except template0 when omitted. "+
+		"The database of the cluster being checked, or all connectable non-template databases when omitted. "+
 			"The postgres or template1 database must be connectable for database enumeration",
 	)
 	flagSet.StringP(SOURCE_USER, "u", "", "The superuser of the cluster being checked")

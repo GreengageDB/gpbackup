@@ -85,12 +85,6 @@ func CreateConnections() error {
 
 		return errors.New("this utility can only check for migrate from Greengage version 6")
 	}
-	if bootstrapSourceConnection.Version.Before("6.27.1") {
-		gplog.SetErrorCode(2)
-
-		return errors.New("this utility requires Greengage version 6.27.1 or newer")
-	}
-
 	targetHost := options.MustGetFlagString(cmdFlags, options.TARGET_HOST)
 	targetPort := options.MustGetFlagInt(cmdFlags, options.TARGET_PORT)
 	targetDb := "postgres"
