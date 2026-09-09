@@ -14,9 +14,6 @@ import (
 //go:embed sql/migration_check_setup.sql
 var migrationCheckSetupQuery string
 
-//go:embed sql/migration_check_setup_catalog.sql
-var migrationCheckSetupCatalogQuery string
-
 //go:embed sql/migration_check_setup_types.sql
 var migrationCheckSetupTypesQuery string
 
@@ -58,27 +55,6 @@ var incompatibleRangePartitionQuery string
 
 //go:embed sql/statement_triggers.sql
 var statementTriggerQuery string
-
-//go:embed sql/incompatible_storage_options.sql
-var incompatibleStorageOptionQuery string
-
-//go:embed sql/removed_guc_settings.sql
-var removedGUCSettingQuery string
-
-//go:embed sql/disallowed_arrow_operators.sql
-var disallowedArrowOperatorQuery string
-
-//go:embed sql/partition_opfamilies.sql
-var partitionOpfamilyQuery string
-
-//go:embed sql/changed_function_signature_views.sql
-var changedFunctionSignatureViewQuery string
-
-//go:embed sql/removed_catalog_column_views.sql
-var removedCatalogColumnViewQuery string
-
-//go:embed sql/removed_catalog_relation_views.sql
-var removedCatalogRelationViewQuery string
 
 type namedObjectResult struct {
 	SchemaName string `db:"schema_name"`
@@ -142,29 +118,6 @@ type requiredLibraryResult struct {
 	LibraryName       string `db:"library_name"`
 }
 
-type configurationSettingResult struct {
-	DatabaseName string `db:"database_name"`
-	RoleName     string `db:"role_name"`
-	Setting      string `db:"setting"`
-	OptionName   string `db:"option_name"`
-	GUCName      string `db:"guc_name"`
-}
-
-type partitionOpfamilyResult struct {
-	SchemaName     string `db:"schema_name"`
-	ObjectName     string `db:"object_name"`
-	OperatorClass  string `db:"operator_class"`
-	OperatorFamily string `db:"operator_family"`
-}
-
-type removedCatalogDependencyResult struct {
-	SchemaName       string `db:"schema_name"`
-	ObjectName       string `db:"object_name"`
-	RelationKind     string `db:"relation_kind"`
-	RemovedColumns   string `db:"removed_columns"`
-	RemovedRelations string `db:"removed_relations"`
-}
-
 var relationKindLabels = map[string]string{
 	"v": "view",
 	"m": "materialized view",
@@ -210,12 +163,6 @@ type migrationCheck struct {
 	doRunCheck         func(*dbconn.DBConn) (int, error)
 }
 
-// Cluster checks inspect shared catalogs or settings through the bootstrap connection.
-var clusterChecks = []migrationCheck{
-	{name: "incompatible storage options", doRunCheck: checkIncompatibleStorageOptions},
-	{name: "removed GUC settings", doRunCheck: checkRemovedGUCSettings},
-}
-
 // Database checks inspect catalogs whose contents are scoped to the current database.
 var databaseChecks = []migrationCheck{
 	{name: "Checking for multi-column LIST partition keys", doRunCheck: checkMultiColumnListPartitions},
@@ -236,21 +183,6 @@ var databaseChecks = []migrationCheck{
 		doRunCheck:         checkViewsWithRemovedTypes,
 	},
 	{
-		name:               "views with changed function signatures",
-		requiredCapability: migrationSupportCapability,
-		doRunCheck:         checkViewsWithChangedFunctionSignatures,
-	},
-	{
-		name:               "views with removed catalog columns",
-		requiredCapability: catalogSupportCapability,
-		doRunCheck:         checkViewsWithRemovedCatalogColumns,
-	},
-	{
-		name:               "views with removed catalog relations",
-		requiredCapability: catalogSupportCapability,
-		doRunCheck:         checkViewsWithRemovedCatalogRelations,
-	},
-	{
 		name: "Checking for removed \"abstime\", \"reltime\", \"tinterval\", \"unknown\" " +
 			"data type in user tables",
 		requiredCapability: dataTypeSupportCapability,
@@ -267,13 +199,10 @@ var databaseChecks = []migrationCheck{
 		doRunCheck: checkIncompatibleRangePartitions,
 	},
 	{name: "Not supported triggers for statements", doRunCheck: checkStatementTriggers},
-	{name: "disallowed arrow operators", doRunCheck: checkDisallowedArrowOperators},
-	{name: "partition operator families", doRunCheck: checkPartitionOpfamilies},
 }
 
 const (
 	migrationSupportCapability  = "migration support functions"
-	catalogSupportCapability    = "catalog support functions"
 	dataTypeSupportCapability   = "data type support function"
 	setTransactionReadOnlyQuery = "SET TRANSACTION READ ONLY"
 )
@@ -335,7 +264,6 @@ func prepareMigrationCheckCapabilities(connection *dbconn.DBConn) (map[string]bo
 		query      string
 	}{
 		{capability: migrationSupportCapability, query: migrationCheckSetupQuery},
-		{capability: catalogSupportCapability, query: migrationCheckSetupCatalogQuery},
 		{capability: dataTypeSupportCapability, query: migrationCheckSetupTypesQuery},
 	}
 	availableCapabilities := make(map[string]bool, len(setupQueries))
@@ -461,26 +389,6 @@ func runMigrationCheckPlan(
 	}
 
 	return summary, nil
-}
-
-func runClusterChecks(
-	sourceConnection *dbconn.DBConn,
-	checks []migrationCheck,
-) (summary migrationCheckSummary, executionError error) {
-	if beginError := beginReadOnlyMigrationTransaction(sourceConnection); beginError != nil {
-		return summary, beginError
-	}
-	defer func() {
-		rollbackError := sourceConnection.Rollback()
-		if rollbackError != nil {
-			executionError = errors.Join(
-				executionError,
-				fmt.Errorf("cluster transaction rollback failed with %w", rollbackError),
-			)
-		}
-	}()
-
-	return runMigrationCheckPlan(sourceConnection, checks, nil)
 }
 
 func runMigrationChecks(
@@ -666,95 +574,6 @@ func checkViewsWithRemovedTypes(connection *dbconn.DBConn) (int, error) {
 			getRelationKindLabel(result.RelationKind),
 			result.SchemaName,
 			"The view uses a removed type.",
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkViewsWithChangedFunctionSignatures(connection *dbconn.DBConn) (int, error) {
-	results := make([]viewResult, 0)
-	if queryError := connection.Select(&results, changedFunctionSignatureViewQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains views that call functions whose signatures changed in version 7. " +
-			"Recreate the views with compatible function calls before migration.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ObjectName,
-			getRelationKindLabel(result.RelationKind),
-			result.SchemaName,
-			"The view calls a function with a changed signature.",
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkViewsWithRemovedCatalogColumns(connection *dbconn.DBConn) (int, error) {
-	results := make([]removedCatalogDependencyResult, 0)
-	if queryError := connection.Select(&results, removedCatalogColumnViewQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains views that reference system columns removed from version 7. " +
-			"Update or remove the views before migration.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ObjectName,
-			getRelationKindLabel(result.RelationKind),
-			result.SchemaName,
-			"The view references removed columns %q.",
-			result.RemovedColumns,
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkViewsWithRemovedCatalogRelations(connection *dbconn.DBConn) (int, error) {
-	results := make([]removedCatalogDependencyResult, 0)
-	if queryError := connection.Select(&results, removedCatalogRelationViewQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains views that reference system relations removed from version 7. " +
-			"Update or remove the views before migration.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ObjectName,
-			getRelationKindLabel(result.RelationKind),
-			result.SchemaName,
-			"The view references removed relations %q.",
-			result.RemovedRelations,
 		)
 	}
 	logFindingOutput(&output)
@@ -1012,113 +831,4 @@ func checkRequiredLibraries(sourceConnection *dbconn.DBConn, targetConnection *d
 	logFindingOutput(&output)
 
 	return len(missingFunctions), targetExecutionError
-}
-
-func checkIncompatibleStorageOptions(connection *dbconn.DBConn) (int, error) {
-	results := make([]configurationSettingResult, 0)
-	if queryError := connection.Select(&results, incompatibleStorageOptionQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains gp_default_storage_options assignments with options that are incompatible " +
-			"with version 7. Remove the incompatible options before migration.\n",
-	)
-	for _, result := range results {
-		fmt.Fprintf(
-			&output,
-			"Database setting for database %q and role %q contains option %q in %q.\n",
-			result.DatabaseName,
-			result.RoleName,
-			result.OptionName,
-			result.Setting,
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkRemovedGUCSettings(connection *dbconn.DBConn) (int, error) {
-	results := make([]configurationSettingResult, 0)
-	if queryError := connection.Select(&results, removedGUCSettingQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains persistent assignments for settings that were removed from version 7. " +
-			"Remove the assignments before migration.\n",
-	)
-	for _, result := range results {
-		fmt.Fprintf(
-			&output,
-			"Database setting for database %q and role %q contains removed setting %q in %q.\n",
-			result.DatabaseName,
-			result.RoleName,
-			result.GUCName,
-			result.Setting,
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkDisallowedArrowOperators(connection *dbconn.DBConn) (int, error) {
-	results := make([]namedObjectResult, 0)
-	if queryError := connection.Select(&results, disallowedArrowOperatorQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString("Your cluster contains user-defined => operators. Drop the operators before migration.\n")
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(&output, result.ObjectName, "operator", result.SchemaName, "")
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
-}
-
-func checkPartitionOpfamilies(connection *dbconn.DBConn) (int, error) {
-	results := make([]partitionOpfamilyResult, 0)
-	if queryError := connection.Select(&results, partitionOpfamilyQuery); queryError != nil {
-		return 0, queryError
-	}
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	var output strings.Builder
-	output.WriteString(
-		"Your cluster contains partition keys whose operator families lack support procedure 1. " +
-			"Add the support procedure or recreate the affected partitioned tables with supported operator classes.\n",
-	)
-	writeDatabaseFindingHeader(&output, connection.DBName)
-	for _, result := range results {
-		writeObjectFinding(
-			&output,
-			result.ObjectName,
-			"partitioned table",
-			result.SchemaName,
-			"Operator class %q uses operator family %q.",
-			result.OperatorClass,
-			result.OperatorFamily,
-		)
-	}
-	logFindingOutput(&output)
-
-	return len(results), nil
 }

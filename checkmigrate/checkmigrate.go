@@ -79,22 +79,11 @@ func DoCheckMigrate() {
 	checkedDatabaseCount := 0
 	unreachableDatabaseCount := 0
 	unavailableDatabaseCount := 0
-	completedClusterCheckCount := 0
-	failedClusterCheckCount := 0
 	completedDatabaseCheckCount := 0
 	failedDatabaseCheckCount := 0
 	unavailableDatabaseCheckCount := 0
 	findingCount := 0
 	hasExecutionError := false
-
-	clusterSummary, clusterExecutionError := runClusterChecks(bootstrapSourceConnection, clusterChecks)
-	completedClusterCheckCount = clusterSummary.completedCheckCount
-	failedClusterCheckCount = clusterSummary.failedCheckCount
-	findingCount += clusterSummary.findingCount
-	if clusterExecutionError != nil {
-		hasExecutionError = true
-		gplog.Error("Cluster checks could not complete with %v", clusterExecutionError)
-	}
 
 	for _, database := range databaseNames {
 		gplog.Debug("Starting checks for database %q", database.DatabaseName)
@@ -156,8 +145,7 @@ func DoCheckMigrate() {
 		)
 	}
 
-	hasCheckResultIssue := failedClusterCheckCount > 0 ||
-		failedDatabaseCheckCount > 0 ||
+	hasCheckResultIssue := failedDatabaseCheckCount > 0 ||
 		unavailableDatabaseCheckCount > 0
 	summaryShellVerbosity := gplog.LOGINFO
 	if findingCount > 0 || hasCheckResultIssue || hasExecutionError {
@@ -171,8 +159,8 @@ func DoCheckMigrate() {
 		{label: "checked databases:", count: checkedDatabaseCount},
 		{label: "unreachable databases:", count: unreachableDatabaseCount},
 		{label: "unavailable databases:", count: unavailableDatabaseCount},
-		{label: "completed cluster checks:", count: completedClusterCheckCount},
-		{label: "failed cluster checks:", count: failedClusterCheckCount},
+		{label: "completed cluster checks:", count: 0},
+		{label: "failed cluster checks:", count: 0},
 		{label: "completed database checks:", count: completedDatabaseCheckCount},
 		{label: "failed database checks:", count: failedDatabaseCheckCount},
 		{label: "unavailable database checks:", count: unavailableDatabaseCheckCount},

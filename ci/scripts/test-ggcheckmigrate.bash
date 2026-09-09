@@ -60,14 +60,14 @@ check_command=(
   --source-database "${database_name}"
   --debug
 )
-expected_database_check_count=16
+expected_database_check_count=11
 if [[ -n ${target_host} ]]; then
   check_command+=(
     --target-host "${target_host}"
     --target-port "${target_port}"
     --target-user "${target_user}"
   )
-  expected_database_check_count=17
+  expected_database_check_count=12
 fi
 
 fail_with_output() {
@@ -187,25 +187,10 @@ SELECT pg_catalog.int2vectoreq(
 ) AS matched;
 CREATE VIEW ggcheckmigrate_fixture.removed_type_view AS
 SELECT '2000-01-01 00:00:00'::pg_catalog.abstime AS old_time;
-CREATE VIEW ggcheckmigrate_fixture.changed_signature_view AS
-SELECT pg_catalog.to_regclass('pg_class') AS relation_oid;
-CREATE VIEW ggcheckmigrate_fixture.removed_column_view AS
-SELECT relhasoids FROM pg_catalog.pg_class;
-CREATE VIEW ggcheckmigrate_fixture.removed_relation_view AS
-SELECT * FROM pg_catalog.pg_partition;
 CREATE FUNCTION ggcheckmigrate_fixture.missing_library()
 RETURNS text
 AS '$libdir/gp_check_functions', 'get_tablespace_version_directory_name'
 LANGUAGE C;
-CREATE FUNCTION ggcheckmigrate_fixture.arrow_operator(integer, integer) RETURNS boolean
-LANGUAGE SQL IMMUTABLE AS 'SELECT $1 = $2';
-CREATE OPERATOR ggcheckmigrate_fixture.=> (
-  LEFTARG = integer,
-  RIGHTARG = integer,
-  PROCEDURE = ggcheckmigrate_fixture.arrow_operator
-);
-ALTER DATABASE :"database_name" SET gp_default_storage_options TO 'appendonly=true,compresstype=zlib';
-ALTER DATABASE :"database_name" SET password_hash_algorithm TO 'md5';
 CREATE TABLE ggcheckmigrate_fixture.multi_list (id integer, key_a text, key_b integer)
 DISTRIBUTED BY (id)
 PARTITION BY LIST (key_a, key_b) (
@@ -245,44 +230,6 @@ CREATE FUNCTION ggcheckmigrate_fixture.statement_trigger_fn() RETURNS trigger
 LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END; $$;
 CREATE TRIGGER statement_trigger AFTER INSERT ON ggcheckmigrate_fixture.statement_trigger_table
 FOR EACH STATEMENT EXECUTE PROCEDURE ggcheckmigrate_fixture.statement_trigger_fn();
-CREATE TYPE ggcheckmigrate_fixture.partition_key_type AS (value integer);
-CREATE FUNCTION ggcheckmigrate_fixture.partition_key_less_than(
-  ggcheckmigrate_fixture.partition_key_type,
-  ggcheckmigrate_fixture.partition_key_type
-)
-RETURNS boolean
-AS 'SELECT $1.value < $2.value'
-LANGUAGE SQL IMMUTABLE RETURNS NULL ON NULL INPUT;
-CREATE FUNCTION ggcheckmigrate_fixture.partition_key_equal(
-  ggcheckmigrate_fixture.partition_key_type,
-  ggcheckmigrate_fixture.partition_key_type
-)
-RETURNS boolean
-AS 'SELECT $1.value = $2.value'
-LANGUAGE SQL IMMUTABLE RETURNS NULL ON NULL INPUT;
-CREATE OPERATOR ggcheckmigrate_fixture.< (
-  LEFTARG = ggcheckmigrate_fixture.partition_key_type,
-  RIGHTARG = ggcheckmigrate_fixture.partition_key_type,
-  PROCEDURE = ggcheckmigrate_fixture.partition_key_less_than
-);
-CREATE OPERATOR ggcheckmigrate_fixture.= (
-  LEFTARG = ggcheckmigrate_fixture.partition_key_type,
-  RIGHTARG = ggcheckmigrate_fixture.partition_key_type,
-  PROCEDURE = ggcheckmigrate_fixture.partition_key_equal
-);
-CREATE OPERATOR CLASS ggcheckmigrate_fixture.partition_key_ops
-DEFAULT FOR TYPE ggcheckmigrate_fixture.partition_key_type
-USING btree AS
-  OPERATOR 1 ggcheckmigrate_fixture.<,
-  OPERATOR 3 ggcheckmigrate_fixture.=;
-CREATE TABLE ggcheckmigrate_fixture.partition_opfamily_table (
-  id integer,
-  partition_key ggcheckmigrate_fixture.partition_key_type
-)
-DISTRIBUTED BY (id)
-PARTITION BY LIST (partition_key) (
-  PARTITION p1 VALUES ('(1)')
-);
 SQL
 
 finding_exit_code=0
@@ -302,19 +249,12 @@ for expected_text in \
   'removed_operator_view' \
   'removed_function_view' \
   'removed_type_view' \
-  'changed_signature_view' \
-  'removed_column_view' \
-  'removed_relation_view' \
   'removed_data_types' \
   'ao_missing_options' \
   'restricted_execute' \
   'incomplete_index_unique' \
   'bad_range' \
-  'statement_trigger' \
-  'gp_default_storage_options' \
-  'password_hash_algorithm' \
-  'partition_opfamily_table' \
-  '=>' ; do
+  'statement_trigger' ; do
   if ! grep -Fq "${expected_text}" "${output_path}"; then
     echo "The report does not name ${expected_text}" >&2
     cat "${output_path}" >&2
@@ -329,24 +269,17 @@ if [[ -n ${target_host} ]] && ! grep -Fq 'missing_library' "${output_path}"; the
 fi
 
 expected_checks=(
-  "incompatible storage options"
-  "removed GUC settings"
   "Checking for multi-column LIST partition keys"
   "Checking for functions dependent on plpython2"
   "Checking for views with removed operators"
   "Checking for views with removed functions"
   "Checking for views with removed types"
-  "views with changed function signatures"
-  "views with removed catalog columns"
-  "views with removed catalog relations"
   'Checking for removed \\"abstime\\", \\"reltime\\", \\"tinterval\\", \\"unknown\\" data type in user tables'
   "The difference in the AO parameters of partitioned tables"
   'In the functions specified by `EXECUTE ON`, only `RETURNS SETOF` is used'
   "Unique constraint must include all partitioning keys"
   "Range partitions don't support START EXCLUSIVE or END INCLUSIVE for \`float\` and \`text\`"
   "Not supported triggers for statements"
-  "disallowed arrow operators"
-  "partition operator families"
 )
 if [[ -n ${target_host} ]]; then
   expected_checks+=("Checking for presence of required libraries")
@@ -360,7 +293,7 @@ for expected_check in "${expected_checks[@]}"; do
   fi
 done
 
-if ! grep -Eq 'completed cluster checks:[[:space:]]+2$' "${output_path}" ||
+if ! grep -Eq 'completed cluster checks:[[:space:]]+0$' "${output_path}" ||
   ! grep -Eq 'failed cluster checks:[[:space:]]+0$' "${output_path}" ||
   ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
   ! grep -Eq 'failed database checks:[[:space:]]+0$' "${output_path}" ||
@@ -399,8 +332,6 @@ fi
 "${source_psql[@]}" "${database_name}" <<'SQL'
 DROP SCHEMA ggcheckmigrate_fixture CASCADE;
 DROP EXTENSION plpython2u;
-ALTER DATABASE :"database_name" RESET gp_default_storage_options;
-ALTER DATABASE :"database_name" RESET password_hash_algorithm;
 SQL
 
 post_cleanup_exit_code=0
@@ -417,7 +348,7 @@ for expected_check in "${expected_checks[@]}"; do
   fi
 done
 
-if ! grep -Eq 'completed cluster checks:[[:space:]]+2$' "${output_path}" ||
+if ! grep -Eq 'completed cluster checks:[[:space:]]+0$' "${output_path}" ||
   ! grep -Eq 'failed cluster checks:[[:space:]]+0$' "${output_path}" ||
   ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
   ! grep -Eq 'failed database checks:[[:space:]]+0$' "${output_path}" ||

@@ -18,7 +18,6 @@ import (
 
 type sourceCheckTestCase struct {
 	name            string
-	isClusterCheck  bool
 	check           func(*dbconn.DBConn) (int, error)
 	query           string
 	columns         []string
@@ -103,39 +102,6 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		expectedObjects: []string{
 			`Object "type_view" has type "view" in schema "public"`,
 			`Object "type_materialized_view" has type "materialized view" in schema "reports"`,
-		},
-	},
-	{
-		name:        "views with changed function signatures",
-		check:       checkViewsWithChangedFunctionSignatures,
-		query:       changedFunctionSignatureViewQuery,
-		columns:     []string{"schema_name", "object_name", "relation_kind"},
-		rows:        [][]driver.Value{{"public", "changed_signature_view", "v"}},
-		problemText: "views that call functions whose signatures changed in version 7",
-		expectedObjects: []string{
-			`Object "changed_signature_view" has type "view" in schema "public"`,
-		},
-	},
-	{
-		name:        "views with removed catalog columns",
-		check:       checkViewsWithRemovedCatalogColumns,
-		query:       removedCatalogColumnViewQuery,
-		columns:     []string{"schema_name", "object_name", "relation_kind", "removed_columns"},
-		rows:        [][]driver.Value{{"public", "removed_column_view", "v", "pg_class.relstorage"}},
-		problemText: "views that reference system columns removed from version 7",
-		expectedObjects: []string{
-			`Object "removed_column_view" has type "view" in schema "public"`,
-		},
-	},
-	{
-		name:        "views with removed catalog relations",
-		check:       checkViewsWithRemovedCatalogRelations,
-		query:       removedCatalogRelationViewQuery,
-		columns:     []string{"schema_name", "object_name", "relation_kind", "removed_relations"},
-		rows:        [][]driver.Value{{"public", "removed_relation_view", "v", "pg_partition"}},
-		problemText: "views that reference system relations removed from version 7",
-		expectedObjects: []string{
-			`Object "removed_relation_view" has type "view" in schema "public"`,
 		},
 	},
 	{
@@ -235,53 +201,6 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 			`Object "events_statement" has type "trigger" in schema "audit"`,
 		},
 	},
-	{
-		name:           "incompatible storage options",
-		isClusterCheck: true,
-		check:          checkIncompatibleStorageOptions,
-		query:          incompatibleStorageOptionQuery,
-		columns:        []string{"database_name", "role_name", "setting", "option_name"},
-		rows:           [][]driver.Value{{"source_database", "application_role", "gp_default_storage_options=appendonly=true", "appendonly"}},
-		problemText:    "gp_default_storage_options assignments with options that are incompatible with version 7",
-		expectedObjects: []string{
-			`database "source_database" and role "application_role" contains option "appendonly"`,
-		},
-	},
-	{
-		name:           "removed GUC settings",
-		isClusterCheck: true,
-		check:          checkRemovedGUCSettings,
-		query:          removedGUCSettingQuery,
-		columns:        []string{"database_name", "role_name", "guc_name", "setting"},
-		rows:           [][]driver.Value{{"source_database", "application_role", "password_hash_algorithm", "password_hash_algorithm=sha-256"}},
-		problemText:    "persistent assignments for settings that were removed from version 7",
-		expectedObjects: []string{
-			`database "source_database" and role "application_role" contains removed setting "password_hash_algorithm"`,
-		},
-	},
-	{
-		name:        "disallowed arrow operators",
-		check:       checkDisallowedArrowOperators,
-		query:       disallowedArrowOperatorQuery,
-		columns:     []string{"schema_name", "object_name"},
-		rows:        [][]driver.Value{{"public", "=>"}},
-		problemText: "user-defined => operators",
-		expectedObjects: []string{
-			`Object "=>" has type "operator" in schema "public"`,
-		},
-	},
-	{
-		name:        "partition operator families",
-		check:       checkPartitionOpfamilies,
-		query:       partitionOpfamilyQuery,
-		columns:     []string{"schema_name", "object_name", "operator_class", "operator_family"},
-		rows:        [][]driver.Value{{"public", "partitioned_table", "custom_ops", "custom_family"}},
-		problemText: "partition keys whose operator families lack support procedure 1",
-		expectedObjects: []string{
-			`Object "partitioned_table" has type "partitioned table" in schema "public"`,
-			`Operator class "custom_ops" uses operator family "custom_family"`,
-		},
-	},
 }
 
 func setupCheckTest(t *testing.T) (*dbconn.DBConn, sqlmock.Sqlmock, *gbytes.Buffer) {
@@ -315,9 +234,6 @@ func rowsForCheck(testCase sourceCheckTestCase, hasRows bool) *sqlmock.Rows {
 
 func expectAllSourceChecksEmpty(mock sqlmock.Sqlmock) {
 	for _, testCase := range sourceCheckTestCases {
-		if testCase.isClusterCheck {
-			continue
-		}
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectQuery(regexp.QuoteMeta(testCase.query)).WillReturnRows(rowsForCheck(testCase, false))
 		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -327,7 +243,6 @@ func expectAllSourceChecksEmpty(mock sqlmock.Sqlmock) {
 func expectMigrationSetupQueries(mock sqlmock.Sqlmock) {
 	setupQueries := []string{
 		migrationCheckSetupQuery,
-		migrationCheckSetupCatalogQuery,
 		migrationCheckSetupTypesQuery,
 	}
 	for _, setupQuery := range setupQueries {
@@ -353,23 +268,6 @@ func expectReadOnlyMigrationTransaction(mock sqlmock.Sqlmock) {
 func expectMigrationTransaction(mock sqlmock.Sqlmock) {
 	expectMigrationSetupTransaction(mock)
 	expectReadOnlyMigrationTransaction(mock)
-}
-
-func expectClusterChecksEmpty(mock sqlmock.Sqlmock) {
-	expectReadOnlyMigrationTransaction(mock)
-	for _, query := range []string{incompatibleStorageOptionQuery, removedGUCSettingQuery} {
-		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
-		var columns []string
-		switch query {
-		case incompatibleStorageOptionQuery:
-			columns = []string{"database_name", "role_name", "setting", "option_name"}
-		default:
-			columns = []string{"database_name", "role_name", "guc_name", "setting"}
-		}
-		mock.ExpectQuery(regexp.QuoteMeta(query)).WillReturnRows(sqlmock.NewRows(columns))
-		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
-	}
-	mock.ExpectRollback()
 }
 
 func callDoCheckMigrate() interface{} {
@@ -402,14 +300,12 @@ func TestSourceChecksReportEveryObject(t *testing.T) {
 			if strings.Count(output, testCase.problemText) != 1 {
 				t.Fatalf("The problem text occurred an unexpected number of times in %q", output)
 			}
-			if !testCase.isClusterCheck {
-				databaseHeader := fmt.Sprintf(
-					"Database %q contains these findings:",
-					connection.DBName,
-				)
-				if strings.Count(output, databaseHeader) != 1 {
-					t.Fatalf("The database heading occurred an unexpected number of times in %q", output)
-				}
+			databaseHeader := fmt.Sprintf(
+				"Database %q contains these findings:",
+				connection.DBName,
+			)
+			if strings.Count(output, databaseHeader) != 1 {
+				t.Fatalf("The database heading occurred an unexpected number of times in %q", output)
 			}
 			for _, expectedObject := range testCase.expectedObjects {
 				if !strings.Contains(output, expectedObject) {
@@ -591,9 +487,6 @@ func TestMigrationSetupUsesTemporarySchema(t *testing.T) {
 		removedOperatorViewQuery,
 		removedFunctionViewQuery,
 		removedTypeViewQuery,
-		changedFunctionSignatureViewQuery,
-		removedCatalogColumnViewQuery,
-		removedCatalogRelationViewQuery,
 		removedDataTypeQuery,
 	}
 	for _, query := range queries {
@@ -637,9 +530,6 @@ func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 		removedOperatorViewQuery,
 		removedFunctionViewQuery,
 		removedTypeViewQuery,
-		changedFunctionSignatureViewQuery,
-		removedCatalogColumnViewQuery,
-		removedCatalogRelationViewQuery,
 		migrationCheckSetupTypesQuery,
 		requiredLibraryQuery,
 		missingAOOptionQuery,
@@ -647,8 +537,6 @@ func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 		incompletePartitionIndexQuery,
 		incompatibleRangePartitionQuery,
 		statementTriggerQuery,
-		disallowedArrowOperatorQuery,
-		partitionOpfamilyQuery,
 	}
 	for _, query := range queries {
 		if !strings.Contains(query, "pg_temp_") || !strings.Contains(query, "information_schema") {
@@ -665,14 +553,6 @@ func TestRequiredLibrariesMatchBackedUpFunctionScope(t *testing.T) {
 	}
 	if !strings.Contains(requiredLibraryQuery, "dependency.deptype = 'e'") {
 		t.Fatal("The required library check includes extension-owned functions")
-	}
-}
-
-func TestConfigurationQueriesUseValidCoalesceExpressions(t *testing.T) {
-	for _, query := range []string{incompatibleStorageOptionQuery, removedGUCSettingQuery} {
-		if strings.Contains(query, "pg_catalog.coalesce") {
-			t.Fatal("The configuration check schema-qualifies the COALESCE expression")
-		}
 	}
 }
 
@@ -710,7 +590,6 @@ func TestDoCheckMigrateChecksRequiredLibrariesAfterSourceChecks(t *testing.T) {
 		}
 	})
 
-	expectClusterChecksEmpty(sourceMock)
 	expectMigrationTransaction(sourceMock)
 	expectAllSourceChecksEmpty(sourceMock)
 	sourceMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -742,7 +621,6 @@ func TestDoCheckMigrateReturnsZeroForCleanSource(t *testing.T) {
 		bootstrapSourceConnection = nil
 	})
 
-	expectClusterChecksEmpty(mock)
 	expectMigrationTransaction(mock)
 	expectAllSourceChecksEmpty(mock)
 	mock.ExpectRollback()
@@ -793,7 +671,6 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(sourceDatabaseNamesQuery)).WillReturnRows(
 		sqlmock.NewRows([]string{"database_name"}).AddRow("postgres").AddRow("application"),
 	)
-	expectClusterChecksEmpty(mock)
 	expectMigrationTransaction(mock)
 	expectAllSourceChecksEmpty(mock)
 	mock.ExpectRollback()
@@ -804,9 +681,6 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 	applicationMock.ExpectQuery(regexp.QuoteMeta(firstCheck.query)).WillReturnRows(rowsForCheck(firstCheck, true))
 	applicationMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, testCase := range sourceCheckTestCases[1:] {
-		if testCase.isClusterCheck {
-			continue
-		}
 		applicationMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 		applicationMock.ExpectQuery(regexp.QuoteMeta(testCase.query)).WillReturnRows(rowsForCheck(testCase, false))
 		applicationMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -831,9 +705,9 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 		"  checked databases:                 2\n" +
 		"  unreachable databases:             0\n" +
 		"  unavailable databases:             0\n" +
-		"  completed cluster checks:          2\n" +
+		"  completed cluster checks:          0\n" +
 		"  failed cluster checks:             0\n" +
-		"  completed database checks:        32\n" +
+		"  completed database checks:        22\n" +
 		"  failed database checks:            0\n" +
 		"  unavailable database checks:       0\n" +
 		"  findings:                          2"
@@ -892,7 +766,6 @@ func TestDoCheckMigrateChecksBootstrapDatabaseWhenEnumerationIsEmpty(t *testing.
 	mock.ExpectQuery(regexp.QuoteMeta(sourceDatabaseNamesQuery)).WillReturnRows(
 		sqlmock.NewRows([]string{"database_name"}),
 	)
-	expectClusterChecksEmpty(mock)
 	expectMigrationTransaction(mock)
 	expectAllSourceChecksEmpty(mock)
 	mock.ExpectRollback()
@@ -917,16 +790,12 @@ func TestDoCheckMigrateContinuesAfterFinding(t *testing.T) {
 		bootstrapSourceConnection = nil
 	})
 
-	expectClusterChecksEmpty(mock)
 	expectMigrationTransaction(mock)
 	firstCheck := sourceCheckTestCases[0]
 	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(regexp.QuoteMeta(firstCheck.query)).WillReturnRows(rowsForCheck(firstCheck, true))
 	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, testCase := range sourceCheckTestCases[1:] {
-		if testCase.isClusterCheck {
-			continue
-		}
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectQuery(regexp.QuoteMeta(testCase.query)).WillReturnRows(rowsForCheck(testCase, false))
 		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -952,7 +821,6 @@ func TestDoCheckMigrateReportsCheckSavepointReleaseFailure(t *testing.T) {
 		bootstrapSourceConnection = nil
 	})
 
-	expectClusterChecksEmpty(mock)
 	expectMigrationTransaction(mock)
 	firstCheck := sourceCheckTestCases[0]
 	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -968,7 +836,7 @@ func TestDoCheckMigrateReportsCheckSavepointReleaseFailure(t *testing.T) {
 	}
 }
 
-func TestRunMigrationChecksKeepsIndependentChecksAfterCatalogSetupFailure(t *testing.T) {
+func TestRunMigrationChecksKeepsIndependentChecksAfterDataTypeSetupFailure(t *testing.T) {
 	connection, mock, _ := setupCheckTest(t)
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -976,16 +844,13 @@ func TestRunMigrationChecksKeepsIndependentChecksAfterCatalogSetupFailure(t *tes
 	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupCatalogQuery)).WillReturnError(errors.New("catalog support unavailable"))
+	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupTypesQuery)).WillReturnError(errors.New("data type support unavailable"))
 	mock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(migrationCheckSetupTypesQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 	expectReadOnlyMigrationTransaction(mock)
 	for _, testCase := range sourceCheckTestCases {
-		if testCase.isClusterCheck || testCase.query == removedCatalogColumnViewQuery || testCase.query == removedCatalogRelationViewQuery {
+		if testCase.query == removedDataTypeQuery {
 			continue
 		}
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -998,7 +863,7 @@ func TestRunMigrationChecksKeepsIndependentChecksAfterCatalogSetupFailure(t *tes
 	if executionError != nil {
 		t.Fatalf("The partial capability run returned an error with %v", executionError)
 	}
-	if summary.completedCheckCount != 14 || summary.unavailableCheckCount != 2 || summary.failedCheckCount != 0 {
+	if summary.completedCheckCount != 10 || summary.unavailableCheckCount != 1 || summary.failedCheckCount != 0 {
 		t.Fatalf("The partial capability summary was %+v", summary)
 	}
 }
@@ -1011,7 +876,6 @@ func TestDoCheckMigrateReportsSetupSavepointReleaseFailure(t *testing.T) {
 		bootstrapSourceConnection = nil
 	})
 
-	expectClusterChecksEmpty(mock)
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_setup")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -1035,7 +899,6 @@ func TestDoCheckMigrateReportsFindingAndQueryFailureAsCheckResults(t *testing.T)
 		bootstrapSourceConnection = nil
 	})
 
-	expectClusterChecksEmpty(mock)
 	expectMigrationTransaction(mock)
 	firstCheck := sourceCheckTestCases[0]
 	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -1046,9 +909,6 @@ func TestDoCheckMigrateReportsFindingAndQueryFailureAsCheckResults(t *testing.T)
 	mock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, testCase := range sourceCheckTestCases[2:] {
-		if testCase.isClusterCheck {
-			continue
-		}
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectQuery(regexp.QuoteMeta(testCase.query)).WillReturnRows(rowsForCheck(testCase, false))
 		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -1126,88 +986,6 @@ func TestRunMigrationChecksReportsRollbackFailureAfterBeginFailure(t *testing.T)
 	}
 }
 
-func TestRunClusterChecksPreservesCheckRecoveryAndRollbackFailures(t *testing.T) {
-	connection, mock, _ := setupCheckTest(t)
-	checkError := errors.New("check failed")
-	recoveryError := errors.New("recovery failed")
-	releaseError := errors.New("release failed")
-	rollbackError := errors.New("rollback failed")
-	expectReadOnlyMigrationTransaction(mock)
-	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_check")).WillReturnError(recoveryError)
-	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnError(releaseError)
-	mock.ExpectRollback().WillReturnError(rollbackError)
-
-	summary, executionError := runClusterChecks(
-		connection,
-		[]migrationCheck{{
-			name: "failing check",
-			doRunCheck: func(*dbconn.DBConn) (int, error) {
-				return 0, checkError
-			},
-		}},
-	)
-
-	if summary.failedCheckCount != 0 {
-		t.Fatalf("The unrecoverable check reported %d failed checks", summary.failedCheckCount)
-	}
-	if !errors.Is(executionError, checkError) ||
-		!errors.Is(executionError, recoveryError) ||
-		!errors.Is(executionError, releaseError) ||
-		!errors.Is(executionError, rollbackError) {
-		t.Fatalf("The check, recovery, release, and rollback errors were not preserved: %v", executionError)
-	}
-}
-
-func TestRunClusterChecksCountsSuccessfulCheckBeforeReleaseFailure(t *testing.T) {
-	connection, mock, _ := setupCheckTest(t)
-	releaseError := errors.New("release failed")
-	expectReadOnlyMigrationTransaction(mock)
-	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnError(releaseError)
-	mock.ExpectRollback()
-
-	summary, executionError := runClusterChecks(
-		connection,
-		[]migrationCheck{{
-			name: "successful check",
-			doRunCheck: func(*dbconn.DBConn) (int, error) {
-				return 0, nil
-			},
-		}},
-	)
-
-	if summary.completedCheckCount != 1 || summary.failedCheckCount != 0 {
-		t.Fatalf("The successful check summary was %+v", summary)
-	}
-	if !errors.Is(executionError, releaseError) {
-		t.Fatalf("The release failure was not returned: %v", executionError)
-	}
-}
-
-func TestRunClusterChecksRollsBackAfterIsolationFailure(t *testing.T) {
-	connection, mock, _ := setupCheckTest(t)
-	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnError(errors.New("isolation failed"))
-	mock.ExpectRollback()
-
-	summary, executionError := runClusterChecks(connection, []migrationCheck{{
-		name: "cluster check",
-		doRunCheck: func(*dbconn.DBConn) (int, error) {
-			return 0, nil
-		},
-	}})
-	if executionError == nil || !strings.Contains(executionError.Error(), "isolation failed") {
-		t.Fatalf("The cluster isolation failure was not reported: %v", executionError)
-	}
-	if summary.failedCheckCount != 0 {
-		t.Fatalf("The cluster isolation failure reported %d failed checks", summary.failedCheckCount)
-	}
-	if connection.Tx[0] != nil {
-		t.Fatal("The failed cluster transaction remained installed")
-	}
-}
-
 func TestDoCheckMigrateReportsRollbackFailure(t *testing.T) {
 	connection, mock, _ := setupCheckTest(t)
 	bootstrapSourceConnection = connection
@@ -1216,7 +994,6 @@ func TestDoCheckMigrateReportsRollbackFailure(t *testing.T) {
 		bootstrapSourceConnection = nil
 	})
 
-	expectClusterChecksEmpty(mock)
 	expectMigrationTransaction(mock)
 	expectAllSourceChecksEmpty(mock)
 	mock.ExpectRollback().WillReturnError(errors.New("rollback failed"))
@@ -1266,7 +1043,6 @@ func TestDoCheckMigrateContinuesAfterDatabaseConnectionFailure(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(sourceDatabaseNamesQuery)).WillReturnRows(
 		sqlmock.NewRows([]string{"database_name"}).AddRow("unavailable").AddRow("working"),
 	)
-	expectClusterChecksEmpty(mock)
 	expectMigrationTransaction(workingMock)
 	expectAllSourceChecksEmpty(workingMock)
 	workingMock.ExpectRollback()
@@ -1282,7 +1058,7 @@ func TestDoCheckMigrateContinuesAfterDatabaseConnectionFailure(t *testing.T) {
 		!strings.Contains(output, "  enumerated databases:              2\n") ||
 		!strings.Contains(output, "  checked databases:                 1\n") ||
 		!strings.Contains(output, "  unreachable databases:             1\n") ||
-		!strings.Contains(output, "  completed database checks:        16\n") {
+		!strings.Contains(output, "  completed database checks:        11\n") {
 		t.Fatalf("The partial run printed an unexpected summary in %q", output)
 	}
 }
