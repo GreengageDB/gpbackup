@@ -334,7 +334,7 @@ if [[ ${first_exit_code} -ne 1 || ${second_exit_code} -ne 1 ]]; then
 fi
 
 "${source_psql[@]}" "${database_name}" <<'SQL'
-DROP EXTENSION plpython2u;
+DROP EXTENSION plpython2u CASCADE;
 DROP SCHEMA ggcheckmigrate_fixture CASCADE;
 SQL
 
