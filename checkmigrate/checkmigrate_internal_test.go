@@ -8,9 +8,15 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 )
 
-func TestIncompatibleRangePartitionQueryFiltersPartitionKind(t *testing.T) {
+func TestIncompatibleRangePartitionQueryFiltersPartitionKindAndOpenBounds(t *testing.T) {
 	if !strings.Contains(incompatibleRangePartitionQuery, "p.parkind = 'r'") {
 		t.Fatal("The incompatible range partition query must exclude non-range partitions")
+	}
+
+	for _, boundary := range []string{"parrangestart", "parrangeend"} {
+		if !strings.Contains(incompatibleRangePartitionQuery, boundary+" <> '<>'") {
+			t.Fatalf("The incompatible range partition query must exclude an open %s boundary", boundary)
+		}
 	}
 }
 

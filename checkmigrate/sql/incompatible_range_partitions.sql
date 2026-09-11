@@ -17,6 +17,6 @@ WHERE p.parkind = 'r'
   AND n.nspname !~ '^pg_temp_'
   AND n.nspname !~ '^pg_toast_temp_'
   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-  AND ((partition_rule.parrangestart IS NOT NULL AND NOT partition_rule.parrangestartincl)
-       OR (partition_rule.parrangeend IS NOT NULL AND partition_rule.parrangeendincl))
+  AND ((partition_rule.parrangestart <> '<>' AND NOT partition_rule.parrangestartincl)
+       OR (partition_rule.parrangeend <> '<>' AND partition_rule.parrangeendincl))
 ORDER BY n.nspname, c.relname, t.typname, child_namespace.nspname, child_relation.relname;
