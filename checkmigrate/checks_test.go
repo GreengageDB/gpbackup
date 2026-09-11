@@ -476,6 +476,58 @@ func TestRunMigrationCheckPlanReturnsTargetOutageWithoutFailedCheck(t *testing.T
 	}
 }
 
+func TestRunMigrationCheckPlanReturnsEveryRecoveredCheckError(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	firstError := errors.New("first query failed")
+	secondError := errors.New("second query failed")
+	checks := []migrationCheck{
+		{name: "first check", doRunCheck: func(*dbconn.DBConn) (int, error) { return 0, firstError }},
+		{name: "successful check", doRunCheck: func(*dbconn.DBConn) (int, error) { return 0, nil }},
+		{name: "second check", doRunCheck: func(*dbconn.DBConn) (int, error) { return 0, secondError }},
+	}
+	for _, check := range checks {
+		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+		if check.name != "successful check" {
+			mock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
+	summary, executionError := runMigrationCheckPlan(connection, checks, nil)
+
+	if summary.completedCheckCount != 1 || summary.failedCheckCount != 2 {
+		t.Fatalf("The recovered failure summary was %+v", summary)
+	}
+	if !errors.Is(executionError, firstError) || !errors.Is(executionError, secondError) {
+		t.Fatalf("The recovered check errors were not preserved: %v", executionError)
+	}
+}
+
+func TestRunMigrationCheckPlanStopsAfterSavepointReleaseFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	queryError := errors.New("query failed")
+	releaseError := errors.New("release failed")
+	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnError(releaseError)
+
+	summary, executionError := runMigrationCheckPlan(
+		connection,
+		[]migrationCheck{
+			{name: "failed check", doRunCheck: func(*dbconn.DBConn) (int, error) { return 0, queryError }},
+			{name: "unsafe check", doRunCheck: func(*dbconn.DBConn) (int, error) { return 0, nil }},
+		},
+		nil,
+	)
+
+	if summary.failedCheckCount != 1 || summary.completedCheckCount != 0 {
+		t.Fatalf("The savepoint release failure summary was %+v", summary)
+	}
+	if !errors.Is(executionError, queryError) || !errors.Is(executionError, releaseError) {
+		t.Fatalf("The query and savepoint release errors were not preserved: %v", executionError)
+	}
+}
+
 func TestMigrationSetupUsesTemporarySchema(t *testing.T) {
 	if strings.Contains(migrationCheckSetupQuery, "__ggcheckmigrate_tmp") {
 		t.Fatal("The migration setup uses the shared schema")
@@ -881,8 +933,8 @@ func TestRunMigrationChecksKeepsIndependentChecksAfterDataTypeSetupFailure(t *te
 	mock.ExpectRollback()
 
 	summary, executionError := runMigrationChecks(connection, nil)
-	if executionError != nil {
-		t.Fatalf("The partial capability run returned an error with %v", executionError)
+	if executionError == nil || !strings.Contains(executionError.Error(), "data type support unavailable") {
+		t.Fatalf("The partial capability run did not return its setup error: %v", executionError)
 	}
 	if summary.completedCheckCount != 10 || summary.unavailableCheckCount != 1 || summary.failedCheckCount != 0 {
 		t.Fatalf("The partial capability summary was %+v", summary)
@@ -912,8 +964,8 @@ func TestDoCheckMigrateReportsSetupSavepointReleaseFailure(t *testing.T) {
 	}
 }
 
-func TestDoCheckMigrateReportsFindingAndQueryFailureAsCheckResults(t *testing.T) {
-	connection, mock, _ := setupCheckTest(t)
+func TestDoCheckMigrateReportsFindingAndQueryFailureAsExecutionError(t *testing.T) {
+	connection, mock, stderr := setupCheckTest(t)
 	bootstrapSourceConnection = connection
 	targetConnection = nil
 	t.Cleanup(func() {
@@ -939,8 +991,11 @@ func TestDoCheckMigrateReportsFindingAndQueryFailureAsCheckResults(t *testing.T)
 	if recoveredValue := callDoCheckMigrate(); recoveredValue != nil {
 		t.Fatalf("DoCheckMigrate panicked with %v", recoveredValue)
 	}
-	if gplog.GetErrorCode() != 1 {
+	if gplog.GetErrorCode() != 5 {
 		t.Fatalf("The failed run returned exit code %d", gplog.GetErrorCode())
+	}
+	if !strings.Contains(string(stderr.Contents()), "query failed") {
+		t.Fatalf("The failed run did not print the check error in %q", stderr.Contents())
 	}
 }
 

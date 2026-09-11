@@ -278,7 +278,10 @@ func rollbackMigrationTransactionAfterError(connection *dbconn.DBConn, transacti
 	return transactionError
 }
 
-func prepareMigrationCheckCapabilities(connection *dbconn.DBConn) (map[string]bool, error) {
+func prepareMigrationCheckCapabilities(connection *dbconn.DBConn) (
+	availableCapabilities map[string]bool,
+	executionError error,
+) {
 	if beginError := beginMigrationTransaction(connection); beginError != nil {
 		return nil, beginError
 	}
@@ -290,26 +293,29 @@ func prepareMigrationCheckCapabilities(connection *dbconn.DBConn) (map[string]bo
 		{capability: migrationSupportCapability, query: migrationCheckSetupQuery},
 		{capability: dataTypeSupportCapability, query: migrationCheckSetupTypesQuery},
 	}
-	availableCapabilities := make(map[string]bool, len(setupQueries))
+	availableCapabilities = make(map[string]bool, len(setupQueries))
 	for _, setup := range setupQueries {
 		if _, savepointError := connection.Exec("SAVEPOINT ggcheckmigrate_setup"); savepointError != nil {
 			setupError := fmt.Errorf("%s setup savepoint failed with %w", setup.capability, savepointError)
 
-			return nil, rollbackMigrationTransactionAfterError(connection, setupError)
+			return nil, rollbackMigrationTransactionAfterError(connection, errors.Join(executionError, setupError))
 		}
 		_, setupError := connection.Exec(setup.query)
 		if setupError != nil {
+			capabilitySetupError := fmt.Errorf("%s setup failed with %w", setup.capability, setupError)
 			_, recoveryError := connection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_setup")
 			if recoveryError != nil {
-				setupError = fmt.Errorf(
-					"%s setup failed with %v and savepoint recovery failed with %w",
-					setup.capability,
-					setupError,
-					recoveryError,
+				capabilitySetupError = errors.Join(
+					capabilitySetupError,
+					fmt.Errorf("%s setup savepoint recovery failed with %w", setup.capability, recoveryError),
 				)
 
-				return nil, rollbackMigrationTransactionAfterError(connection, setupError)
+				return nil, rollbackMigrationTransactionAfterError(
+					connection,
+					errors.Join(executionError, capabilitySetupError),
+				)
 			}
+			executionError = errors.Join(executionError, capabilitySetupError)
 			gplog.Error(
 				"Database %q could not provide %s because setup failed with %v",
 				connection.DBName,
@@ -322,23 +328,27 @@ func prepareMigrationCheckCapabilities(connection *dbconn.DBConn) (map[string]bo
 		if _, releaseError := connection.Exec("RELEASE SAVEPOINT ggcheckmigrate_setup"); releaseError != nil {
 			setupError := fmt.Errorf("%s setup savepoint release failed with %w", setup.capability, releaseError)
 
-			return nil, rollbackMigrationTransactionAfterError(connection, setupError)
+			return nil, rollbackMigrationTransactionAfterError(connection, errors.Join(executionError, setupError))
 		}
 	}
 
 	if commitError := connection.Commit(); commitError != nil {
-		return nil, fmt.Errorf("migration check setup transaction commit failed with %w", commitError)
+		return nil, errors.Join(
+			executionError,
+			fmt.Errorf("migration check setup transaction commit failed with %w", commitError),
+		)
 	}
 
-	return availableCapabilities, nil
+	return availableCapabilities, executionError
 }
 
 func runMigrationCheck(connection *dbconn.DBConn, check migrationCheck) (
 	summary migrationCheckSummary,
 	executionError error,
+	shouldContinueChecks bool,
 ) {
 	if _, savepointError := connection.Exec("SAVEPOINT ggcheckmigrate_check"); savepointError != nil {
-		return summary, fmt.Errorf("check %q savepoint failed with %w", check.name, savepointError)
+		return summary, fmt.Errorf("check %q savepoint failed with %w", check.name, savepointError), false
 	}
 
 	var checkError error
@@ -351,6 +361,7 @@ func runMigrationCheck(connection *dbconn.DBConn, check migrationCheck) (
 				executionError,
 				fmt.Errorf("check %q savepoint release failed with %w", check.name, releaseError),
 			)
+			shouldContinueChecks = false
 		}
 	}()
 
@@ -364,23 +375,23 @@ func runMigrationCheck(connection *dbconn.DBConn, check migrationCheck) (
 				fmt.Errorf("check %q savepoint recovery failed with %w", check.name, recoveryError),
 			)
 
-			return summary, executionError
+			return summary, executionError, false
 		}
 		if errors.Is(checkError, errTargetDatabaseUnavailable) {
-			return summary, fmt.Errorf("check %q failed with %w", check.name, checkError)
+			return summary, fmt.Errorf("check %q failed with %w", check.name, checkError), false
 		}
 
 		summary.failedCheckCount++
 		gplog.Error("Database %q failed check %q with %v", connection.DBName, check.name, checkError)
 		gplog.Debug("Database %q completed check %q with an execution failure", connection.DBName, check.name)
 
-		return summary, nil
+		return summary, fmt.Errorf("check %q failed with %w", check.name, checkError), true
 	}
 
 	summary.completedCheckCount++
 	gplog.Debug("Database %q completed check %q with %d findings", connection.DBName, check.name, findingCount)
 
-	return summary, nil
+	return summary, nil, true
 }
 
 func runMigrationCheckPlan(
@@ -389,6 +400,7 @@ func runMigrationCheckPlan(
 	availableCapabilities map[string]bool,
 ) (migrationCheckSummary, error) {
 	var summary migrationCheckSummary
+	var executionError error
 	for _, check := range checks {
 		if check.requiredCapability != "" && !availableCapabilities[check.requiredCapability] {
 			summary.unavailableCheckCount++
@@ -403,16 +415,19 @@ func runMigrationCheckPlan(
 		}
 
 		gplog.Debug("Database %q is starting check %q", connection.DBName, check.name)
-		checkSummary, executionError := runMigrationCheck(connection, check)
+		checkSummary, checkExecutionError, shouldContinueChecks := runMigrationCheck(connection, check)
 		summary.completedCheckCount += checkSummary.completedCheckCount
 		summary.failedCheckCount += checkSummary.failedCheckCount
 		summary.findingCount += checkSummary.findingCount
-		if executionError != nil {
+		if checkExecutionError != nil {
+			executionError = errors.Join(executionError, checkExecutionError)
+		}
+		if !shouldContinueChecks {
 			return summary, executionError
 		}
 	}
 
-	return summary, nil
+	return summary, executionError
 }
 
 func runMigrationChecks(
@@ -422,12 +437,12 @@ func runMigrationChecks(
 	if sourceConnection == nil {
 		return summary, errors.New("source connection is not initialized")
 	}
-	availableCapabilities, setupError := prepareMigrationCheckCapabilities(sourceConnection)
-	if setupError != nil {
-		return summary, setupError
+	availableCapabilities, executionError := prepareMigrationCheckCapabilities(sourceConnection)
+	if availableCapabilities == nil {
+		return summary, executionError
 	}
 	if beginError := beginReadOnlyMigrationTransaction(sourceConnection); beginError != nil {
-		return summary, beginError
+		return summary, errors.Join(executionError, beginError)
 	}
 	defer func() {
 		rollbackError := sourceConnection.Rollback()
@@ -449,7 +464,9 @@ func runMigrationChecks(
 		})
 	}
 
-	return runMigrationCheckPlan(sourceConnection, checks, availableCapabilities)
+	checkSummary, checkExecutionError := runMigrationCheckPlan(sourceConnection, checks, availableCapabilities)
+
+	return checkSummary, errors.Join(executionError, checkExecutionError)
 }
 
 func checkMultiColumnListPartitions(connection *dbconn.DBConn) (int, error) {
