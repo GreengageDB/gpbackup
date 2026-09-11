@@ -505,6 +505,17 @@ func TestPlpythonCheckUsesLanguageHandler(t *testing.T) {
 	}
 }
 
+func TestRemovedViewChecksUseUpstreamOIDFilters(t *testing.T) {
+	for _, query := range []string{removedFunctionViewQuery, removedTypeViewQuery} {
+		if !strings.Contains(query, "c.oid >= 16384") {
+			t.Fatalf("The removed view check does not exclude system relations in %q", query)
+		}
+	}
+	if strings.Contains(removedOperatorViewQuery, "c.oid >= 16384") {
+		t.Fatal("The removed operator view check does not match the upstream query")
+	}
+}
+
 func TestUnknownRelationKindUsesCatalogCode(t *testing.T) {
 	if actualLabel := getRelationKindLabel("x"); actualLabel != "x" {
 		t.Fatalf("The unknown relation kind label is %q", actualLabel)

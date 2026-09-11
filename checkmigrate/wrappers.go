@@ -107,7 +107,7 @@ func CreateConnections() error {
 		if !targetConnection.Version.Is("7") {
 			gplog.SetErrorCode(3)
 
-			return errors.New("this utility can only check for migrate to Greengage version 7")
+			return errors.New("this utility can only check for migrate from Greengage version 6 to Greengage version 7")
 		}
 	}
 

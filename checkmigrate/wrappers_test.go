@@ -262,7 +262,7 @@ var _ = Describe("checkmigrate wrapper tests", func() {
 				return invalidTarget
 			})
 
-			Expect(checkmigrate.CreateConnections()).To(MatchError("this utility can only check for migrate to Greengage version 7"))
+			Expect(checkmigrate.CreateConnections()).To(MatchError("this utility can only check for migrate from Greengage version 6 to Greengage version 7"))
 			Expect(gplog.GetErrorCode()).To(Equal(3))
 			Expect(sourceMock.ExpectationsWereMet()).To(Succeed())
 			Expect(invalidTargetMock.ExpectationsWereMet()).To(Succeed())

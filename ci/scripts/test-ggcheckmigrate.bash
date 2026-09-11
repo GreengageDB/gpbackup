@@ -176,6 +176,11 @@ CREATE FUNCTION ggcheckmigrate_fixture.fixture_plpython2(value integer)
 RETURNS integer
 AS 'return args[0]'
 LANGUAGE plpython2u;
+CREATE LANGUAGE plpython2_alias HANDLER plpython2_call_handler;
+CREATE FUNCTION ggcheckmigrate_fixture.fixture_plpython2_alias(value integer)
+RETURNS integer
+AS 'return args[0]'
+LANGUAGE plpython2_alias;
 CREATE FUNCTION ggcheckmigrate_fixture.restricted_execute(integer, integer)
 RETURNS integer
 AS 'SELECT $1 + $2'
@@ -205,6 +210,20 @@ CREATE TABLE ggcheckmigrate_fixture.incomplete_index (id integer NOT NULL, parti
 DISTRIBUTED BY (id)
 PARTITION BY RANGE (partition_key) (START (1) END (3) EVERY (1));
 CREATE UNIQUE INDEX incomplete_index_unique ON ggcheckmigrate_fixture.incomplete_index (id);
+CREATE TABLE ggcheckmigrate_fixture.incomplete_multilevel_index (
+  id integer NOT NULL,
+  partition_key integer,
+  subpartition_key integer
+)
+DISTRIBUTED BY (id)
+PARTITION BY RANGE (partition_key)
+SUBPARTITION BY RANGE (subpartition_key) (
+  PARTITION p1 START (0) END (10) (
+    SUBPARTITION p1 START (0) END (10)
+  )
+);
+CREATE UNIQUE INDEX incomplete_multilevel_unique
+ON ggcheckmigrate_fixture.incomplete_multilevel_index (id);
 CREATE TABLE ggcheckmigrate_fixture.removed_data_types (
   abstime_column pg_catalog.abstime,
   reltime_column pg_catalog.reltime,
@@ -218,10 +237,34 @@ DISTRIBUTED BY (id)
 PARTITION BY RANGE (partition_key) (
   PARTITION ao_child START (0) END (10) WITH (appendonly=true)
 );
+CREATE TABLE ggcheckmigrate_fixture.ao_multilevel_options (
+  id integer,
+  partition_key integer,
+  subpartition_key integer
+)
+WITH (appendonly=true, compresstype=zlib, compresslevel=5, blocksize=65536)
+DISTRIBUTED BY (id)
+PARTITION BY RANGE (partition_key)
+SUBPARTITION BY RANGE (subpartition_key) (
+  PARTITION p1 START (0) END (10) (
+    SUBPARTITION p1 START (0) END (10) WITH (appendonly=true)
+  )
+);
 CREATE TABLE ggcheckmigrate_fixture.bad_range (id integer, partition_key numeric)
 DISTRIBUTED BY (id)
 PARTITION BY RANGE (partition_key) (
   PARTITION p1 START (0) EXCLUSIVE END (10)
+);
+CREATE TABLE ggcheckmigrate_fixture.valid_open_range (id integer, partition_key numeric)
+DISTRIBUTED BY (id)
+PARTITION BY RANGE (partition_key) (
+  PARTITION low END (0),
+  PARTITION high START (0)
+);
+CREATE TABLE ggcheckmigrate_fixture.valid_default_range (id integer, partition_key numeric)
+DISTRIBUTED BY (id)
+PARTITION BY RANGE (partition_key) (
+  DEFAULT PARTITION other
 );
 CREATE TABLE ggcheckmigrate_fixture.ao_with_heap_child (id integer, partition_key integer)
 WITH (appendonly=true, compresstype=zlib)
@@ -250,13 +293,16 @@ fi
 for expected_text in \
   'multi_list' \
   'fixture_plpython2' \
+  'fixture_plpython2_alias' \
   'removed_operator_view' \
   'removed_function_view' \
   'removed_type_view' \
   'removed_data_types' \
   'ao_missing_options' \
+  'ao_multilevel_options' \
   'restricted_execute' \
   'incomplete_index_unique' \
+  'incomplete_multilevel_unique' \
   'bad_range' \
   'statement_trigger' ; do
   if ! grep -Fq "${expected_text}" "${output_path}"; then
@@ -265,6 +311,12 @@ for expected_text in \
     exit 1
   fi
 done
+
+if [[ $(grep -Fc 'incomplete_multilevel_unique' "${output_path}") -ne 1 ]]; then
+  echo "The report did not name incomplete_multilevel_unique exactly once" >&2
+  cat "${output_path}" >&2
+  exit 1
+fi
 
 if [[ -n ${target_host} ]] && ! grep -Fq 'missing_library' "${output_path}"; then
   echo "The report does not name missing_library" >&2
@@ -313,6 +365,14 @@ if grep -Fq 'heap_child' "${output_path}"; then
   exit 1
 fi
 
+for unexpected_text in 'valid_open_range' 'valid_default_range'; do
+  if grep -Fq "${unexpected_text}" "${output_path}"; then
+    echo "The report unexpectedly named ${unexpected_text}" >&2
+    cat "${output_path}" >&2
+    exit 1
+  fi
+done
+
 if ! grep -Eq 'findings:[[:space:]]+[1-9][0-9]*$' "${output_path}"; then
   echo "The summary does not report a positive finding count" >&2
   cat "${output_path}" >&2
@@ -345,7 +405,7 @@ if [[ ${post_cleanup_exit_code} -ne 0 ]]; then
 fi
 
 for expected_check in "${expected_checks[@]}"; do
-  if ! grep -Fq "completed check \"${expected_check}\" with 0 findings" "${output_path}"; then
+  if ! grep -Eq "completed check \"${expected_check}\" with 0 findings" "${output_path}"; then
     echo "The clean run did not complete ${expected_check} with zero findings" >&2
     cat "${output_path}" >&2
     exit 1

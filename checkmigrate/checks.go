@@ -20,39 +20,63 @@ var migrationCheckSetupTypesQuery string
 //go:embed sql/source_database_names.sql
 var sourceDatabaseNamesQuery string
 
+// Checking for multi-column LIST partition keys.
+//
 //go:embed sql/multi_column_list_partitions.sql
 var multiColumnListPartitionQuery string
 
+// Checking for functions dependent on plpython2.
+//
 //go:embed sql/plpython2_dependent_functions.sql
 var plpython2DependentFunctionQuery string
 
+// Checking for views with removed operators.
+//
 //go:embed sql/removed_operator_views.sql
 var removedOperatorViewQuery string
 
+// Checking for views with removed functions.
+//
 //go:embed sql/removed_function_views.sql
 var removedFunctionViewQuery string
 
+// Checking for views with removed types.
+//
 //go:embed sql/removed_type_views.sql
 var removedTypeViewQuery string
 
+// Checking for removed "abstime", "reltime", "tinterval", "unknown" data type in user tables.
+//
 //go:embed sql/removed_data_types.sql
 var removedDataTypeQuery string
 
+// Checking for presence of required libraries.
+//
 //go:embed sql/required_libraries.sql
 var requiredLibraryQuery string
 
+// The difference in the AO parameters of partitioned tables.
+//
 //go:embed sql/missing_ao_options.sql
 var missingAOOptionQuery string
 
+// In the functions specified by EXECUTE ON, only RETURNS SETOF is used.
+//
 //go:embed sql/restricted_execute_on_functions.sql
 var restrictedExecuteOnFunctionQuery string
 
+// Unique constraint must include all partitioning keys.
+//
 //go:embed sql/incomplete_partition_indexes.sql
 var incompletePartitionIndexQuery string
 
+// Range partitions don't support START EXCLUSIVE or END INCLUSIVE for float and text.
+//
 //go:embed sql/incompatible_range_partitions.sql
 var incompatibleRangePartitionQuery string
 
+// Not supported triggers for statements.
+//
 //go:embed sql/statement_triggers.sql
 var statementTriggerQuery string
 
