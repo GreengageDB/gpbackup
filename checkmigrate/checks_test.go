@@ -584,6 +584,9 @@ func TestMissingAOOptionsUseImmediateAOParents(t *testing.T) {
 	if strings.Contains(missingAOOptionQuery, "pg_catalog.pg_partitions") {
 		t.Fatal("The AO option check still resolves parents through the root-only view")
 	}
+	if strings.Contains(missingAOOptionQuery, "split_part(po, '=', 1) IN") {
+		t.Fatal("The AO option check does not include every parent setting")
+	}
 }
 
 func TestDoCheckMigrateChecksRequiredLibrariesAfterSourceChecks(t *testing.T) {

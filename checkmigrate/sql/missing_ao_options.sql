@@ -25,6 +25,4 @@ WHERE co IS NULL
   AND parent_namespace.nspname !~ '^pg_temp_'
   AND parent_namespace.nspname !~ '^pg_toast_temp_'
   AND parent_namespace.nspname NOT IN ('pg_catalog', 'information_schema')
-  AND split_part(po, '=', 1) IN ('appendonly', 'appendoptimized', 'orientation',
-                                 'compresstype', 'compresslevel', 'blocksize', 'checksum')
 ORDER BY parent_schema, parent_name, child_schema, child_name, po;
