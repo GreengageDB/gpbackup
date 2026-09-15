@@ -21,8 +21,13 @@ LEFT JOIN unnest(child_relation.reloptions) co
   ON split_part(po, '=', 1) = split_part(co, '=', 1)
 WHERE co IS NULL
   AND parent_relation.relstorage IN ('a', 'c')
-  AND child_relation.relstorage IN ('a', 'c')
-  AND parent_namespace.nspname !~ '^pg_temp_'
-  AND parent_namespace.nspname !~ '^pg_toast_temp_'
-  AND parent_namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND child_relation.relstorage = parent_relation.relstorage
+  AND split_part(po, '=', 1) IN ('appendonly', 'appendoptimized', 'orientation',
+                                 'compresstype', 'compresslevel', 'blocksize', 'checksum')
+  AND parent_namespace.nspname NOT LIKE 'pg_temp_%'
+  AND parent_namespace.nspname NOT LIKE 'pg_toast%'
+  AND parent_namespace.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')
+  AND child_namespace.nspname NOT LIKE 'pg_temp_%'
+  AND child_namespace.nspname NOT LIKE 'pg_toast%'
+  AND child_namespace.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')
 ORDER BY parent_schema, parent_name, child_schema, child_name, po;

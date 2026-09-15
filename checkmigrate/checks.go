@@ -182,9 +182,10 @@ func logFindingOutput(output *strings.Builder) {
 }
 
 type migrationCheck struct {
-	name               string
-	requiredCapability string
-	doRunCheck         func(*dbconn.DBConn) (int, error)
+	name                     string
+	requiredCapability       string
+	shouldDisableTrackCounts bool
+	doRunCheck               func(*dbconn.DBConn) (int, error)
 }
 
 // Database checks inspect catalogs whose contents are scoped to the current database.
@@ -192,19 +193,22 @@ var databaseChecks = []migrationCheck{
 	{name: "Checking for multi-column LIST partition keys", doRunCheck: checkMultiColumnListPartitions},
 	{name: "Checking for functions dependent on plpython2", doRunCheck: checkPlpython2DependentFunctions},
 	{
-		name:               "Checking for views with removed operators",
-		requiredCapability: migrationSupportCapability,
-		doRunCheck:         checkViewsWithRemovedOperators,
+		name:                     "Checking for views with removed operators",
+		requiredCapability:       migrationSupportCapability,
+		shouldDisableTrackCounts: true,
+		doRunCheck:               checkViewsWithRemovedOperators,
 	},
 	{
-		name:               "Checking for views with removed functions",
-		requiredCapability: migrationSupportCapability,
-		doRunCheck:         checkViewsWithRemovedFunctions,
+		name:                     "Checking for views with removed functions",
+		requiredCapability:       migrationSupportCapability,
+		shouldDisableTrackCounts: true,
+		doRunCheck:               checkViewsWithRemovedFunctions,
 	},
 	{
-		name:               "Checking for views with removed types",
-		requiredCapability: migrationSupportCapability,
-		doRunCheck:         checkViewsWithRemovedTypes,
+		name:                     "Checking for views with removed types",
+		requiredCapability:       migrationSupportCapability,
+		shouldDisableTrackCounts: true,
+		doRunCheck:               checkViewsWithRemovedTypes,
 	},
 	{
 		name: "Checking for removed \"abstime\", \"reltime\", \"tinterval\", \"unknown\" " +
@@ -229,6 +233,8 @@ const (
 	migrationSupportCapability  = "migration support functions"
 	dataTypeSupportCapability   = "data type support function"
 	setTransactionReadOnlyQuery = "SET TRANSACTION READ ONLY"
+	setTrackCountsOffQuery      = "SET track_counts TO off"
+	resetTrackCountsQuery       = "RESET track_counts"
 )
 
 type migrationCheckSummary struct {
@@ -365,9 +371,22 @@ func runMigrationCheck(connection *dbconn.DBConn, check migrationCheck) (
 		}
 	}()
 
+	if check.shouldDisableTrackCounts {
+		if _, trackCountsError := connection.Exec(setTrackCountsOffQuery); trackCountsError != nil {
+			checkError = fmt.Errorf("disabling track_counts failed with %w", trackCountsError)
+		}
+	}
+
 	findingCount := 0
-	findingCount, checkError = check.doRunCheck(connection)
+	if checkError == nil {
+		findingCount, checkError = check.doRunCheck(connection)
+	}
 	summary.findingCount = findingCount
+	if checkError == nil && check.shouldDisableTrackCounts {
+		if _, trackCountsError := connection.Exec(resetTrackCountsQuery); trackCountsError != nil {
+			checkError = fmt.Errorf("resetting track_counts failed with %w", trackCountsError)
+		}
+	}
 	if checkError != nil {
 		if _, recoveryError := connection.Exec("ROLLBACK TO SAVEPOINT ggcheckmigrate_check"); recoveryError != nil {
 			executionError = errors.Join(

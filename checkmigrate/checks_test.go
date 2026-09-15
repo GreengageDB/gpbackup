@@ -17,13 +17,14 @@ import (
 )
 
 type sourceCheckTestCase struct {
-	name            string
-	check           func(*dbconn.DBConn) (int, error)
-	query           string
-	columns         []string
-	rows            [][]driver.Value
-	problemText     string
-	expectedObjects []string
+	name                     string
+	check                    func(*dbconn.DBConn) (int, error)
+	query                    string
+	columns                  []string
+	rows                     [][]driver.Value
+	problemText              string
+	expectedObjects          []string
+	shouldDisableTrackCounts bool
 }
 
 var sourceCheckTestCases = []sourceCheckTestCase{
@@ -60,11 +61,12 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		},
 	},
 	{
-		name:    "views with removed operators",
-		check:   checkViewsWithRemovedOperators,
-		query:   removedOperatorViewQuery,
-		columns: []string{"schema_name", "object_name", "relation_kind"},
-		rows:    [][]driver.Value{{"public", "operator_view", "v"}, {"reports", "operator_materialized_view", "m"}},
+		name:                     "views with removed operators",
+		check:                    checkViewsWithRemovedOperators,
+		query:                    removedOperatorViewQuery,
+		shouldDisableTrackCounts: true,
+		columns:                  []string{"schema_name", "object_name", "relation_kind"},
+		rows:                     [][]driver.Value{{"public", "operator_view", "v"}, {"reports", "operator_materialized_view", "m"}},
 		problemText: "Your cluster contains views using removed operators. " +
 			"These operators are no longer present on the target version. " +
 			"These views must be updated to use operators supported in the target version or removed before " +
@@ -75,11 +77,12 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		},
 	},
 	{
-		name:    "views with removed functions",
-		check:   checkViewsWithRemovedFunctions,
-		query:   removedFunctionViewQuery,
-		columns: []string{"schema_name", "object_name", "relation_kind"},
-		rows:    [][]driver.Value{{"public", "function_view", "v"}, {"reports", "function_materialized_view", "m"}},
+		name:                     "views with removed functions",
+		check:                    checkViewsWithRemovedFunctions,
+		query:                    removedFunctionViewQuery,
+		shouldDisableTrackCounts: true,
+		columns:                  []string{"schema_name", "object_name", "relation_kind"},
+		rows:                     [][]driver.Value{{"public", "function_view", "v"}, {"reports", "function_materialized_view", "m"}},
 		problemText: "Your cluster contains views using removed functions. " +
 			"These functions are no longer present on the target version. " +
 			"These views must be updated to use functions supported in the target version or removed before " +
@@ -90,11 +93,12 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 		},
 	},
 	{
-		name:    "views with removed types",
-		check:   checkViewsWithRemovedTypes,
-		query:   removedTypeViewQuery,
-		columns: []string{"schema_name", "object_name", "relation_kind"},
-		rows:    [][]driver.Value{{"public", "type_view", "v"}, {"reports", "type_materialized_view", "m"}},
+		name:                     "views with removed types",
+		check:                    checkViewsWithRemovedTypes,
+		query:                    removedTypeViewQuery,
+		shouldDisableTrackCounts: true,
+		columns:                  []string{"schema_name", "object_name", "relation_kind"},
+		rows:                     [][]driver.Value{{"public", "type_view", "v"}, {"reports", "type_materialized_view", "m"}},
 		problemText: "Your cluster contains views using removed types. " +
 			"These types are no longer present on the target version. " +
 			"These views must be updated to use types supported in the target version or removed before upgrade " +
@@ -235,7 +239,13 @@ func rowsForCheck(testCase sourceCheckTestCase, hasRows bool) *sqlmock.Rows {
 func expectAllSourceChecksEmpty(mock sqlmock.Sqlmock) {
 	for _, testCase := range sourceCheckTestCases {
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+		if testCase.shouldDisableTrackCounts {
+			mock.ExpectExec(regexp.QuoteMeta(setTrackCountsOffQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
 		mock.ExpectQuery(regexp.QuoteMeta(testCase.query)).WillReturnRows(rowsForCheck(testCase, false))
+		if testCase.shouldDisableTrackCounts {
+			mock.ExpectExec(regexp.QuoteMeta(resetTrackCountsQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
 		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 }
@@ -599,10 +609,24 @@ func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 		incompletePartitionIndexQuery,
 		incompatibleRangePartitionQuery,
 		statementTriggerQuery,
+		requiredLibraryQuery,
 	}
 	for _, query := range queries {
-		if !strings.Contains(query, "pg_temp_") || !strings.Contains(query, "information_schema") {
-			t.Fatalf("The source check does not filter non-user schemas in %q", query)
+		for _, namespaceFilter := range []string{
+			"NOT LIKE 'pg_temp_%'",
+			"NOT LIKE 'pg_toast%'",
+			"NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')",
+		} {
+			if !strings.Contains(query, namespaceFilter) {
+				t.Fatalf("The source check does not contain namespace filter %q in %q", namespaceFilter, query)
+			}
+		}
+	}
+	for _, query := range []string{missingAOOptionQuery, incompatibleRangePartitionQuery} {
+		if !strings.Contains(query, "child_namespace.nspname NOT LIKE 'pg_temp_%'") ||
+			!strings.Contains(query, "child_namespace.nspname NOT LIKE 'pg_toast%'") ||
+			!strings.Contains(query, "child_namespace.nspname NOT IN") {
+			t.Fatalf("The partition check does not filter the child namespace in %q", query)
 		}
 	}
 }
@@ -614,9 +638,9 @@ func TestRequiredLibrariesIncludePersistentExtensionOwnedFunctions(t *testing.T)
 	if strings.Contains(requiredLibraryQuery, "dependency.deptype = 'e'") {
 		t.Fatal("The required library check excludes extension-owned functions")
 	}
-	for _, temporarySchemaPrefix := range []string{"pg_temp_", "pg_toast_temp_"} {
-		if !strings.Contains(requiredLibraryQuery, temporarySchemaPrefix) {
-			t.Fatalf("The required library check includes temporary schema prefix %q", temporarySchemaPrefix)
+	for _, schemaPattern := range []string{"pg_temp_%", "pg_toast%"} {
+		if !strings.Contains(requiredLibraryQuery, schemaPattern) {
+			t.Fatalf("The required library check does not exclude schema pattern %q", schemaPattern)
 		}
 	}
 }
@@ -630,14 +654,133 @@ func TestMissingAOOptionsUseImmediateAOParents(t *testing.T) {
 	if !strings.Contains(missingAOOptionQuery, "parent_rule.parchildrelid, root_partition.parrelid") {
 		t.Fatal("The AO option check does not resolve immediate partition parents")
 	}
-	if !strings.Contains(missingAOOptionQuery, "child_relation.relstorage IN ('a', 'c')") {
-		t.Fatal("The AO option check includes heap or external child partitions")
+	if !strings.Contains(missingAOOptionQuery, "child_relation.relstorage = parent_relation.relstorage") {
+		t.Fatal("The AO option check compares partitions with a different storage type")
 	}
 	if strings.Contains(missingAOOptionQuery, "pg_catalog.pg_partitions") {
 		t.Fatal("The AO option check still resolves parents through the root-only view")
 	}
-	if strings.Contains(missingAOOptionQuery, "split_part(po, '=', 1) IN") {
-		t.Fatal("The AO option check does not include every parent setting")
+	for _, option := range []string{
+		"appendonly",
+		"appendoptimized",
+		"orientation",
+		"compresstype",
+		"compresslevel",
+		"blocksize",
+		"checksum",
+	} {
+		if !strings.Contains(missingAOOptionQuery, "'"+option+"'") {
+			t.Fatalf("The AO option check does not compare %q", option)
+		}
+	}
+	if strings.Contains(missingAOOptionQuery, "'fillfactor'") {
+		t.Fatal("The AO option check compares an option outside the Solution list")
+	}
+}
+
+func TestRunMigrationCheckDisablesAndResetsTrackCounts(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(setTrackCountsOffQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(resetTrackCountsQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	summary, executionError, shouldContinue := runMigrationCheck(connection, migrationCheck{
+		name:                     "view check",
+		shouldDisableTrackCounts: true,
+		doRunCheck: func(*dbconn.DBConn) (int, error) {
+			return 0, nil
+		},
+	})
+
+	if executionError != nil {
+		t.Fatalf("The view check returned an error with %v", executionError)
+	}
+	if !shouldContinue {
+		t.Fatal("The successful view check stopped later checks")
+	}
+	if summary.completedCheckCount != 1 || summary.failedCheckCount != 0 {
+		t.Fatalf("The successful view check summary was %+v", summary)
+	}
+}
+
+func TestRunMigrationCheckReportsTrackCountsSetupFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(setTrackCountsOffQuery)).WillReturnError(errors.New("track counts setup failed"))
+	mock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	summary, executionError, shouldContinue := runMigrationCheck(connection, migrationCheck{
+		name:                     "view check",
+		shouldDisableTrackCounts: true,
+		doRunCheck: func(*dbconn.DBConn) (int, error) {
+			t.Fatal("The view check ran after track_counts setup failed")
+			return 0, nil
+		},
+	})
+
+	if executionError == nil || !strings.Contains(executionError.Error(), "track counts setup failed") {
+		t.Fatalf("The track_counts setup failure was not returned: %v", executionError)
+	}
+	if !shouldContinue {
+		t.Fatal("The recoverable track_counts setup failure stopped later checks")
+	}
+	if summary.completedCheckCount != 0 || summary.failedCheckCount != 1 {
+		t.Fatalf("The failed view check summary was %+v", summary)
+	}
+}
+
+func TestRunMigrationCheckRollsBackTrackCountsAfterQueryFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(setTrackCountsOffQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	summary, executionError, shouldContinue := runMigrationCheck(connection, migrationCheck{
+		name:                     "view check",
+		shouldDisableTrackCounts: true,
+		doRunCheck: func(*dbconn.DBConn) (int, error) {
+			return 0, errors.New("view query failed")
+		},
+	})
+
+	if executionError == nil || !strings.Contains(executionError.Error(), "view query failed") {
+		t.Fatalf("The view query failure was not returned: %v", executionError)
+	}
+	if !shouldContinue {
+		t.Fatal("The recoverable view query failure stopped later checks")
+	}
+	if summary.completedCheckCount != 0 || summary.failedCheckCount != 1 {
+		t.Fatalf("The failed view check summary was %+v", summary)
+	}
+}
+
+func TestRunMigrationCheckReportsTrackCountsResetFailure(t *testing.T) {
+	connection, mock, _ := setupCheckTest(t)
+	mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(setTrackCountsOffQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(resetTrackCountsQuery)).WillReturnError(errors.New("track counts reset failed"))
+	mock.ExpectExec(regexp.QuoteMeta("ROLLBACK TO SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	summary, executionError, shouldContinue := runMigrationCheck(connection, migrationCheck{
+		name:                     "view check",
+		shouldDisableTrackCounts: true,
+		doRunCheck: func(*dbconn.DBConn) (int, error) {
+			return 0, nil
+		},
+	})
+
+	if executionError == nil || !strings.Contains(executionError.Error(), "track counts reset failed") {
+		t.Fatalf("The track_counts reset failure was not returned: %v", executionError)
+	}
+	if !shouldContinue {
+		t.Fatal("The recoverable track_counts reset failure stopped later checks")
+	}
+	if summary.completedCheckCount != 0 || summary.failedCheckCount != 1 {
+		t.Fatalf("The failed view check summary was %+v", summary)
 	}
 }
 
@@ -750,7 +893,13 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 	applicationMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, testCase := range sourceCheckTestCases[1:] {
 		applicationMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+		if testCase.shouldDisableTrackCounts {
+			applicationMock.ExpectExec(regexp.QuoteMeta(setTrackCountsOffQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
 		applicationMock.ExpectQuery(regexp.QuoteMeta(testCase.query)).WillReturnRows(rowsForCheck(testCase, false))
+		if testCase.shouldDisableTrackCounts {
+			applicationMock.ExpectExec(regexp.QuoteMeta(resetTrackCountsQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
 		applicationMock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 	applicationMock.ExpectRollback()
@@ -870,7 +1019,13 @@ func TestDoCheckMigrateContinuesAfterFinding(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, testCase := range sourceCheckTestCases[1:] {
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+		if testCase.shouldDisableTrackCounts {
+			mock.ExpectExec(regexp.QuoteMeta(setTrackCountsOffQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
 		mock.ExpectQuery(regexp.QuoteMeta(testCase.query)).WillReturnRows(rowsForCheck(testCase, false))
+		if testCase.shouldDisableTrackCounts {
+			mock.ExpectExec(regexp.QuoteMeta(resetTrackCountsQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
 		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 	mock.ExpectRollback()
@@ -927,7 +1082,13 @@ func TestRunMigrationChecksKeepsIndependentChecksAfterDataTypeSetupFailure(t *te
 			continue
 		}
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+		if testCase.shouldDisableTrackCounts {
+			mock.ExpectExec(regexp.QuoteMeta(setTrackCountsOffQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
 		mock.ExpectQuery(regexp.QuoteMeta(testCase.query)).WillReturnRows(rowsForCheck(testCase, false))
+		if testCase.shouldDisableTrackCounts {
+			mock.ExpectExec(regexp.QuoteMeta(resetTrackCountsQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
 		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 	mock.ExpectRollback()
@@ -983,7 +1144,13 @@ func TestDoCheckMigrateReportsFindingAndQueryFailureAsExecutionError(t *testing.
 	mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, testCase := range sourceCheckTestCases[2:] {
 		mock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
+		if testCase.shouldDisableTrackCounts {
+			mock.ExpectExec(regexp.QuoteMeta(setTrackCountsOffQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
 		mock.ExpectQuery(regexp.QuoteMeta(testCase.query)).WillReturnRows(rowsForCheck(testCase, false))
+		if testCase.shouldDisableTrackCounts {
+			mock.ExpectExec(regexp.QuoteMeta(resetTrackCountsQuery)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
 		mock.ExpectExec(regexp.QuoteMeta("RELEASE SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 	mock.ExpectRollback()

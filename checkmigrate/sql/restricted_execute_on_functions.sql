@@ -8,7 +8,7 @@ WHERE NOT p.proretset
   AND p.proexeclocation IN ('s', 'm', 'i')
   AND l.lanname <> 'internal'
   AND p.prorettype <> 'pg_catalog.record'::regtype
-  AND n.nspname !~ '^pg_temp_'
-  AND n.nspname !~ '^pg_toast_temp_'
-  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND n.nspname NOT LIKE 'pg_temp_%'
+  AND n.nspname NOT LIKE 'pg_toast%'
+  AND n.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')
 ORDER BY n.nspname, p.proname, p.oid;

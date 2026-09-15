@@ -12,7 +12,7 @@ JOIN partitions p ON p.oid = i.indrelid
 JOIN pg_catalog.pg_class index_relation ON index_relation.oid = i.indexrelid
 WHERE (i.indisunique OR i.indisprimary)
   AND NOT (p.paratts <@ i.indkey)
-  AND p.nspname !~ '^pg_temp_'
-  AND p.nspname !~ '^pg_toast_temp_'
-  AND p.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND p.nspname NOT LIKE 'pg_temp_%'
+  AND p.nspname NOT LIKE 'pg_toast%'
+  AND p.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')
 ORDER BY schema_name, table_name, index_name;

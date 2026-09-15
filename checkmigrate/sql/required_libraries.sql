@@ -9,6 +9,7 @@ WHERE l.lanname = 'c'
   AND p.oid >= 16384
   AND p.probin IS NOT NULL
   AND p.probin NOT IN ('', '-', '$libdir/plpython2')
-  AND n.nspname !~ '^pg_temp_'
-  AND n.nspname !~ '^pg_toast_temp_'
+  AND n.nspname NOT LIKE 'pg_temp_%'
+  AND n.nspname NOT LIKE 'pg_toast%'
+  AND n.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')
 ORDER BY p.probin, n.nspname, p.proname, p.oid;

@@ -272,6 +272,12 @@ DISTRIBUTED BY (id)
 PARTITION BY RANGE (partition_key) (
   PARTITION heap_child START (1) END (2) WITH (appendonly=false)
 );
+CREATE TABLE ggcheckmigrate_fixture.ao_with_column_child (id integer, partition_key integer)
+WITH (appendonly=true, orientation=row, compresstype=zlib)
+DISTRIBUTED BY (id)
+PARTITION BY RANGE (partition_key) (
+  PARTITION column_child START (1) END (2) WITH (appendonly=true, orientation=column)
+);
 CREATE TABLE ggcheckmigrate_fixture.statement_trigger_table (id integer) DISTRIBUTED BY (id);
 CREATE FUNCTION ggcheckmigrate_fixture.statement_trigger_fn() RETURNS trigger
 LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END; $$;
@@ -359,13 +365,7 @@ if ! grep -Eq 'completed cluster checks:[[:space:]]+0$' "${output_path}" ||
   exit 1
 fi
 
-if grep -Fq 'heap_child' "${output_path}"; then
-  echo "The report unexpectedly named heap_child" >&2
-  cat "${output_path}" >&2
-  exit 1
-fi
-
-for unexpected_text in 'valid_open_range' 'valid_default_range'; do
+for unexpected_text in 'heap_child' 'column_child' 'valid_open_range' 'valid_default_range'; do
   if grep -Fq "${unexpected_text}" "${output_path}"; then
     echo "The report unexpectedly named ${unexpected_text}" >&2
     cat "${output_path}" >&2

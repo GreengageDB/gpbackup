@@ -83,7 +83,7 @@ func CreateConnections() error {
 	if !bootstrapSourceConnection.Version.Is("6") {
 		gplog.SetErrorCode(2)
 
-		return errors.New("this utility can only check for migrate from Greengage version 6")
+		return errors.New("This utility can only check for migrate from Greengage version 6")
 	}
 	targetHost := options.MustGetFlagString(cmdFlags, options.TARGET_HOST)
 	targetPort := options.MustGetFlagInt(cmdFlags, options.TARGET_PORT)
@@ -107,7 +107,7 @@ func CreateConnections() error {
 		if !targetConnection.Version.Is("7") {
 			gplog.SetErrorCode(3)
 
-			return errors.New("this utility can only check for migrate from Greengage version 6 to Greengage version 7")
+			return errors.New("This utility can only check for migrate from Greengage version 6 to Greengage version 7")
 		}
 	}
 
