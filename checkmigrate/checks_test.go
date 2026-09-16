@@ -184,7 +184,7 @@ var sourceCheckTestCases = []sourceCheckTestCase{
 			{"archive", "labels", "text", "history", "labels_1_prt_a"},
 		},
 		problemText: "In version 7, range partitions don't support START EXCLUSIVE or END INCLUSIVE for " +
-			"columns with types float and text.\nYou can recreate following tables without START EXCLUSIVE and " +
+			"columns with types float, text, and numeric.\nYou can recreate following tables without START EXCLUSIVE and " +
 			"END INCLUSIVE.\nList of partitioned tables with the specified problem:\n",
 		expectedObjects: []string{
 			`Object "prices_1_prt_low" has type "partition" in schema "sales"`,

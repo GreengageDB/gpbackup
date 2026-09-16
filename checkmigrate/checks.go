@@ -70,7 +70,7 @@ var restrictedExecuteOnFunctionQuery string
 //go:embed sql/incomplete_partition_indexes.sql
 var incompletePartitionIndexQuery string
 
-// Range partitions don't support START EXCLUSIVE or END INCLUSIVE for float and text.
+// Range partitions don't support START EXCLUSIVE or END INCLUSIVE for float, text, and numeric.
 //
 //go:embed sql/incompatible_range_partitions.sql
 var incompatibleRangePartitionQuery string
@@ -220,7 +220,7 @@ var databaseChecks = []migrationCheck{
 	},
 	{name: "Unique constraint must include all partitioning keys", doRunCheck: checkIncompletePartitionIndexes},
 	{
-		name:       "Range partitions don't support START EXCLUSIVE or END INCLUSIVE for float and text",
+		name:       "Range partitions don't support START EXCLUSIVE or END INCLUSIVE for float, text, and numeric",
 		doRunCheck: checkIncompatibleRangePartitions,
 	},
 	{name: "Not supported triggers for statements", doRunCheck: checkStatementTriggers},
@@ -778,7 +778,7 @@ func checkIncompatibleRangePartitions(connection *dbconn.DBConn) (int, error) {
 	var output strings.Builder
 	output.WriteString(
 		"In version 7, range partitions don't support START EXCLUSIVE or END INCLUSIVE for columns with " +
-			"types float and text.\nYou can recreate following tables without START EXCLUSIVE and " +
+			"types float, text, and numeric.\nYou can recreate following tables without START EXCLUSIVE and " +
 			"END INCLUSIVE.\nList of partitioned tables with the specified problem:\n",
 	)
 	writeDatabaseFindingHeader(&output, connection.DBName)

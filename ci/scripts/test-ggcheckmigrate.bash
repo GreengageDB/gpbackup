@@ -340,7 +340,7 @@ expected_checks=(
   "The difference in the AO parameters of partitioned tables"
   "In the functions specified by EXECUTE ON, only RETURNS SETOF is used"
   "Unique constraint must include all partitioning keys"
-  "Range partitions don't support START EXCLUSIVE or END INCLUSIVE for float and text"
+  "Range partitions don't support START EXCLUSIVE or END INCLUSIVE for float, text, and numeric"
   "Not supported triggers for statements"
 )
 if [[ -n ${target_host} ]]; then
