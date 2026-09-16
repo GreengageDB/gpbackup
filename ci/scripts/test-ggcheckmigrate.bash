@@ -324,10 +324,17 @@ if [[ $(grep -Fc 'incomplete_multilevel_unique' "${output_path}") -ne 1 ]]; then
   exit 1
 fi
 
-if [[ -n ${target_host} ]] && ! grep -Fq 'missing_library' "${output_path}"; then
-  echo "The report does not name missing_library" >&2
-  cat "${output_path}" >&2
-  exit 1
+if [[ -n ${target_host} ]]; then
+  if ! grep -Fq '$libdir/gp_check_functions' "${output_path}"; then
+    echo 'The report does not name $libdir/gp_check_functions' >&2
+    cat "${output_path}" >&2
+    exit 1
+  fi
+  if grep -Fq 'missing_library' "${output_path}"; then
+    echo "The report unexpectedly names missing_library" >&2
+    cat "${output_path}" >&2
+    exit 1
+  fi
 fi
 
 expected_checks=(
