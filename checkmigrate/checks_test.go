@@ -361,10 +361,10 @@ func TestRequiredLibrariesReportsEveryFailedLoad(t *testing.T) {
 		}
 	})
 
-	libraryRows := sqlmock.NewRows([]string{"schema_name", "object_name", "identity_arguments", "library_name"}).
-		AddRow("public", "shared_fn", "integer", "$libdir/shared").
-		AddRow("public", "missing_fn", "integer", "$libdir/missing").
-		AddRow("public", "quoted_fn", "integer", "odd'lib")
+	libraryRows := sqlmock.NewRows([]string{"library_name"}).
+		AddRow("$libdir/shared").
+		AddRow("$libdir/missing").
+		AddRow("odd'lib")
 	sourceMock.ExpectQuery(regexp.QuoteMeta(requiredLibraryQuery)).WillReturnRows(libraryRows)
 	targetMock.ExpectExec(regexp.QuoteMeta("LOAD '$libdir/shared'")).WillReturnResult(sqlmock.NewResult(0, 0))
 	targetMock.ExpectExec(regexp.QuoteMeta("LOAD '$libdir/missing'")).WillReturnError(errors.New("missing library"))
@@ -377,8 +377,8 @@ func TestRequiredLibrariesReportsEveryFailedLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("The library check returned an error with %v", err)
 	}
-	if findingCount == 0 {
-		t.Fatal("The library check did not report failed loads")
+	if findingCount != 2 {
+		t.Fatalf("The library check reported %d failed loads", findingCount)
 	}
 	output := string(stderr.Contents())
 	expectedProblemText := "Your cluster references loadable libraries that are missing from the new cluster.\n" +
@@ -393,6 +393,9 @@ func TestRequiredLibrariesReportsEveryFailedLoad(t *testing.T) {
 			t.Errorf("The output %q did not contain library %q", output, expectedLibrary)
 		}
 	}
+	if strings.Contains(output, "Object ") {
+		t.Fatalf("The library check reported functions in %q", output)
+	}
 }
 
 func TestRequiredLibrariesLoadsEachLibraryOnce(t *testing.T) {
@@ -406,9 +409,9 @@ func TestRequiredLibrariesLoadsEachLibraryOnce(t *testing.T) {
 	})
 
 	sourceMock.ExpectQuery(regexp.QuoteMeta(requiredLibraryQuery)).WillReturnRows(
-		sqlmock.NewRows([]string{"schema_name", "object_name", "identity_arguments", "library_name"}).
-			AddRow("public", "first_function", "integer", "$libdir/missing").
-			AddRow("public", "second_function", "text", "$libdir/missing"),
+		sqlmock.NewRows([]string{"library_name"}).
+			AddRow("$libdir/missing").
+			AddRow("$libdir/missing"),
 	)
 	targetMock.ExpectExec(regexp.QuoteMeta("LOAD '$libdir/missing'")).WillReturnError(errors.New("missing library"))
 	targetMock.ExpectExec(regexp.QuoteMeta("SELECT 1")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -418,7 +421,7 @@ func TestRequiredLibrariesLoadsEachLibraryOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("The library check returned an error with %v", err)
 	}
-	if findingCount != 2 {
+	if findingCount != 1 {
 		t.Fatalf("The library check returned %d findings", findingCount)
 	}
 }
@@ -434,9 +437,9 @@ func TestRequiredLibrariesReportsTargetDatabaseOutage(t *testing.T) {
 	})
 
 	sourceMock.ExpectQuery(regexp.QuoteMeta(requiredLibraryQuery)).WillReturnRows(
-		sqlmock.NewRows([]string{"schema_name", "object_name", "identity_arguments", "library_name"}).
-			AddRow("public", "missing_function", "integer", "$libdir/missing").
-			AddRow("public", "unreachable_function", "integer", "$libdir/unreachable"),
+		sqlmock.NewRows([]string{"library_name"}).
+			AddRow("$libdir/missing").
+			AddRow("$libdir/unreachable"),
 	)
 	targetMock.ExpectExec(regexp.QuoteMeta("LOAD '$libdir/missing'")).WillReturnError(errors.New("missing library"))
 	targetMock.ExpectExec(regexp.QuoteMeta("SELECT 1")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -632,6 +635,9 @@ func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 }
 
 func TestRequiredLibrariesIncludePersistentExtensionOwnedFunctions(t *testing.T) {
+	if !strings.Contains(requiredLibraryQuery, "SELECT DISTINCT p.probin::text AS library_name") {
+		t.Fatal("The required library check does not return unique library names")
+	}
 	if !strings.Contains(requiredLibraryQuery, "p.oid >= 16384") {
 		t.Fatal("The required library check does not select user-defined functions")
 	}
@@ -805,7 +811,7 @@ func TestDoCheckMigrateChecksRequiredLibrariesAfterSourceChecks(t *testing.T) {
 	expectAllSourceChecksEmpty(sourceMock)
 	sourceMock.ExpectExec(regexp.QuoteMeta("SAVEPOINT ggcheckmigrate_check")).WillReturnResult(sqlmock.NewResult(0, 0))
 	sourceMock.ExpectQuery(regexp.QuoteMeta(requiredLibraryQuery)).WillReturnRows(
-		sqlmock.NewRows([]string{"schema_name", "object_name", "identity_arguments", "library_name"}).AddRow("public", "missing_fn", "integer", "$libdir/missing"),
+		sqlmock.NewRows([]string{"library_name"}).AddRow("$libdir/missing"),
 	)
 	targetMock.ExpectExec(regexp.QuoteMeta("LOAD '$libdir/missing'")).WillReturnError(errors.New("missing library"))
 	targetMock.ExpectExec(regexp.QuoteMeta("SELECT 1")).WillReturnError(errors.New("target database unavailable"))

@@ -136,10 +136,7 @@ type statementTriggerResult struct {
 }
 
 type requiredLibraryResult struct {
-	SchemaName        string `db:"schema_name"`
-	ObjectName        string `db:"object_name"`
-	IdentityArguments string `db:"identity_arguments"`
-	LibraryName       string `db:"library_name"`
+	LibraryName string `db:"library_name"`
 }
 
 var relationKindLabels = map[string]string{
@@ -839,33 +836,32 @@ func checkRequiredLibraries(sourceConnection *dbconn.DBConn, targetConnection *d
 		return 0, queryError
 	}
 
-	isLibraryMissingByName := make(map[string]bool)
-	missingFunctions := make([]requiredLibraryResult, 0)
+	checkedLibraries := make(map[string]struct{})
+	missingLibraries := make([]string, 0)
 	var targetExecutionError error
 	for _, result := range results {
-		isMissing, wasChecked := isLibraryMissingByName[result.LibraryName]
-		if !wasChecked {
-			loadQuery := fmt.Sprintf("LOAD '%s'", utils.EscapeSingleQuotes(result.LibraryName))
-			_, loadError := targetConnection.Exec(loadQuery)
-			if loadError != nil {
-				if _, livenessError := targetConnection.Exec("SELECT 1"); livenessError != nil {
-					targetExecutionError = errors.Join(
-						errTargetDatabaseUnavailable,
-						fmt.Errorf("loading target library %q failed with %w", result.LibraryName, loadError),
-						fmt.Errorf("checking target database liveness failed with %w", livenessError),
-					)
+		if _, wasChecked := checkedLibraries[result.LibraryName]; wasChecked {
+			continue
+		}
+		checkedLibraries[result.LibraryName] = struct{}{}
 
-					break
-				}
-			}
-			isMissing = loadError != nil
-			isLibraryMissingByName[result.LibraryName] = isMissing
+		loadQuery := fmt.Sprintf("LOAD '%s'", utils.EscapeSingleQuotes(result.LibraryName))
+		_, loadError := targetConnection.Exec(loadQuery)
+		if loadError == nil {
+			continue
 		}
-		if isMissing {
-			missingFunctions = append(missingFunctions, result)
+		if _, livenessError := targetConnection.Exec("SELECT 1"); livenessError != nil {
+			targetExecutionError = errors.Join(
+				errTargetDatabaseUnavailable,
+				fmt.Errorf("loading target library %q failed with %w", result.LibraryName, loadError),
+				fmt.Errorf("checking target database liveness failed with %w", livenessError),
+			)
+
+			break
 		}
+		missingLibraries = append(missingLibraries, result.LibraryName)
 	}
-	if len(missingFunctions) == 0 {
+	if len(missingLibraries) == 0 {
 		return 0, targetExecutionError
 	}
 
@@ -877,18 +873,10 @@ func checkRequiredLibraries(sourceConnection *dbconn.DBConn, targetConnection *d
 			"The problematic libraries are:\n",
 	)
 	writeDatabaseFindingHeader(&output, sourceConnection.DBName)
-	for _, result := range missingFunctions {
-		writeObjectFinding(
-			&output,
-			result.ObjectName,
-			"function",
-			result.SchemaName,
-			"The function has identity arguments %q and requires library %q.",
-			result.IdentityArguments,
-			result.LibraryName,
-		)
+	for _, libraryName := range missingLibraries {
+		fmt.Fprintf(&output, "  %q\n", libraryName)
 	}
 	logFindingOutput(&output)
 
-	return len(missingFunctions), targetExecutionError
+	return len(missingLibraries), targetExecutionError
 }
