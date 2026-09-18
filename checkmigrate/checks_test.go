@@ -372,7 +372,7 @@ func TestRequiredLibrariesReportsEveryFailedLoad(t *testing.T) {
 	targetMock.ExpectExec(regexp.QuoteMeta("LOAD 'odd''lib'")).WillReturnError(errors.New("missing quoted library"))
 	targetMock.ExpectExec(regexp.QuoteMeta("SELECT 1")).WillReturnResult(sqlmock.NewResult(0, 0))
 
-	findingCount, err := checkRequiredLibraries(sourceConnection, targetConnection)
+	findingCount, err := checkRequiredLibraries(sourceConnection, targetConnection, make(map[string]bool))
 
 	if err != nil {
 		t.Fatalf("The library check returned an error with %v", err)
@@ -413,16 +413,29 @@ func TestRequiredLibrariesLoadsEachLibraryOnce(t *testing.T) {
 			AddRow("$libdir/missing").
 			AddRow("$libdir/missing"),
 	)
+	sourceMock.ExpectQuery(regexp.QuoteMeta(requiredLibraryQuery)).WillReturnRows(
+		sqlmock.NewRows([]string{"library_name"}).
+			AddRow("$libdir/missing").
+			AddRow("$libdir/missing"),
+	)
 	targetMock.ExpectExec(regexp.QuoteMeta("LOAD '$libdir/missing'")).WillReturnError(errors.New("missing library"))
 	targetMock.ExpectExec(regexp.QuoteMeta("SELECT 1")).WillReturnResult(sqlmock.NewResult(0, 0))
 
-	findingCount, err := checkRequiredLibraries(sourceConnection, targetConnection)
+	isLibraryMissingByName := make(map[string]bool)
+	findingCount, err := checkRequiredLibraries(sourceConnection, targetConnection, isLibraryMissingByName)
+	if err != nil {
+		t.Fatalf("The first library check returned an error with %v", err)
+	}
+	secondFindingCount, err := checkRequiredLibraries(sourceConnection, targetConnection, isLibraryMissingByName)
 
 	if err != nil {
-		t.Fatalf("The library check returned an error with %v", err)
+		t.Fatalf("The second library check returned an error with %v", err)
 	}
 	if findingCount != 1 {
-		t.Fatalf("The library check returned %d findings", findingCount)
+		t.Fatalf("The first library check returned %d findings", findingCount)
+	}
+	if secondFindingCount != 1 {
+		t.Fatalf("The second library check returned %d findings", secondFindingCount)
 	}
 }
 
@@ -448,7 +461,11 @@ func TestRequiredLibrariesReportsTargetDatabaseOutage(t *testing.T) {
 	targetMock.ExpectExec(regexp.QuoteMeta("LOAD '$libdir/unreachable'")).WillReturnError(loadError)
 	targetMock.ExpectExec(regexp.QuoteMeta("SELECT 1")).WillReturnError(livenessError)
 
-	findingCount, executionError := checkRequiredLibraries(sourceConnection, targetConnection)
+	findingCount, executionError := checkRequiredLibraries(
+		sourceConnection,
+		targetConnection,
+		make(map[string]bool),
+	)
 
 	if findingCount != 1 {
 		t.Fatalf("The target outage retained %d earlier missing library findings", findingCount)
@@ -571,13 +588,10 @@ func TestPlpythonCheckUsesLanguageHandler(t *testing.T) {
 }
 
 func TestRemovedViewChecksUseUpstreamOIDFilters(t *testing.T) {
-	for _, query := range []string{removedFunctionViewQuery, removedTypeViewQuery} {
+	for _, query := range []string{removedOperatorViewQuery, removedFunctionViewQuery, removedTypeViewQuery} {
 		if !strings.Contains(query, "c.oid >= 16384") {
 			t.Fatalf("The removed view check does not exclude system relations in %q", query)
 		}
-	}
-	if strings.Contains(removedOperatorViewQuery, "c.oid >= 16384") {
-		t.Fatal("The removed operator view check does not match the upstream query")
 	}
 }
 
@@ -928,8 +942,6 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 		"  checked databases:                 2\n" +
 		"  unreachable databases:             0\n" +
 		"  unavailable databases:             0\n" +
-		"  completed cluster checks:          0\n" +
-		"  failed cluster checks:             0\n" +
 		"  completed database checks:        22\n" +
 		"  failed database checks:            0\n" +
 		"  unavailable database checks:       0\n" +
@@ -1099,7 +1111,7 @@ func TestRunMigrationChecksKeepsIndependentChecksAfterDataTypeSetupFailure(t *te
 	}
 	mock.ExpectRollback()
 
-	summary, executionError := runMigrationChecks(connection, nil)
+	summary, executionError := runMigrationChecks(connection, nil, nil)
 	if executionError == nil || !strings.Contains(executionError.Error(), "data type support unavailable") {
 		t.Fatalf("The partial capability run did not return its setup error: %v", executionError)
 	}
@@ -1178,7 +1190,7 @@ func TestRunMigrationChecksRollsBackAfterIsolationFailure(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).WillReturnError(errors.New("isolation failed"))
 	mock.ExpectRollback()
 
-	_, executionError := runMigrationChecks(connection, nil)
+	_, executionError := runMigrationChecks(connection, nil, nil)
 	if executionError == nil || !strings.Contains(executionError.Error(), "isolation failed") {
 		t.Fatalf("The isolation failure was not reported: %v", executionError)
 	}
@@ -1194,7 +1206,7 @@ func TestRunMigrationChecksReportsSetupCommitFailure(t *testing.T) {
 	expectMigrationSetupQueries(mock)
 	mock.ExpectCommit().WillReturnError(errors.New("setup commit failed"))
 
-	_, executionError := runMigrationChecks(connection, nil)
+	_, executionError := runMigrationChecks(connection, nil, nil)
 	if executionError == nil || !strings.Contains(executionError.Error(), "setup commit failed") {
 		t.Fatalf("The setup commit failure was not reported: %v", executionError)
 	}
@@ -1211,7 +1223,7 @@ func TestRunMigrationChecksRollsBackAfterReadOnlyFailure(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(setTransactionReadOnlyQuery)).WillReturnError(errors.New("read only failed"))
 	mock.ExpectRollback()
 
-	_, executionError := runMigrationChecks(connection, nil)
+	_, executionError := runMigrationChecks(connection, nil, nil)
 	if executionError == nil || !strings.Contains(executionError.Error(), "read only failed") {
 		t.Fatalf("The read-only failure was not reported: %v", executionError)
 	}
@@ -1229,7 +1241,7 @@ func TestRunMigrationChecksReportsRollbackFailureAfterBeginFailure(t *testing.T)
 		WillReturnError(isolationError)
 	mock.ExpectRollback().WillReturnError(rollbackError)
 
-	_, executionError := runMigrationChecks(connection, nil)
+	_, executionError := runMigrationChecks(connection, nil, nil)
 	if !errors.Is(executionError, isolationError) || !errors.Is(executionError, rollbackError) {
 		t.Fatalf("The begin and rollback failures were not reported: %v", executionError)
 	}

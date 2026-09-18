@@ -362,9 +362,7 @@ for expected_check in "${expected_checks[@]}"; do
   fi
 done
 
-if ! grep -Eq 'completed cluster checks:[[:space:]]+0$' "${output_path}" ||
-  ! grep -Eq 'failed cluster checks:[[:space:]]+0$' "${output_path}" ||
-  ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
+if ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
   ! grep -Eq 'failed database checks:[[:space:]]+0$' "${output_path}" ||
   ! grep -Eq 'unavailable database checks:[[:space:]]+0$' "${output_path}"; then
   echo "The finding run did not complete every check" >&2
@@ -419,9 +417,7 @@ for expected_check in "${expected_checks[@]}"; do
   fi
 done
 
-if ! grep -Eq 'completed cluster checks:[[:space:]]+0$' "${output_path}" ||
-  ! grep -Eq 'failed cluster checks:[[:space:]]+0$' "${output_path}" ||
-  ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
+if ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
   ! grep -Eq 'failed database checks:[[:space:]]+0$' "${output_path}" ||
   ! grep -Eq 'unavailable database checks:[[:space:]]+0$' "${output_path}" ||
   ! grep -Eq 'findings:[[:space:]]+0$' "${output_path}"; then

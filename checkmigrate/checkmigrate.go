@@ -74,6 +74,7 @@ func DoCheckMigrate() {
 	unavailableDatabaseCheckCount := 0
 	findingCount := 0
 	hasExecutionError := false
+	isLibraryMissingByName := make(map[string]bool)
 
 	for _, database := range databaseNames {
 		gplog.Debug("Starting checks for database %q", database.DatabaseName)
@@ -103,7 +104,11 @@ func DoCheckMigrate() {
 			}
 		}
 
-		databaseSummary, databaseExecutionError := runMigrationChecks(databaseConnection, targetConnection)
+		databaseSummary, databaseExecutionError := runMigrationChecks(
+			databaseConnection,
+			targetConnection,
+			isLibraryMissingByName,
+		)
 		if database.DatabaseName != bootstrapSourceConnection.DBName {
 			databaseConnection.Close()
 		}
@@ -149,8 +154,6 @@ func DoCheckMigrate() {
 		{label: "checked databases:", count: checkedDatabaseCount},
 		{label: "unreachable databases:", count: unreachableDatabaseCount},
 		{label: "unavailable databases:", count: unavailableDatabaseCount},
-		{label: "completed cluster checks:", count: 0},
-		{label: "failed cluster checks:", count: 0},
 		{label: "completed database checks:", count: completedDatabaseCheckCount},
 		{label: "failed database checks:", count: failedDatabaseCheckCount},
 		{label: "unavailable database checks:", count: unavailableDatabaseCheckCount},

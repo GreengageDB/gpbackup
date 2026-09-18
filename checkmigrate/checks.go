@@ -449,6 +449,7 @@ func runMigrationCheckPlan(
 func runMigrationChecks(
 	sourceConnection *dbconn.DBConn,
 	targetConnection *dbconn.DBConn,
+	isLibraryMissingByName map[string]bool,
 ) (summary migrationCheckSummary, executionError error) {
 	if sourceConnection == nil {
 		return summary, errors.New("source connection is not initialized")
@@ -475,7 +476,7 @@ func runMigrationChecks(
 		checks = append(checks, migrationCheck{
 			name: "Checking for presence of required libraries",
 			doRunCheck: func(connection *dbconn.DBConn) (int, error) {
-				return checkRequiredLibraries(connection, targetConnection)
+				return checkRequiredLibraries(connection, targetConnection, isLibraryMissingByName)
 			},
 		})
 	}
@@ -830,36 +831,46 @@ func checkStatementTriggers(connection *dbconn.DBConn) (int, error) {
 	return len(results), nil
 }
 
-func checkRequiredLibraries(sourceConnection *dbconn.DBConn, targetConnection *dbconn.DBConn) (int, error) {
+func checkRequiredLibraries(
+	sourceConnection *dbconn.DBConn,
+	targetConnection *dbconn.DBConn,
+	isLibraryMissingByName map[string]bool,
+) (int, error) {
 	results := make([]requiredLibraryResult, 0)
 	if queryError := sourceConnection.Select(&results, requiredLibraryQuery); queryError != nil {
 		return 0, queryError
 	}
 
-	checkedLibraries := make(map[string]struct{})
+	reportedLibraries := make(map[string]struct{})
 	missingLibraries := make([]string, 0)
 	var targetExecutionError error
 	for _, result := range results {
-		if _, wasChecked := checkedLibraries[result.LibraryName]; wasChecked {
+		if _, wasReported := reportedLibraries[result.LibraryName]; wasReported {
 			continue
 		}
-		checkedLibraries[result.LibraryName] = struct{}{}
+		reportedLibraries[result.LibraryName] = struct{}{}
 
-		loadQuery := fmt.Sprintf("LOAD '%s'", utils.EscapeSingleQuotes(result.LibraryName))
-		_, loadError := targetConnection.Exec(loadQuery)
-		if loadError == nil {
-			continue
-		}
-		if _, livenessError := targetConnection.Exec("SELECT 1"); livenessError != nil {
-			targetExecutionError = errors.Join(
-				errTargetDatabaseUnavailable,
-				fmt.Errorf("loading target library %q failed with %w", result.LibraryName, loadError),
-				fmt.Errorf("checking target database liveness failed with %w", livenessError),
-			)
+		isMissing, wasChecked := isLibraryMissingByName[result.LibraryName]
+		if !wasChecked {
+			loadQuery := fmt.Sprintf("LOAD '%s'", utils.EscapeSingleQuotes(result.LibraryName))
+			_, loadError := targetConnection.Exec(loadQuery)
+			if loadError != nil {
+				if _, livenessError := targetConnection.Exec("SELECT 1"); livenessError != nil {
+					targetExecutionError = errors.Join(
+						errTargetDatabaseUnavailable,
+						fmt.Errorf("loading target library %q failed with %w", result.LibraryName, loadError),
+						fmt.Errorf("checking target database liveness failed with %w", livenessError),
+					)
 
-			break
+					break
+				}
+			}
+			isMissing = loadError != nil
+			isLibraryMissingByName[result.LibraryName] = isMissing
 		}
-		missingLibraries = append(missingLibraries, result.LibraryName)
+		if isMissing {
+			missingLibraries = append(missingLibraries, result.LibraryName)
+		}
 	}
 	if len(missingLibraries) == 0 {
 		return 0, targetExecutionError
