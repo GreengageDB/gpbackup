@@ -133,7 +133,7 @@ deb : debian/changelog
 
 clean :
 		# Build artifacts
-		rm -f $(BIN_DIR)/$(BACKUP) $(BACKUP) $(BIN_DIR)/$(RESTORE) $(RESTORE) $(BIN_DIR)/$(HELPER) $(BIN_DIR)/$(CHECKMIGRATE) $(HELPER)
+		rm -f $(BIN_DIR)/$(BACKUP) $(BACKUP) $(BIN_DIR)/$(RESTORE) $(RESTORE) $(BIN_DIR)/$(HELPER) $(BIN_DIR)/$(CHECKMIGRATE) $(CHECKMIGRATE) $(HELPER)
 		# Test artifacts
 		rm -rf /tmp/go-build* /tmp/gexec_artifacts* /tmp/ginkgo*
 		docker stop s3-minio # stop minio before removing its data directories
