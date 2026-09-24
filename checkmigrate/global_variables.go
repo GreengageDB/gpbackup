@@ -12,13 +12,13 @@ import (
 
 // Non-flag variables
 var (
-	sourceConnectionPool *dbconn.DBConn
-	targetConnectionPool *dbconn.DBConn
-	version              string
-	wasTerminated        atomic.Bool
-	cleanupOnce          sync.Once
+	bootstrapSourceConnection *dbconn.DBConn
+	targetConnection          *dbconn.DBConn
+	version                   string
+	wasTerminated             atomic.Bool
+	cleanupOnce               sync.Once
 
-	scrapeDbNames bool
+	shouldScrapeDatabaseNames bool
 
 	// Used for mocking purposes
 	createDBConn = dbconn.NewDBConn
@@ -51,23 +51,23 @@ func GetVersion() string {
 	return version
 }
 
-func GetSourceConnectionPool() *dbconn.DBConn {
-	return sourceConnectionPool
+func GetSourceConnection() *dbconn.DBConn {
+	return bootstrapSourceConnection
 }
 
-func GetTargetConnectionPool() *dbconn.DBConn {
-	return targetConnectionPool
+func GetTargetConnection() *dbconn.DBConn {
+	return targetConnection
 }
 
-func GetScrapeDbNames() bool {
-	return scrapeDbNames
+func GetShouldScrapeDatabaseNames() bool {
+	return shouldScrapeDatabaseNames
 }
 
 // ResetGlobalState() clears the global variables before each test
 func ResetGlobalState() {
-	sourceConnectionPool = nil
-	targetConnectionPool = nil
-	scrapeDbNames = false
+	bootstrapSourceConnection = nil
+	targetConnection = nil
+	shouldScrapeDatabaseNames = false
 }
 
 // Util functions to enable ease of access to global flag values

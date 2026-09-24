@@ -13,7 +13,7 @@ pushd gpbackup_tar
   cp ../gpbackup-release-license/open_source_license_VMware_Greenplum_Backup_and_Restore*.txt open_source_licenses_VMware_Greenplum_Backup_and_Restore.txt
 
   mkdir -p bin lib
-  cp gpbackup gpbackup_helper gprestore gpbackup_s3_plugin gpbackup_manager bin/
+  cp gpbackup gpbackup_helper gprestore ggcheckmigrate gpbackup_s3_plugin gpbackup_manager bin/
   cp ../ddboost_components/gpbackup_ddboost_plugin bin/
   cp ../ddboost_components/libDDBoost.so lib/
   tar -czvf bin_gpbackup.tar.gz bin/ lib/ open_source_licenses_VMware_Greenplum_Backup_and_Restore.txt

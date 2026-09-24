@@ -24,7 +24,7 @@ make depend
 make build
 ```
 
-The `build` target will put the `gpbackup` and `gprestore` binaries in `$HOME/go/bin`.
+The `build` target will put the `gpbackup`, `gprestore`, and `ggcheckmigrate` binaries in `$HOME/go/bin`.
 
 This will also attempt to copy `gpbackup_helper` to the greengage segments (retrieving hostnames from `gp_segment_configuration`). Pay attention to the output as it will indicate whether this operation was successful.
 
@@ -109,7 +109,13 @@ The basic command for gprestore is
 gprestore --timestamp <YYYYMMDDHHMMSS>
 ```
 
-Run `--help` with either command for a complete list of options.
+The basic command for ggcheckmigrate is
+
+```bash
+ggcheckmigrate --source-host <source_host> --source-port <source_port>
+```
+
+Run `--help` with any of these commands for a complete list of options.
 
 ## Cleaning up
 
