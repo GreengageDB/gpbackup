@@ -115,6 +115,38 @@ The basic command for ggcheckmigrate is
 ggcheckmigrate --source-host <source_host> --source-port <source_port>
 ```
 
+`ggcheckmigrate` finds known compatibility problems before a logical migration from Greengage 6 to Greengage 7. It checks every connectable source database by default. Use `--source-database` to check one database.
+
+The source and target connections can be local or remote. They use standard PostgreSQL authentication, including `.pgpass`, `PGPASSWORD`, ident, peer, and trust. The target connection is optional. If a target is specified, install and configure every extension and shared library used by the source cluster on the target cluster.
+
+The following problems are checked.
+
+- A LIST partition key contains multiple columns.
+- A function depends on Python 2.
+- A view or materialized view uses a removed operator, function, or data type.
+- A table column uses the removed `abstime`, `reltime`, `tinterval`, or `unknown` data type.
+- A required library cannot be loaded on the target cluster. This check requires a target connection.
+- An append-optimized partition omits an inherited storage option.
+- A function has a restricted `EXECUTE ON` location and does not return a set.
+- A unique index on a partitioned table omits a partition key.
+- A range partition uses `START EXCLUSIVE` or `END INCLUSIVE` with a text, float, or numeric key.
+- A statement trigger exists.
+
+Each finding includes the database, schema, object name, object type, problem, and a possible correction. A run succeeds when no problem is found. The utility does not perform a test restore. Other migration problems may still occur.
+
+The utility returns these exit codes.
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | No checked migration problems were found. |
+| 1 | At least one checked migration problem was found. |
+| 2 | The source cluster is not Greengage 6. |
+| 3 | The target cluster is not Greengage 7. |
+| 4 | A command parameter is invalid. |
+| 5 | The utility could not complete its checks. |
+
+Do not pass `--with-stats` to `gpbackup` when creating a backup for migration.
+
 Run `--help` with any of these commands for a complete list of options.
 
 ## Cleaning up

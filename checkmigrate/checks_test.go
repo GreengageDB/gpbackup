@@ -601,15 +601,12 @@ func TestUnknownRelationKindUsesCatalogCode(t *testing.T) {
 	}
 }
 
-func TestSourceDatabaseEnumerationExcludesTemplateDatabases(t *testing.T) {
+func TestSourceDatabaseEnumerationIncludesEveryConnectableDatabase(t *testing.T) {
 	if !strings.Contains(sourceDatabaseNamesQuery, "datallowconn") {
 		t.Fatal("The source database enumeration does not require connectable databases")
 	}
-	if !strings.Contains(sourceDatabaseNamesQuery, "NOT datistemplate") {
-		t.Fatal("The source database enumeration does not exclude template databases")
-	}
-	if !strings.Contains(sourceDatabaseNamesQuery, "datname = 'postgres'") {
-		t.Fatal("The source database enumeration excludes postgres on Greengage 6")
+	if strings.Contains(sourceDatabaseNamesQuery, "datistemplate") {
+		t.Fatal("The source database enumeration excludes connectable template databases")
 	}
 }
 
