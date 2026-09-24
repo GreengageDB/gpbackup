@@ -81,6 +81,14 @@ fail_with_output() {
 
 "${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${database_name}"
 "${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${enumeration_database_name}"
+"${source_psql[@]}" postgres -c "CREATE DATABASE ${database_name}"
+"${source_psql[@]}" postgres -c "CREATE DATABASE ${enumeration_database_name}"
+cleanup_fixture() {
+  "${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${database_name}"
+  "${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${enumeration_database_name}"
+  cleanup_output
+}
+trap cleanup_fixture EXIT
 
 all_database_exit_code=0
 all_database_command=(
@@ -90,29 +98,33 @@ all_database_command=(
   --source-user "${source_user}"
   --debug
 )
+if [[ -n ${target_host} ]]; then
+  all_database_command+=(
+    --target-host "${target_host}"
+    --target-port "${target_port}"
+    --target-user "${target_user}"
+  )
+fi
 "${all_database_command[@]}" >"${output_path}" 2>&1 || all_database_exit_code=$?
-if [[ ${all_database_exit_code} -gt 1 ]]; then
-  fail_with_output "The check of all connectable databases" "0 or 1" "${all_database_exit_code}"
+if [[ ${all_database_exit_code} -ne 0 ]]; then
+  fail_with_output "The check of all connectable databases" 0 "${all_database_exit_code}"
 fi
-if ! grep -Fq 'Starting checks for database "postgres"' "${output_path}"; then
-  echo "The fresh cluster run did not check postgres" >&2
+for expected_database_name in postgres template1 "${database_name}" "${enumeration_database_name}"; do
+  if ! grep -Fq "Starting checks for database \"${expected_database_name}\"" "${output_path}"; then
+    echo "The all-database run did not check ${expected_database_name}" >&2
+    cat "${output_path}" >&2
+    exit 1
+  fi
+done
+expected_all_database_check_count=$((expected_database_check_count * 4))
+if ! grep -Eq 'enumerated databases:[[:space:]]+4$' "${output_path}" ||
+  ! grep -Eq 'checked databases:[[:space:]]+4$' "${output_path}" ||
+  ! grep -Eq "completed database checks:[[:space:]]+${expected_all_database_check_count}$" "${output_path}" ||
+  ! grep -Eq 'findings:[[:space:]]+0$' "${output_path}"; then
+  echo "The all-database run did not complete every check with zero findings" >&2
   cat "${output_path}" >&2
   exit 1
 fi
-if grep -Fq 'Starting checks for database "template1"' "${output_path}"; then
-  echo "The fresh cluster run checked template1" >&2
-  cat "${output_path}" >&2
-  exit 1
-fi
-
-"${source_psql[@]}" postgres -c "CREATE DATABASE ${database_name}"
-"${source_psql[@]}" postgres -c "CREATE DATABASE ${enumeration_database_name}"
-cleanup_fixture() {
-  "${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${database_name}"
-  "${source_psql[@]}" postgres -c "DROP DATABASE IF EXISTS ${enumeration_database_name}"
-  cleanup_output
-}
-trap cleanup_fixture EXIT
 
 run_check() {
   "${check_command[@]}"
