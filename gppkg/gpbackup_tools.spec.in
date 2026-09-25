@@ -1,7 +1,7 @@
 Name:       gpbackup_tools_%{operating_system}
 Version:    %{rpm_version}
 Release:    1
-Summary:    Backup and restore utilities for Greenplum
+Summary:    Backup, restore, and migration check utilities for Greenplum
 License:    VMware General Terms
 Source0:    bin_gpbackup.tar.gz
 BuildArch:  x86_64
@@ -11,7 +11,8 @@ Prefix:     /usr/local
 AutoReqProv: no
 
 %description
-Backup and restore utilities for Greenplum
+Backup and restore utilities for Greenplum, together with ggcheckmigrate,
+which checks a version 6 cluster before migration to version 7.
 
 %prep
 %setup -c -q -T -D -a 0
@@ -19,7 +20,7 @@ Backup and restore utilities for Greenplum
 %install
 mkdir -p $RPM_BUILD_ROOT%{prefix}/bin $RPM_BUILD_ROOT%{prefix}/lib
 cp open_source_licenses_VMware_Greenplum_Backup_and_Restore.txt $RPM_BUILD_ROOT%{prefix}/
-cp bin/gpbackup bin/gprestore bin/gpbackup_helper bin/gpbackup_manager bin/gpbackup_ddboost_plugin bin/gpbackup_s3_plugin $RPM_BUILD_ROOT%{prefix}/bin
+cp bin/gpbackup bin/gprestore bin/gpbackup_helper bin/ggcheckmigrate bin/gpbackup_manager bin/gpbackup_ddboost_plugin bin/gpbackup_s3_plugin $RPM_BUILD_ROOT%{prefix}/bin
 cp lib/libDDBoost.so $RPM_BUILD_ROOT%{prefix}/lib
 
 %files
@@ -27,6 +28,7 @@ cp lib/libDDBoost.so $RPM_BUILD_ROOT%{prefix}/lib
 %{prefix}/bin/gpbackup
 %{prefix}/bin/gprestore
 %{prefix}/bin/gpbackup_helper
+%{prefix}/bin/ggcheckmigrate
 %{prefix}/bin/gpbackup_manager
 %{prefix}/bin/gpbackup_ddboost_plugin
 %{prefix}/bin/gpbackup_s3_plugin
