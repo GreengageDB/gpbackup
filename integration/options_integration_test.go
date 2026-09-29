@@ -29,6 +29,18 @@ FORMAT 'csv';`, tableName, extPartName))
 	testhelper.AssertQueryRuns(connectionPool, fmt.Sprintf(`ALTER TABLE %[1]s EXCHANGE PARTITION %[2]s WITH TABLE %[1]s_ext_part_ WITHOUT VALIDATION;`, tableName, extPartName))
 }
 
+func createMultiLevelPartitionTable(tableName string) {
+	testhelper.AssertQueryRuns(connectionPool, fmt.Sprintf(`CREATE TABLE %s (id int, gender char(1), year int)
+		DISTRIBUTED BY (id)
+		PARTITION BY LIST (gender)
+		SUBPARTITION BY RANGE (year)
+		SUBPARTITION TEMPLATE (
+			SUBPARTITION y2020 START (2020) END (2021),
+			SUBPARTITION y2021 START (2021) END (2022) )
+		( PARTITION girls VALUES ('F'),
+		  PARTITION boys VALUES ('M') )`, tableName))
+}
+
 func dropTableWithExternalPartition(tableName string) {
 	testhelper.AssertQueryRuns(connectionPool, fmt.Sprintf("DROP TABLE %s", tableName))
 	testhelper.AssertQueryRuns(connectionPool, fmt.Sprintf("DROP TABLE %s_ext_part_", tableName))
@@ -230,6 +242,68 @@ bar";
 				// with ALTER TABLE ATTACH PARTITION. Therefore, only the included leaf partition and its root
 				// partition will have their metadata dumped.
 				expectedTableNames = append(expectedTableNames, "public.partition_table_1_prt_girls")
+			}
+
+			tables := subject.GetIncludedTables()
+			sort.Strings(tables)
+			Expect(tables).To(Equal(expectedTableNames))
+		})
+		It("returns parent tables of a multi-level leaf partition if the filter includes that leaf table and leaf-partition-data is set", func() {
+			_ = backupCmdFlags.Set(options.LEAF_PARTITION_DATA, "true")
+			_ = backupCmdFlags.Set(options.INCLUDE_RELATION, "public.multilevel_1_prt_boys_2_prt_y2020")
+			createMultiLevelPartitionTable("public.multilevel")
+			defer testhelper.AssertQueryRuns(connectionPool, "DROP TABLE public.multilevel")
+
+			subject, err := options.NewOptions(backupCmdFlags)
+			Expect(err).To(Not(HaveOccurred()))
+			backup.ValidateAndProcessFilterLists(subject)
+
+			includeOids := backup.GetOidsFromRelationList(backup.IncludedRelationFqns)
+			err = backup.ExpandIncludesForPartitions(connectionPool, subject, includeOids, backupCmdFlags)
+			Expect(err).To(Not(HaveOccurred()))
+
+			expectedTableNames := []string{
+				"public.multilevel",
+				"public.multilevel_1_prt_boys",
+				"public.multilevel_1_prt_boys_2_prt_y2020",
+			}
+			if connectionPool.Version.Before("7") {
+				// For GPDB 6 and earlier, leaves of an intermediate partition that has an included leaf are
+				// expanded as well, since they are part of the same root partition DDL.
+				expectedTableNames = append(expectedTableNames, "public.multilevel_1_prt_boys_2_prt_y2021")
+			}
+
+			tables := subject.GetIncludedTables()
+			sort.Strings(tables)
+			Expect(tables).To(Equal(expectedTableNames))
+		})
+		It("returns parent tables of multi-level leaf partitions if the filter includes leaf tables under different intermediate partitions and leaf-partition-data is set", func() {
+			_ = backupCmdFlags.Set(options.LEAF_PARTITION_DATA, "true")
+			_ = backupCmdFlags.Set(options.INCLUDE_RELATION, "public.multilevel_1_prt_boys_2_prt_y2020")
+			_ = backupCmdFlags.Set(options.INCLUDE_RELATION, "public.multilevel_1_prt_girls_2_prt_y2021")
+			createMultiLevelPartitionTable("public.multilevel")
+			defer testhelper.AssertQueryRuns(connectionPool, "DROP TABLE public.multilevel")
+
+			subject, err := options.NewOptions(backupCmdFlags)
+			Expect(err).To(Not(HaveOccurred()))
+			backup.ValidateAndProcessFilterLists(subject)
+
+			includeOids := backup.GetOidsFromRelationList(backup.IncludedRelationFqns)
+			err = backup.ExpandIncludesForPartitions(connectionPool, subject, includeOids, backupCmdFlags)
+			Expect(err).To(Not(HaveOccurred()))
+
+			expectedTableNames := []string{
+				"public.multilevel",
+				"public.multilevel_1_prt_boys",
+				"public.multilevel_1_prt_boys_2_prt_y2020",
+				"public.multilevel_1_prt_girls",
+				"public.multilevel_1_prt_girls_2_prt_y2021",
+			}
+			if connectionPool.Version.Before("7") {
+				expectedTableNames = append(expectedTableNames,
+					"public.multilevel_1_prt_boys_2_prt_y2021",
+					"public.multilevel_1_prt_girls_2_prt_y2020")
+				sort.Strings(expectedTableNames)
 			}
 
 			tables := subject.GetIncludedTables()
