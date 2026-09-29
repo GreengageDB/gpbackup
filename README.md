@@ -115,9 +115,32 @@ The basic command for ggcheckmigrate is
 ggcheckmigrate --source-host <source_host> --source-port <source_port>
 ```
 
+To check whether the required libraries can be loaded on the target cluster, provide both connections.
+
+```bash
+ggcheckmigrate \
+  --source-host source.example.com --source-port 5432 --source-user source_admin \
+  --target-host target.example.com --target-port 5432 --target-user target_admin
+```
+
 `ggcheckmigrate` finds known compatibility problems before a logical migration from Greengage 6 to Greengage 7. It checks every connectable source database by default. Use `--source-database` to check one database.
 
-The source and target connections can be local or remote. They use standard PostgreSQL authentication, including `.pgpass`, `PGPASSWORD`, ident, peer, and trust. The target connection is optional. If a target is specified, install and configure every extension and shared library used by the source cluster on the target cluster.
+The source and target connections can be local or remote. The target connection is optional and uses the `postgres` database. Both connections use standard PostgreSQL authentication, including `.pgpass`, `PGPASSWORD`, ident, peer, and trust. If a target is specified, install and configure every extension and shared library used by the source cluster on the target cluster.
+
+For separate passwords, add entries for both connections to `~/.pgpass` and set the file permissions to `0600`.
+
+```text
+source.example.com:5432:*:source_admin:source_password
+target.example.com:5432:postgres:target_admin:target_password
+```
+
+The `*` matches every connectable source database. If both connections use the same password, `PGPASSWORD` can be set for one command.
+
+```bash
+PGPASSWORD=shared_password ggcheckmigrate \
+  --source-host source.example.com --source-port 5432 --source-user source_admin \
+  --target-host target.example.com --target-port 5432 --target-user target_admin
+```
 
 The following problems are checked.
 
