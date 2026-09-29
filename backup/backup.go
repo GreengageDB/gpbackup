@@ -440,7 +440,11 @@ func backupStatistics(tables []Table) {
 	gplog.Info("Writing query planner statistics to %s", statisticsFilename)
 	statisticsFile := utils.NewFileWithByteCountFromFile(statisticsFilename)
 	defer statisticsFile.Close()
-	backupTableStatistics(statisticsFile, tables)
+	statisticsTables := tables
+	if connectionPool.Version.Before("7") && !MustGetFlagBool(options.LEAF_PARTITION_DATA) {
+		statisticsTables = append(append([]Table{}, tables...), GetChildPartitionsForStatistics(connectionPool, tables)...)
+	}
+	backupTableStatistics(statisticsFile, statisticsTables)
 
 	logCompletionMessage("Query planner statistics backup")
 }
