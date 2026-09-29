@@ -85,4 +85,58 @@ var _ = Describe("backup integration tests", func() {
 			structmatcher.ExpectStructsToMatchExcluding(&expectedStats, &tableTupleStats, "RelPages")
 		})
 	})
+	Describe("GetChildPartitionsForStatistics", func() {
+		It("returns non-external child partitions of partition roots", func() {
+			if connectionPool.Version.AtLeast("7") {
+				Skip("Test only applicable to GPDB6 and earlier")
+			}
+			testhelper.AssertQueryRuns(connectionPool, `CREATE TABLE public.multilevel (id int, gender char(1), year int)
+				DISTRIBUTED BY (id)
+				PARTITION BY LIST (gender)
+				SUBPARTITION BY RANGE (year)
+				SUBPARTITION TEMPLATE (
+					SUBPARTITION y2020 START (2020) END (2021),
+					SUBPARTITION y2021 START (2021) END (2022) )
+				( PARTITION girls VALUES ('F'),
+				  PARTITION boys VALUES ('M') )`)
+			defer testhelper.AssertQueryRuns(connectionPool, "DROP TABLE public.multilevel")
+			testhelper.AssertQueryRuns(connectionPool, `CREATE TABLE public.part_ext (id int, gender char(1))
+				DISTRIBUTED BY (id)
+				PARTITION BY LIST (gender)
+				( PARTITION girls VALUES ('F'),
+				  PARTITION boys VALUES ('M') )`)
+			defer testhelper.AssertQueryRuns(connectionPool, "DROP TABLE public.part_ext")
+			testhelper.AssertQueryRuns(connectionPool, `CREATE EXTERNAL WEB TABLE public.part_ext_ext (LIKE public.part_ext_1_prt_girls)
+				EXECUTE 'echo -e "2\n1"' ON HOST FORMAT 'csv'`)
+			defer testhelper.AssertQueryRuns(connectionPool, "DROP TABLE public.part_ext_ext")
+			testhelper.AssertQueryRuns(connectionPool, "ALTER TABLE public.part_ext EXCHANGE PARTITION girls WITH TABLE public.part_ext_ext WITHOUT VALIDATION")
+
+			rootTables := []backup.Table{
+				{Relation: backup.Relation{Schema: "public", Name: "foo", Oid: tableOid}},
+				{Relation: backup.Relation{Schema: "public", Name: "multilevel", Oid: testutils.OidFromObjectName(connectionPool, "public", "multilevel", backup.TYPE_RELATION)},
+					TableDefinition: backup.TableDefinition{PartitionLevelInfo: backup.PartitionLevelInfo{Level: "p"}}},
+				{Relation: backup.Relation{Schema: "public", Name: "part_ext", Oid: testutils.OidFromObjectName(connectionPool, "public", "part_ext", backup.TYPE_RELATION)},
+					TableDefinition: backup.TableDefinition{PartitionLevelInfo: backup.PartitionLevelInfo{Level: "p"}}},
+			}
+			children := backup.GetChildPartitionsForStatistics(connectionPool, rootTables)
+
+			childNames := make([]string, 0)
+			for _, child := range children {
+				childNames = append(childNames, child.FQN())
+			}
+			sort.Strings(childNames)
+			Expect(childNames).To(Equal([]string{
+				"public.multilevel_1_prt_boys",
+				"public.multilevel_1_prt_boys_2_prt_y2020",
+				"public.multilevel_1_prt_boys_2_prt_y2021",
+				"public.multilevel_1_prt_girls",
+				"public.multilevel_1_prt_girls_2_prt_y2020",
+				"public.multilevel_1_prt_girls_2_prt_y2021",
+				"public.part_ext_1_prt_boys",
+			}))
+		})
+		It("returns no tables if there are no partition roots", func() {
+			Expect(backup.GetChildPartitionsForStatistics(connectionPool, tables)).To(BeEmpty())
+		})
+	})
 })

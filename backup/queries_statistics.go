@@ -7,6 +7,7 @@ package backup
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
@@ -141,6 +142,49 @@ func GetAttributeStatistics(connectionPool *dbconn.DBConn, tables []Table, proce
 		processRow(&attStat)
 	}
 	gplog.FatalOnError(rows.Err())
+}
+
+/*
+ * In GPDB 6 and earlier, a backup without --leaf-partition-data lists only the
+ * roots of partition tables, because their child partitions are created by the
+ * root DDL and loaded through the root. Their statistics still need to be backed
+ * up, so this returns the non-external child partitions of the given roots.
+ * External partitions are already in the backup set as separate tables.
+ */
+func GetChildPartitionsForStatistics(connectionPool *dbconn.DBConn, tables []Table) []Table {
+	rootOids := make([]string, 0)
+	for _, table := range tables {
+		if table.PartitionLevelInfo.Level == "p" {
+			rootOids = append(rootOids, fmt.Sprintf("%d", table.Oid))
+		}
+	}
+	if len(rootOids) == 0 {
+		return []Table{}
+	}
+
+	query := fmt.Sprintf(`
+	SELECT n.oid AS schemaoid,
+		c.oid AS oid,
+		quote_ident(n.nspname) AS schema,
+		quote_ident(c.relname) AS name
+	FROM pg_partition p
+		JOIN pg_partition_rule r ON r.paroid = p.oid
+		JOIN pg_class c ON c.oid = r.parchildrelid
+		JOIN pg_namespace n ON c.relnamespace = n.oid
+		LEFT JOIN pg_exttable e ON e.reloid = c.oid
+	WHERE p.parrelid IN (%s)
+		AND e.reloid IS NULL
+	ORDER BY c.oid`, strings.Join(rootOids, ", "))
+
+	relations := make([]Relation, 0)
+	err := connectionPool.Select(&relations, query)
+	gplog.FatalOnError(err)
+
+	children := make([]Table, 0, len(relations))
+	for _, relation := range relations {
+		children = append(children, Table{Relation: relation})
+	}
+	return children
 }
 
 type TupleStatistic struct {

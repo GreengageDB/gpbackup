@@ -2358,6 +2358,55 @@ var _ = Describe("backup and restore end to end tests", func() {
 				`SELECT count(*) FROM pg_stat_last_operation WHERE objid IN ('public.foo'::regclass::oid, 'public.holds'::regclass::oid, 'public.sales'::regclass::oid, 'schema2.returns'::regclass::oid, 'schema2.foo2'::regclass::oid, 'schema2.foo3'::regclass::oid, 'schema2.ao1'::regclass::oid, 'schema2.ao2'::regclass::oid) AND staactionname='ANALYZE';`)
 			Expect(restoredTablesAnalyzed).To(Equal("0"))
 		})
+		It("runs gpbackup and gprestore with with-stats flag and restores statistics of leaf partitions without leaf-partition-data", func() {
+			// gpbackup before this fix does not back up statistics of leaf partitions without --leaf-partition-data
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
+
+			testhelper.AssertQueryRuns(backupConn, `
+				CREATE TABLE pt (
+					id character varying(13),
+					flg smallint,
+					dttm timestamp without time zone,
+					src character varying(80)
+				) WITH (appendonly='true', orientation='row', compresstype=zstd, compresslevel='3') DISTRIBUTED BY (id) PARTITION BY LIST(src) (
+					PARTITION src_mdm VALUES('val') WITH (tablename='pt_1_prt_src_mdm', appendonly='true', orientation='row', compresstype=zstd, compresslevel='3' )
+				);
+
+				INSERT INTO pt(id, flg, dttm, src) VALUES (1, 1, now(), 'val');
+
+				ANALYZE pt;
+				ANALYZE ROOTPARTITION pt;
+			`)
+
+			defer testhelper.AssertQueryRuns(backupConn,
+				`DROP TABLE pt CASCADE;`)
+			outputBkp := gpbackup(gpbackupPath, backupHelperPath,
+				"--with-stats",
+				"--backup-dir", backupDir, "--single-backup-dir")
+			timestamp := getBackupTimestamp(string(outputBkp))
+
+			outputRes := gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--with-stats",
+				"--backup-dir", backupDir)
+
+			Expect(string(outputRes)).To(ContainSubstring("Query planner statistics restore complete"))
+			assertDataRestored(restoreConn, publicSchemaTupleCounts)
+			assertDataRestored(restoreConn, schema2TupleCounts)
+			assertPGClassStatsRestored(backupConn, restoreConn, map[string]int{"public.pt_1_prt_src_mdm": 1})
+
+			statsQuery := fmt.Sprintf(`SELECT count(*) AS string FROM pg_statistic st left join pg_class cl on st.starelid = cl.oid left join pg_namespace nm on cl.relnamespace = nm.oid where %s;`, backup.SchemaFilterClause("nm"))
+			backupStatisticCount := dbconn.MustSelectString(backupConn, statsQuery)
+			restoredStatisticsCount := dbconn.MustSelectString(restoreConn, statsQuery)
+
+			Expect(backupStatisticCount).To(Equal(restoredStatisticsCount))
+
+			leafStatsQuery := `SELECT count(*) AS string FROM pg_statistic WHERE starelid = 'public.pt_1_prt_src_mdm'::regclass::oid`
+			Expect(dbconn.MustSelectString(restoreConn, leafStatsQuery)).To(Equal(dbconn.MustSelectString(backupConn, leafStatsQuery)))
+			Expect(dbconn.MustSelectString(restoreConn, leafStatsQuery)).ToNot(Equal("0"))
+		})
 		It("restores statistics only for tables specified in --include-table flag when runs gprestore with with-stats flag and single-backup-dir", func() {
 			if useOldBackupVersion {
 				Skip("This test is not needed for old backup versions")
