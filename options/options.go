@@ -245,6 +245,14 @@ func (o *Options) QuoteExcludeRelations(conn *dbconn.DBConn) error {
 	return nil
 }
 
+// oidValuesList formats oids as a VALUES list for use in "IN (...)". A literal
+// IN list is checked linearly against every catalog row scanned, so the cost grows
+// with catalog size times list length (thousands of leaf partitions on a large
+// catalog took minutes); IN (VALUES ...) is planned as a hashed semi-join instead.
+func oidValuesList(oids []string) string {
+	return "VALUES (" + strings.Join(oids, "), (") + ")"
+}
+
 // given a set of table oids, return a deduplicated set of other tables that EITHER depend
 // on them, OR that they depend on. The behavior for which is set with recurseDirection.
 func (o *Options) recurseTableDepend(conn *dbconn.DBConn, includeOids []string, tablesToRetrieve string, getLeafPartitions bool) ([]string, error) {
@@ -262,7 +270,9 @@ func (o *Options) recurseTableDepend(conn *dbconn.DBConn, includeOids []string, 
 				pg_depend dep
 				INNER JOIN pg_class cls ON dep.refobjid = cls.oid
 			WHERE
-				dep.objid IN (%[1]s)
+				dep.classid = 'pg_class'::regclass
+				AND dep.refclassid = 'pg_class'::regclass
+				AND dep.objid IN (%[1]s)
 				AND cls.relkind IN ('r', 'p', 'f')`
 	childrenQuery := `
 			SELECT dep.objid
@@ -270,7 +280,9 @@ func (o *Options) recurseTableDepend(conn *dbconn.DBConn, includeOids []string, 
 				pg_depend dep
 				INNER JOIN pg_class cls ON dep.objid = cls.oid
 			WHERE
-				dep.refobjid IN (%[1]s)
+				dep.classid = 'pg_class'::regclass
+				AND dep.refclassid = 'pg_class'::regclass
+				AND dep.refobjid IN (%[1]s)
 				AND cls.relkind IN ('r', 'p', 'f')`
 
 	if conn.Version.Before("7") {
@@ -309,7 +321,7 @@ func (o *Options) recurseTableDepend(conn *dbconn.DBConn, includeOids []string, 
 	for foundDeps {
 		foundDeps = false
 		depOids := make([]string, 0)
-		loopDepQuery := fmt.Sprintf(dependQuery, strings.Join(loopOids, ", "))
+		loopDepQuery := fmt.Sprintf(dependQuery, oidValuesList(loopOids))
 		err = conn.Select(&depOids, loopDepQuery)
 		if err != nil {
 			gplog.Warn("Table dependency query failed: %s", loopDepQuery)
@@ -343,9 +355,6 @@ func (o *Options) recurseTableDepend(conn *dbconn.DBConn, includeOids []string, 
 
 func (o Options) GetUserTableRelationsWithIncludeFiltering(connectionPool *dbconn.DBConn, includeOids []string, no_inherits bool) ([]Relation, error) {
 
-	oidStr := strings.Join(includeOids, ", ")
-	var childPartitionFilter, parentAndExternalPartitionFilter string
-
 	// If --no-inherits is passed, do not expand to parents or children, and just pass through the
 	// initial list of filtered tables to populate the Relation structs.
 	if !no_inherits {
@@ -363,9 +372,6 @@ func (o Options) GetUserTableRelationsWithIncludeFiltering(connectionPool *dbcon
 		if err != nil {
 			return nil, err
 		}
-		if len(childOids) > 0 {
-			childPartitionFilter = fmt.Sprintf(`OR c.oid IN (%s)`, strings.Join(childOids, ", "))
-		}
 		includeOids = childOids
 
 		// Step 2: Get all parents, both of the original included tables and of the children retrieved in step 1.
@@ -374,9 +380,6 @@ func (o Options) GetUserTableRelationsWithIncludeFiltering(connectionPool *dbcon
 		parentOids, err := o.recurseTableDepend(connectionPool, includeOids, "parents", o.isLeafPartitionData)
 		if err != nil {
 			return nil, err
-		}
-		if len(parentOids) > 0 {
-			parentAndExternalPartitionFilter = fmt.Sprintf(`OR c.oid IN (%s)`, strings.Join(parentOids, ", "))
 		}
 		includeOids = parentOids
 
@@ -389,12 +392,12 @@ func (o Options) GetUserTableRelationsWithIncludeFiltering(connectionPool *dbcon
 			if err != nil {
 				return nil, err
 			}
-			if len(childOids) > 0 {
-				childPartitionFilter = fmt.Sprintf(`OR c.oid IN (%s)`, strings.Join(childOids, ", "))
-			}
 			includeOids = childOids
 		}
 	}
+
+	// Each step above returns its input plus what it found, so includeOids now holds the
+	// original tables and all of their parents and children.
 
 	query := fmt.Sprintf(`
 SELECT
@@ -406,15 +409,10 @@ FROM pg_class c
 JOIN pg_namespace n
 	ON c.relnamespace = n.oid
 WHERE %s
-AND (
-	-- Get tables in the include list
-	c.oid IN (%s)
-	%s
-	%s
-)
+AND c.oid IN (%s)
 AND relkind IN ('r', 'f', 'p')
 AND %s
-ORDER BY c.oid;`, o.schemaFilterClause("n"), oidStr, parentAndExternalPartitionFilter, childPartitionFilter, ExtensionFilterClause("c"))
+ORDER BY c.oid;`, o.schemaFilterClause("n"), oidValuesList(includeOids), ExtensionFilterClause("c"))
 
 	results := make([]Relation, 0)
 	err := connectionPool.Select(&results, query)
