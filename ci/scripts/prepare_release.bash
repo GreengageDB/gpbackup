@@ -29,22 +29,26 @@ mkdir components_untarred_ubuntu/output
 cp components_untarred_rhel7/bin/gpbackup components_untarred_rhel7/components
 cp components_untarred_rhel7/bin/gprestore components_untarred_rhel7/components
 cp components_untarred_rhel7/bin/gpbackup_helper components_untarred_rhel7/components
+cp components_untarred_rhel7/bin/ggcheckmigrate components_untarred_rhel7/components
 tar -czvf components_untarred_rhel7/output/gpbackup_binaries_rhel7.tar.gz -C components_untarred_rhel7/components .
 
 # RHEL8
 cp components_untarred_rhel8/bin/gpbackup components_untarred_rhel8/components
 cp components_untarred_rhel8/bin/gprestore components_untarred_rhel8/components
 cp components_untarred_rhel8/bin/gpbackup_helper components_untarred_rhel8/components
+cp components_untarred_rhel8/bin/ggcheckmigrate components_untarred_rhel8/components
 tar -czvf components_untarred_rhel8/output/gpbackup_binaries_rhel8.tar.gz -C components_untarred_rhel8/components .
 
 # RHEL9
 cp components_untarred_rhel9/bin/gpbackup components_untarred_rhel9/components
 cp components_untarred_rhel9/bin/gprestore components_untarred_rhel9/components
 cp components_untarred_rhel9/bin/gpbackup_helper components_untarred_rhel9/components
+cp components_untarred_rhel9/bin/ggcheckmigrate components_untarred_rhel9/components
 tar -czvf components_untarred_rhel9/output/gpbackup_binaries_rhel9.tar.gz -C components_untarred_rhel9/components .
 
 # UBUNTU
 cp components_untarred_ubuntu/bin/gpbackup components_untarred_ubuntu/components
 cp components_untarred_ubuntu/bin/gprestore components_untarred_ubuntu/components
 cp components_untarred_ubuntu/bin/gpbackup_helper components_untarred_ubuntu/components
+cp components_untarred_ubuntu/bin/ggcheckmigrate components_untarred_ubuntu/components
 tar -czvf components_untarred_ubuntu/output/gpbackup_binaries_ubuntu.tar.gz -C components_untarred_ubuntu/components .

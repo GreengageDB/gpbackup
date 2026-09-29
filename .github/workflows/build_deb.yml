@@ -20,3 +20,7 @@ jobs:
       runner: "ubuntu-${{ matrix.ubuntu_version }}"
       test_docker: "ubuntu:${{ matrix.ubuntu_version }}"
       add_greengage_repo: true
+      verify_commands: |
+        test -x /opt/greengagedb/gpbackup/bin/ggcheckmigrate
+        /opt/greengagedb/gpbackup/bin/ggcheckmigrate --version
+        find /opt/greengagedb -path '/opt/greengagedb/greengage*/bin/ggcheckmigrate' -type l | grep -q .
