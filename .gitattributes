@@ -1,0 +1,2 @@
+# Let `git archive` (GitHub source tarballs) bake the version into .version
+/.version export-subst

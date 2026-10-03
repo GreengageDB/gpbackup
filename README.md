@@ -32,6 +32,34 @@ This will also attempt to copy `gpbackup_helper` to the greengage segments (retr
 
 `make install` will scp the `gpbackup_helper` binary (used with -single-data-file flag) to all hosts
 
+## Building a DEB package
+
+`.deb` packages are built using debhelper (`debian/`, `package.mk`). See
+[debian/README.md](debian/README.md) for the full packaging reference
+(environment variables, generated files, build flow).
+
+Local build in a container (recommended — runs in the Greengage developer
+image, no need to install Go or the Debian packaging toolchain on the host):
+
+```bash
+ci/build_in_docker_local.sh          # Ubuntu 22.04
+ci/build_in_docker_local.sh 24.04
+```
+
+Local build on a host with Go (in `PATH` or `/usr/local/go/bin`) and
+`debhelper`/`devscripts` installed:
+
+```bash
+make -f package.mk pkg
+```
+
+Resulting `.deb`, `.ddeb`, `.build`, `.buildinfo`, and `.changes` land
+in `./Package/gpbackup_${PACKAGE_VERSION}/`. The output directory can be
+overridden with `DEB_PACKAGES`.
+
+The package installs the binaries into `/opt/greengagedb/gpbackup/bin` and
+symlinks them into `bin/` of every installed `/opt/greengagedb/greengage*`.
+
 ## Validation and code quality
 
 ### Test setup

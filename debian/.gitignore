@@ -1,0 +1,13 @@
+# debian/.gitignore
+/*
+!/.gitignore
+!/*.in
+!/compat
+!/control
+!/copyright
+!/install
+!/lintian-overrides
+!/postinst
+!/postrm
+!/rules
+!/README*

@@ -1,0 +1,3 @@
+opt/greengagedb/gpbackup/bin/gpbackup
+opt/greengagedb/gpbackup/bin/gprestore
+opt/greengagedb/gpbackup/bin/gpbackup_helper

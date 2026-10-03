@@ -27,3 +27,7 @@ _testmain.go
 gpbackup
 gprestore
 gpbackup_helper
+
+# Local excludes in root directory
+/Package/
+/.debuilder.lock
