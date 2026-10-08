@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
+	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/utils"
 
 	"github.com/spf13/cobra"
@@ -42,6 +43,8 @@ func DoSetup() error {
 	SetLoggerVerbosity()
 	gplog.Verbose("CheckMigrate Command: %s", os.Args)
 	gplog.Info("ggcheckmigrate version = %s", GetVersion())
+	excludedSchemaNames = options.MustGetFlagStringArray(cmdFlags, options.EXCLUDE_SCHEMA)
+	gplog.Debug("Excluding schemas %q from every database check", excludedSchemaNames)
 
 	return CreateConnections()
 }
@@ -163,6 +166,13 @@ func DoCheckMigrate() {
 	summaryOutput.WriteString("Execution summary:")
 	for _, row := range summaryRows {
 		fmt.Fprintf(&summaryOutput, "\n  %-31s%5d", row.label, row.count)
+	}
+	if len(excludedSchemaNames) > 0 {
+		quotedSchemaNames := make([]string, 0, len(excludedSchemaNames))
+		for _, schemaName := range excludedSchemaNames {
+			quotedSchemaNames = append(quotedSchemaNames, fmt.Sprintf("%q", schemaName))
+		}
+		fmt.Fprintf(&summaryOutput, "\n  %-31s%s", "excluded schemas:", strings.Join(quotedSchemaNames, ", "))
 	}
 	gplog.Custom(
 		gplog.LOGINFO,

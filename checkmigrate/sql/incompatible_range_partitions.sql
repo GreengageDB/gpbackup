@@ -20,6 +20,9 @@ WHERE p.parkind = 'r'
   AND child_namespace.nspname NOT LIKE 'pg_temp_%'
   AND child_namespace.nspname NOT LIKE 'pg_toast%'
   AND child_namespace.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')
+  AND n.nspname::pg_catalog.text <> ALL($1::pg_catalog.text[])
+  AND c.oid NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e')
+  AND child_relation.oid NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e')
   AND ((partition_rule.parrangestart <> '<>' AND NOT partition_rule.parrangestartincl)
        OR (partition_rule.parrangeend <> '<>' AND partition_rule.parrangeendincl))
 ORDER BY n.nspname, c.relname, t.typname, child_namespace.nspname, child_relation.relname;

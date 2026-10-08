@@ -125,6 +125,15 @@ ggcheckmigrate \
 
 `ggcheckmigrate` finds known compatibility problems before a logical migration from Greengage 6 to Greengage 7. It checks every connectable source database by default. Use `--source-database` to check one database.
 
+Objects in a schema given to `--exclude-schema` or `-N` are not checked in any database. The flag can be repeated, and a missing schema is not an error.
+
+Objects that belong to an extension are not reported, but the libraries of extension functions are still required on the target cluster.
+
+```bash
+ggcheckmigrate --source-host <source_host> --source-port <source_port> \
+  --exclude-schema madlib --exclude-schema arenadata_toolkit
+```
+
 The source and target connections can be local or remote. The target connection is optional and uses the `postgres` database. Both connections use standard PostgreSQL authentication, including `.pgpass`, `PGPASSWORD`, ident, peer, and trust. If a target is specified, install and configure every extension and shared library used by the source cluster on the target cluster.
 
 For separate passwords, add entries for both connections to `~/.pgpass` and set the file permissions to `0600`.

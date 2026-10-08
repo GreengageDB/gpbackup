@@ -9,4 +9,5 @@ WHERE l.lanname = 'c'
   AND n.nspname NOT LIKE 'pg_temp_%'
   AND n.nspname NOT LIKE 'pg_toast%'
   AND n.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')
+  AND n.nspname::pg_catalog.text <> ALL($1::pg_catalog.text[])
 ORDER BY library_name;

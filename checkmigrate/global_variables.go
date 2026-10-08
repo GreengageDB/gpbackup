@@ -19,6 +19,7 @@ var (
 	cleanupOnce               sync.Once
 
 	shouldScrapeDatabaseNames bool
+	excludedSchemaNames       []string
 
 	// Used for mocking purposes
 	createDBConn = dbconn.NewDBConn
@@ -68,6 +69,7 @@ func ResetGlobalState() {
 	bootstrapSourceConnection = nil
 	targetConnection = nil
 	shouldScrapeDatabaseNames = false
+	excludedSchemaNames = nil
 }
 
 // Util functions to enable ease of access to global flag values

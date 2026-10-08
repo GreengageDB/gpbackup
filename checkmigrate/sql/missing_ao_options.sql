@@ -12,6 +12,10 @@ JOIN pg_catalog.pg_class parent_relation
   ON parent_relation.oid = COALESCE(parent_rule.parchildrelid, root_partition.parrelid)
 JOIN pg_catalog.pg_namespace parent_namespace
   ON parent_namespace.oid = parent_relation.relnamespace
+JOIN pg_catalog.pg_class root_relation
+  ON root_relation.oid = root_partition.parrelid
+JOIN pg_catalog.pg_namespace root_namespace
+  ON root_namespace.oid = root_relation.relnamespace
 JOIN pg_catalog.pg_class child_relation
   ON child_relation.oid = child_rule.parchildrelid
 JOIN pg_catalog.pg_namespace child_namespace
@@ -30,4 +34,7 @@ WHERE co IS NULL
   AND child_namespace.nspname NOT LIKE 'pg_temp_%'
   AND child_namespace.nspname NOT LIKE 'pg_toast%'
   AND child_namespace.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')
+  AND root_namespace.nspname::pg_catalog.text <> ALL($1::pg_catalog.text[])
+  AND parent_relation.oid NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e')
+  AND child_relation.oid NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e')
 ORDER BY parent_schema, parent_name, child_schema, child_name, po;
