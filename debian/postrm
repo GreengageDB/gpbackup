@@ -1,9 +1,12 @@
 #!/bin/bash
 set -e
 
+# Remove the $GPHOME/bin symlinks created by postinst.
 for gphome in /opt/greengagedb/greengage*/; do
     [ -d "${gphome}bin" ] || continue
     for binary in gpbackup gprestore gpbackup_helper; do
-      rm -f "${gphome}bin/${binary}"
+        rm -f "${gphome}bin/${binary}"
     done
 done
+
+#DEBHELPER#

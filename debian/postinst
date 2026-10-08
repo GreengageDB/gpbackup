@@ -1,11 +1,16 @@
 #!/bin/bash
 set -e
 
+# gpbackup is version-independent and installed once under GPROOT.
+# Expose it in $GPHOME/bin of every installed Greengage, where gpbackup
+# expects to find gpbackup_helper on segment hosts.
 GPBACKUP_BIN=/opt/greengagedb/gpbackup/bin
 
 for gphome in /opt/greengagedb/greengage*/; do
     [ -d "${gphome}bin" ] || continue
     for binary in gpbackup gprestore gpbackup_helper; do
-      ln -sf "${GPBACKUP_BIN}/${binary}" "${gphome}bin/${binary}"
+        ln -sf "${GPBACKUP_BIN}/${binary}" "${gphome}bin/${binary}"
     done
 done
+
+#DEBHELPER#

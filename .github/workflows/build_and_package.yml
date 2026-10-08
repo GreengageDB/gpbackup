@@ -1,0 +1,63 @@
+# .github/workflows/build_and_package.yml
+name: Build and package DEB
+
+on:
+  push:
+    branches: ['master']
+    tags: ['**']
+  pull_request:
+    branches: ['**']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_os: ubuntu
+            target_os_version: '22.04'
+          - target_os: ubuntu
+            target_os_version: '24.04'
+    runs-on: ubuntu-24.04
+    env:
+      # gpbackup does not depend on the Greengage version, ggdb6 is only a build environment
+      GGDB_IMAGE:   ghcr.io/greengagedb/greengage/ggdb6_${{ matrix.target_os}}${{ matrix.target_os_version != '22.04' && matrix.target_os_version || '' }}:latest
+      DEB_PACKAGES: deb-packages-gpbackup-${{ matrix.target_os }}${{ matrix.target_os_version }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Build in Docker using docker run
+        run: |
+          set -eux
+          docker run \
+            --rm \
+            -e DEB_PACKAGES \
+            -v ${{ github.workspace }}:/gpbackup/src -w /gpbackup/src \
+            $GGDB_IMAGE \
+            ci/build_in_docker.sh
+
+      - name: Upload deb packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.DEB_PACKAGES }}
+          path: ${{ env.DEB_PACKAGES }}
+
+      - name: Test install deb-packages in Docker
+        uses: greengagedb/greengage-ci/.github/actions/tests/install/deb@v45
+        with:
+          test_docker: ${{ matrix.target_os }}:${{ matrix.target_os_version }}
+          artifact_name: ${{ env.DEB_PACKAGES }}
+          add_greengage_repo: true
+          verify_commands: |
+            dpkg -s gpbackup > /dev/null && \
+            /opt/greengagedb/gpbackup/bin/gpbackup --version && \
+            /opt/greengagedb/gpbackup/bin/gprestore --version && \
+            /opt/greengagedb/gpbackup/bin/gpbackup_helper --version
