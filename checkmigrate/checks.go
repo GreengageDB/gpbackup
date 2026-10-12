@@ -9,6 +9,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gpbackup/utils"
+	"github.com/jackc/pgtype"
 )
 
 //go:embed sql/migration_check_setup.sql
@@ -172,6 +173,15 @@ func writeObjectFinding(
 		fmt.Fprintf(output, detailFormat, detailArguments...)
 	}
 	output.WriteByte('\n')
+}
+
+func selectWithExcludedSchemas(connection *dbconn.DBConn, destination interface{}, query string) error {
+	excludedSchemaArgument := pgtype.TextArray{}
+	if setError := excludedSchemaArgument.Set(append([]string{}, excludedSchemaNames...)); setError != nil {
+		return fmt.Errorf("converting excluded schemas failed with %w", setError)
+	}
+
+	return connection.SelectWithArgs(destination, query, excludedSchemaArgument)
 }
 
 func logFindingOutput(output *strings.Builder) {
@@ -488,7 +498,7 @@ func runMigrationChecks(
 
 func checkMultiColumnListPartitions(connection *dbconn.DBConn) (int, error) {
 	results := make([]namedObjectResult, 0)
-	if queryError := connection.Select(&results, multiColumnListPartitionQuery); queryError != nil {
+	if queryError := selectWithExcludedSchemas(connection, &results, multiColumnListPartitionQuery); queryError != nil {
 		return 0, queryError
 	}
 	if len(results) == 0 {
@@ -518,7 +528,7 @@ func checkMultiColumnListPartitions(connection *dbconn.DBConn) (int, error) {
 
 func checkPlpython2DependentFunctions(connection *dbconn.DBConn) (int, error) {
 	results := make([]functionResult, 0)
-	if queryError := connection.Select(&results, plpython2DependentFunctionQuery); queryError != nil {
+	if queryError := selectWithExcludedSchemas(connection, &results, plpython2DependentFunctionQuery); queryError != nil {
 		return 0, queryError
 	}
 	if len(results) == 0 {
@@ -548,7 +558,7 @@ func checkPlpython2DependentFunctions(connection *dbconn.DBConn) (int, error) {
 
 func checkViewsWithRemovedOperators(connection *dbconn.DBConn) (int, error) {
 	results := make([]viewResult, 0)
-	if queryError := connection.Select(&results, removedOperatorViewQuery); queryError != nil {
+	if queryError := selectWithExcludedSchemas(connection, &results, removedOperatorViewQuery); queryError != nil {
 		return 0, queryError
 	}
 	if len(results) == 0 {
@@ -579,7 +589,7 @@ func checkViewsWithRemovedOperators(connection *dbconn.DBConn) (int, error) {
 
 func checkViewsWithRemovedFunctions(connection *dbconn.DBConn) (int, error) {
 	results := make([]viewResult, 0)
-	if queryError := connection.Select(&results, removedFunctionViewQuery); queryError != nil {
+	if queryError := selectWithExcludedSchemas(connection, &results, removedFunctionViewQuery); queryError != nil {
 		return 0, queryError
 	}
 	if len(results) == 0 {
@@ -610,7 +620,7 @@ func checkViewsWithRemovedFunctions(connection *dbconn.DBConn) (int, error) {
 
 func checkViewsWithRemovedTypes(connection *dbconn.DBConn) (int, error) {
 	results := make([]viewResult, 0)
-	if queryError := connection.Select(&results, removedTypeViewQuery); queryError != nil {
+	if queryError := selectWithExcludedSchemas(connection, &results, removedTypeViewQuery); queryError != nil {
 		return 0, queryError
 	}
 	if len(results) == 0 {
@@ -641,7 +651,7 @@ func checkViewsWithRemovedTypes(connection *dbconn.DBConn) (int, error) {
 
 func checkRemovedDataTypes(connection *dbconn.DBConn) (int, error) {
 	results := make([]removedDataTypeResult, 0)
-	if queryError := connection.Select(&results, removedDataTypeQuery); queryError != nil {
+	if queryError := selectWithExcludedSchemas(connection, &results, removedDataTypeQuery); queryError != nil {
 		return 0, queryError
 	}
 	if len(results) == 0 {
@@ -672,7 +682,7 @@ func checkRemovedDataTypes(connection *dbconn.DBConn) (int, error) {
 
 func checkMissingAOOptions(connection *dbconn.DBConn) (int, error) {
 	results := make([]missingAOOptionResult, 0)
-	if queryError := connection.Select(&results, missingAOOptionQuery); queryError != nil {
+	if queryError := selectWithExcludedSchemas(connection, &results, missingAOOptionQuery); queryError != nil {
 		return 0, queryError
 	}
 	if len(results) == 0 {
@@ -706,7 +716,7 @@ func checkMissingAOOptions(connection *dbconn.DBConn) (int, error) {
 
 func checkRestrictedExecuteOnFunctions(connection *dbconn.DBConn) (int, error) {
 	results := make([]functionResult, 0)
-	if queryError := connection.Select(&results, restrictedExecuteOnFunctionQuery); queryError != nil {
+	if queryError := selectWithExcludedSchemas(connection, &results, restrictedExecuteOnFunctionQuery); queryError != nil {
 		return 0, queryError
 	}
 	if len(results) == 0 {
@@ -737,7 +747,7 @@ func checkRestrictedExecuteOnFunctions(connection *dbconn.DBConn) (int, error) {
 
 func checkIncompletePartitionIndexes(connection *dbconn.DBConn) (int, error) {
 	results := make([]incompletePartitionIndexResult, 0)
-	if queryError := connection.Select(&results, incompletePartitionIndexQuery); queryError != nil {
+	if queryError := selectWithExcludedSchemas(connection, &results, incompletePartitionIndexQuery); queryError != nil {
 		return 0, queryError
 	}
 	if len(results) == 0 {
@@ -769,7 +779,7 @@ func checkIncompletePartitionIndexes(connection *dbconn.DBConn) (int, error) {
 
 func checkIncompatibleRangePartitions(connection *dbconn.DBConn) (int, error) {
 	results := make([]incompatibleRangePartitionResult, 0)
-	if queryError := connection.Select(&results, incompatibleRangePartitionQuery); queryError != nil {
+	if queryError := selectWithExcludedSchemas(connection, &results, incompatibleRangePartitionQuery); queryError != nil {
 		return 0, queryError
 	}
 	if len(results) == 0 {
@@ -802,7 +812,7 @@ func checkIncompatibleRangePartitions(connection *dbconn.DBConn) (int, error) {
 
 func checkStatementTriggers(connection *dbconn.DBConn) (int, error) {
 	results := make([]statementTriggerResult, 0)
-	if queryError := connection.Select(&results, statementTriggerQuery); queryError != nil {
+	if queryError := selectWithExcludedSchemas(connection, &results, statementTriggerQuery); queryError != nil {
 		return 0, queryError
 	}
 	if len(results) == 0 {
@@ -837,7 +847,7 @@ func checkRequiredLibraries(
 	isLibraryMissingByName map[string]bool,
 ) (int, error) {
 	results := make([]requiredLibraryResult, 0)
-	if queryError := sourceConnection.Select(&results, requiredLibraryQuery); queryError != nil {
+	if queryError := selectWithExcludedSchemas(sourceConnection, &results, requiredLibraryQuery); queryError != nil {
 		return 0, queryError
 	}
 

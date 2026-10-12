@@ -127,7 +127,7 @@ if ! grep -Eq 'enumerated databases:[[:space:]]+4$' "${output_path}" ||
 fi
 
 run_check() {
-  "${check_command[@]}"
+  "${check_command[@]}" "$@"
 }
 
 clean_exit_code=0
@@ -207,6 +207,9 @@ SELECT pg_catalog.int2vectoreq(
 ) AS matched;
 CREATE VIEW ggcheckmigrate_fixture.removed_type_view AS
 SELECT '2000-01-01 00:00:00'::pg_catalog.abstime AS old_time;
+CREATE VIEW ggcheckmigrate_fixture.extension_member_view AS
+SELECT '2000-01-01 00:00:00'::pg_catalog.abstime AS old_time;
+ALTER EXTENSION plpython2u ADD VIEW ggcheckmigrate_fixture.extension_member_view;
 CREATE FUNCTION ggcheckmigrate_fixture.missing_library()
 RETURNS text
 AS '$libdir/gp_check_functions', 'get_tablespace_version_directory_name'
@@ -267,6 +270,13 @@ DISTRIBUTED BY (id)
 PARTITION BY RANGE (partition_key) (
   PARTITION p1 START (0) EXCLUSIVE END (10)
 );
+CREATE SCHEMA ggcheckmigrate_partition_root;
+CREATE TABLE ggcheckmigrate_partition_root.moved_range (id integer, partition_key numeric)
+DISTRIBUTED BY (id)
+PARTITION BY RANGE (partition_key) (
+  PARTITION p1 START (0) EXCLUSIVE END (10)
+);
+ALTER TABLE ggcheckmigrate_partition_root.moved_range_1_prt_p1 SET SCHEMA ggcheckmigrate_fixture;
 CREATE TABLE ggcheckmigrate_fixture.valid_open_range (id integer, partition_key numeric)
 DISTRIBUTED BY (id)
 PARTITION BY RANGE (partition_key) (
@@ -382,7 +392,7 @@ if ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_c
   exit 1
 fi
 
-for unexpected_text in 'heap_child' 'column_child' 'valid_open_range' 'valid_default_range'; do
+for unexpected_text in 'heap_child' 'column_child' 'valid_open_range' 'valid_default_range' 'extension_member_view'; do
   if grep -Fq "${unexpected_text}" "${output_path}"; then
     echo "The report unexpectedly named ${unexpected_text}" >&2
     cat "${output_path}" >&2
@@ -410,8 +420,29 @@ if [[ ${first_exit_code} -ne 1 || ${second_exit_code} -ne 1 ]]; then
   exit 1
 fi
 
+expected_excluded_finding_count=1
+if [[ -n ${target_host} ]]; then
+  expected_excluded_finding_count=2
+fi
+excluded_exit_code=0
+run_check --exclude-schema ggcheckmigrate_fixture -N ggcheckmigrate_missing_schema \
+  >"${output_path}" 2>&1 || excluded_exit_code=$?
+if [[ ${excluded_exit_code} -ne 1 ]]; then
+  fail_with_output "The check with the fixture schema excluded" 1 "${excluded_exit_code}"
+fi
+if ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
+  ! grep -Eq "findings:[[:space:]]+${expected_excluded_finding_count}$" "${output_path}" ||
+  ! grep -Fq 'Object "moved_range_1_prt_p1" has type "partition" in schema "ggcheckmigrate_fixture"' "${output_path}" ||
+  { [[ -n ${target_host} ]] && ! grep -Fq '$libdir/gp_check_functions' "${output_path}"; } ||
+  ! grep -Eq 'excluded schemas:[[:space:]]+"ggcheckmigrate_fixture", "ggcheckmigrate_missing_schema"$' "${output_path}"; then
+  echo "The excluded schema run did not report only the moved partition and the extension library" >&2
+  cat "${output_path}" >&2
+  exit 1
+fi
+
 "${source_psql[@]}" "${database_name}" <<'SQL'
 DROP EXTENSION plpython2u CASCADE;
+DROP SCHEMA ggcheckmigrate_partition_root CASCADE;
 DROP SCHEMA ggcheckmigrate_fixture CASCADE;
 SQL
 

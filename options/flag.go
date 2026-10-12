@@ -149,6 +149,7 @@ func SetCheckMigrateFlagDefaults(flagSet *pflag.FlagSet) {
 			"The postgres or template1 database must be connectable for database enumeration",
 	)
 	flagSet.StringP(SOURCE_USER, "u", "", "The superuser of the cluster being checked")
+	flagSet.StringArrayP(EXCLUDE_SCHEMA, "N", []string{}, "Check all objects except objects in the specified schema(s). --exclude-schema can be specified multiple times.")
 	flagSet.StringP(TARGET_HOST, "H", "", "The host of the cluster of next version")
 	flagSet.IntP(TARGET_PORT, "P", 0, "The port of the cluster of next version")
 	flagSet.StringP(TARGET_USER, "U", "", "The superuser of the cluster being checked")

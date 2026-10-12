@@ -9,4 +9,6 @@ WHERE handler.probin = '$libdir/plpython2'
   AND n.nspname NOT LIKE 'pg_temp_%'
   AND n.nspname NOT LIKE 'pg_toast%'
   AND n.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')
+  AND n.nspname::pg_catalog.text <> ALL($1::pg_catalog.text[])
+  AND p.oid NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e')
 ORDER BY n.nspname, p.proname, p.oid;
