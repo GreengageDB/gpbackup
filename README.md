@@ -127,7 +127,7 @@ ggcheckmigrate \
 
 Objects in a schema given to `--exclude-schema` or `-N` are not checked in any database. The flag can be repeated, and a missing schema is not an error.
 
-Objects that belong to an extension are not reported, but the libraries of extension functions are still required on the target cluster.
+Objects that belong to an extension are not reported, but the libraries of extension functions are still required on the target cluster, even when the functions are in an excluded schema.
 
 ```bash
 ggcheckmigrate --source-host <source_host> --source-port <source_port> \

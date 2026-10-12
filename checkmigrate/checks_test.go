@@ -743,8 +743,11 @@ func TestRequiredLibrariesIncludePersistentExtensionOwnedFunctions(t *testing.T)
 	if !strings.Contains(requiredLibraryQuery, "p.oid >= 16384") {
 		t.Fatal("The required library check does not select user-defined functions")
 	}
-	if strings.Contains(requiredLibraryQuery, "deptype = 'e'") {
+	if strings.Contains(requiredLibraryQuery, "p.oid NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e')") {
 		t.Fatal("The required library check excludes extension-owned functions")
+	}
+	if !strings.Contains(requiredLibraryQuery, "OR p.oid IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e')") {
+		t.Fatal("The required library check skips extension-owned functions in excluded schemas")
 	}
 	for _, schemaPattern := range []string{"pg_temp_%", "pg_toast%"} {
 		if !strings.Contains(requiredLibraryQuery, schemaPattern) {
@@ -1147,6 +1150,9 @@ func TestDoCheckMigrateContinuesAfterFinding(t *testing.T) {
 	}
 	if !strings.Contains(string(stderr.Contents()), firstCheck.expectedObjects[0]) {
 		t.Fatalf("The finding run did not print the affected object in %q", stderr.Contents())
+	}
+	if !strings.Contains(string(stderr.Contents()), "\n  excluded schemas:              -") {
+		t.Fatalf("The finding run did not print an empty excluded schema list in %q", stderr.Contents())
 	}
 }
 

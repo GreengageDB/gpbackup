@@ -167,13 +167,15 @@ func DoCheckMigrate() {
 	for _, row := range summaryRows {
 		fmt.Fprintf(&summaryOutput, "\n  %-31s%5d", row.label, row.count)
 	}
+	excludedSchemaList := "-"
 	if len(excludedSchemaNames) > 0 {
 		quotedSchemaNames := make([]string, 0, len(excludedSchemaNames))
 		for _, schemaName := range excludedSchemaNames {
 			quotedSchemaNames = append(quotedSchemaNames, fmt.Sprintf("%q", schemaName))
 		}
-		fmt.Fprintf(&summaryOutput, "\n  %-31s%s", "excluded schemas:", strings.Join(quotedSchemaNames, ", "))
+		excludedSchemaList = strings.Join(quotedSchemaNames, ", ")
 	}
+	fmt.Fprintf(&summaryOutput, "\n  %-31s%s", "excluded schemas:", excludedSchemaList)
 	gplog.Custom(
 		gplog.LOGINFO,
 		summaryShellVerbosity,

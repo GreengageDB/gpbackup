@@ -420,6 +420,10 @@ if [[ ${first_exit_code} -ne 1 || ${second_exit_code} -ne 1 ]]; then
   exit 1
 fi
 
+expected_excluded_finding_count=1
+if [[ -n ${target_host} ]]; then
+  expected_excluded_finding_count=2
+fi
 excluded_exit_code=0
 run_check --exclude-schema ggcheckmigrate_fixture -N ggcheckmigrate_missing_schema \
   >"${output_path}" 2>&1 || excluded_exit_code=$?
@@ -427,10 +431,11 @@ if [[ ${excluded_exit_code} -ne 1 ]]; then
   fail_with_output "The check with the fixture schema excluded" 1 "${excluded_exit_code}"
 fi
 if ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
-  ! grep -Eq 'findings:[[:space:]]+1$' "${output_path}" ||
+  ! grep -Eq "findings:[[:space:]]+${expected_excluded_finding_count}$" "${output_path}" ||
   ! grep -Fq 'Object "moved_range_1_prt_p1" has type "partition" in schema "ggcheckmigrate_fixture"' "${output_path}" ||
+  { [[ -n ${target_host} ]] && ! grep -Fq '$libdir/gp_check_functions' "${output_path}"; } ||
   ! grep -Eq 'excluded schemas:[[:space:]]+"ggcheckmigrate_fixture", "ggcheckmigrate_missing_schema"$' "${output_path}"; then
-  echo "The excluded schema run did not report only the partition of a root outside the excluded schema" >&2
+  echo "The excluded schema run did not report only the moved partition and the extension library" >&2
   cat "${output_path}" >&2
   exit 1
 fi
