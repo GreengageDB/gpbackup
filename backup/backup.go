@@ -727,9 +727,7 @@ func CreateInitialSegmentPipes(oidList []string, c *cluster.Cluster, numPipes in
 	if len(oidList) < maxPipes {
 		maxPipes = len(oidList)
 	}
-	for i := 0; i < maxPipes; i++ {
-		utils.CreateSegmentPipeOnAllHostsForBackup(oidList[i], c, fpInfo, helperIdx...)
-	}
+	utils.CreateSegmentPipesOnAllHostsForBackup(oidList[:maxPipes], c, fpInfo, helperIdx...)
 	return maxPipes
 }
 

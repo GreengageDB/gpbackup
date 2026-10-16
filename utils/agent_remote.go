@@ -34,25 +34,32 @@ var AgentErr = errors.New("agent error")
  * possibility that the COPY FROM commands start before gpbackup_helper is done
  * starting up and setting up the first pipe.
  */
-func CreateSegmentPipeOnAllHostsForBackup(oid string, c *cluster.Cluster, fpInfo filepath.FilePathInfo, helperIdx ...int) {
-	remoteOutput := c.GenerateAndExecuteCommand("Creating segment data pipes", cluster.ON_SEGMENTS, func(contentID int) string {
-		pipeName := fpInfo.GetSegmentPipeFilePath(contentID, helperIdx...)
-		pipeName = fmt.Sprintf("%s_%s", pipeName, oid)
-		gplog.Debug("Creating pipe %s", pipeName)
-		return fmt.Sprintf("mkfifo -m 0700 %s", pipeName)
-	})
-	c.CheckClusterError(remoteOutput, "Unable to create segment data pipes", func(contentID int) string {
-		return "Unable to create segment data pipe"
-	})
+// The pipes are created by a single command on each segment, as each command on a
+// remote host is a round trip over ssh.
+func CreateSegmentPipesOnAllHostsForBackup(oids []string, c *cluster.Cluster, fpInfo filepath.FilePathInfo, helperIdx ...int) {
+	createSegmentPipesOnAllHosts(oids, "mkfifo -m 0700", c, fpInfo, helperIdx...)
 }
 
-func CreateSegmentPipeOnAllHostsForRestore(oid string, c *cluster.Cluster, fpInfo filepath.FilePathInfo, helperIdx ...int) {
-	oidWithBatch := strings.Split(oid, ",")
+func CreateSegmentPipesOnAllHostsForRestore(oids []string, c *cluster.Cluster, fpInfo filepath.FilePathInfo, helperIdx ...int) {
+	oidsWithBatch := make([]string, len(oids))
+	for i, oid := range oids {
+		oidWithBatch := strings.Split(oid, ",")
+		oidsWithBatch[i] = fmt.Sprintf("%s_%s", oidWithBatch[0], oidWithBatch[1])
+	}
+	createSegmentPipesOnAllHosts(oidsWithBatch, "mkfifo", c, fpInfo, helperIdx...)
+}
+
+func createSegmentPipesOnAllHosts(pipeSuffixes []string, mkfifoCmd string, c *cluster.Cluster, fpInfo filepath.FilePathInfo, helperIdx ...int) {
+	if len(pipeSuffixes) == 0 {
+		return
+	}
 	remoteOutput := c.GenerateAndExecuteCommand("Creating segment data pipes", cluster.ON_SEGMENTS, func(contentID int) string {
-		pipeName := fpInfo.GetSegmentPipeFilePath(contentID, helperIdx...)
-		pipeName = fmt.Sprintf("%s_%s_%s", pipeName, oidWithBatch[0], oidWithBatch[1])
-		gplog.Debug("Creating pipe %s", pipeName)
-		return fmt.Sprintf("mkfifo %s", pipeName)
+		pipeNames := make([]string, len(pipeSuffixes))
+		for i, suffix := range pipeSuffixes {
+			pipeNames[i] = fmt.Sprintf("%s_%s", fpInfo.GetSegmentPipeFilePath(contentID, helperIdx...), suffix)
+			gplog.Debug("Creating pipe %s", pipeNames[i])
+		}
+		return fmt.Sprintf("%s %s", mkfifoCmd, strings.Join(pipeNames, " "))
 	})
 	c.CheckClusterError(remoteOutput, "Unable to create segment data pipes", func(contentID int) string {
 		return "Unable to create segment data pipe"

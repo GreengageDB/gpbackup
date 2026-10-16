@@ -79,6 +79,33 @@ var _ = Describe("agent remote", func() {
 			Expect(string(logfile.Contents())).To(ContainSubstring(`[CRITICAL]:-Failed to rsync oid file on 1 segment. See gbytes.Buffer for a complete list of errors.`))
 		})
 	})
+	Describe("CreateSegmentPipesOnAllHostsForBackup()", func() {
+		It("creates all the pipes on each segment with a single command", func() {
+			utils.CreateSegmentPipesOnAllHostsForBackup(oidList, testCluster, fpInfo, 2)
+
+			Expect(testExecutor.NumExecutions).To(Equal(1))
+			cc := testExecutor.ClusterCommands[0]
+			Expect(len(cc)).To(Equal(2))
+			pipe := fpInfo.GetSegmentPipeFilePath(1, 2)
+			Expect(cc[1].CommandString).To(ContainSubstring(fmt.Sprintf(" mkfifo -m 0700 %[1]s_1 %[1]s_2 %[1]s_3", pipe)))
+		})
+		It("runs no command without pipes to create", func() {
+			utils.CreateSegmentPipesOnAllHostsForBackup([]string{}, testCluster, fpInfo)
+
+			Expect(testExecutor.NumExecutions).To(Equal(0))
+		})
+	})
+	Describe("CreateSegmentPipesOnAllHostsForRestore()", func() {
+		It("creates all the pipes on each segment with a single command", func() {
+			utils.CreateSegmentPipesOnAllHostsForRestore([]string{"1,0", "1,1", "2,0"}, testCluster, fpInfo)
+
+			Expect(testExecutor.NumExecutions).To(Equal(1))
+			cc := testExecutor.ClusterCommands[0]
+			Expect(len(cc)).To(Equal(2))
+			pipe := fpInfo.GetSegmentPipeFilePath(1)
+			Expect(cc[1].CommandString).To(ContainSubstring(fmt.Sprintf(" mkfifo %[1]s_1_0 %[1]s_1_1 %[1]s_2_0", pipe)))
+		})
+	})
 	Describe("WriteOidsToFile()", func() {
 		It("writes oid list, delimited by newline characters", func() {
 			utils.WriteOidsToFile("myFilename", oidList)
