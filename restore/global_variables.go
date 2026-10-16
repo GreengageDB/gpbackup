@@ -93,6 +93,15 @@ func SetTOC(objToc *toc.TOC) {
 	globalTOC = objToc
 }
 
+func SetNumDataFiles(numDataFiles int) {
+	failedDataFiles = nil
+	dataFileMutexes = nil
+	if numDataFiles > 1 {
+		failedDataFiles = make([]atomic.Bool, numDataFiles)
+		dataFileMutexes = make([]sync.Mutex, numDataFiles)
+	}
+}
+
 // Util functions to enable ease of access to global flag values
 
 func FlagChanged(flagName string) bool {

@@ -197,7 +197,31 @@ func (backupFPInfo *FilePathInfo) GetConfigFilePath() string {
 }
 
 func (backupFPInfo *FilePathInfo) GetSegmentTOCFilePath(contentID int) string {
-	return fmt.Sprintf("%s/gpbackup_%d_%s_toc.yaml", backupFPInfo.GetDirForContent(contentID), contentID, backupFPInfo.Timestamp)
+	return backupFPInfo.GetSegmentTOCFilePathForDataFile(contentID, 0)
+}
+
+/*
+ * A backup taken with --single-data-file and --jobs writes several data files per
+ * segment, each with its own segment TOC.  Data file 0 keeps the names used by a
+ * backup with a single data file, so that such a backup is unchanged.
+ */
+func (backupFPInfo *FilePathInfo) GetSegmentTOCFilePathForDataFile(contentID int, dataFileIdx int) string {
+	return fmt.Sprintf("%s/gpbackup_%d_%s_toc%s.yaml", backupFPInfo.GetDirForContent(contentID), contentID, backupFPInfo.Timestamp, dataFileSuffix(dataFileIdx))
+}
+
+func (backupFPInfo *FilePathInfo) GetSingleDataFilePath(contentID int, extension string, dataFileIdx int) string {
+	templateFilePath := backupFPInfo.GetTableBackupFilePathForCopyCommand(0, extension, true)
+	if dataFileIdx > 0 {
+		templateFilePath = strings.TrimSuffix(templateFilePath, extension) + fmt.Sprintf("_file%d", dataFileIdx) + extension
+	}
+	return backupFPInfo.replaceCopyFormatStringsInPath(templateFilePath, contentID)
+}
+
+func dataFileSuffix(dataFileIdx int) string {
+	if dataFileIdx > 0 {
+		return fmt.Sprintf("%d", dataFileIdx)
+	}
+	return ""
 }
 
 func (backupFPInfo *FilePathInfo) GetPluginConfigPath() string {

@@ -2,6 +2,7 @@ package restore_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -10,10 +11,13 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
+	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/backup"
+	"github.com/GreengageDB/gpbackup/filepath"
 	"github.com/GreengageDB/gpbackup/history"
 	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/restore"
+	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/jackc/pgconn"
 
@@ -118,6 +122,68 @@ var _ = Describe("restore/data tests", func() {
 			Expect(err.Error()).To(Equal("Error loading data into table public.foo: " +
 				"COPY foo, line 1: \"5\": " +
 				"ERROR: value of distribution key doesn't belong to segment with ID 0, it belongs to segment with ID 1 (SQLSTATE 22P04)"))
+		})
+	})
+	Describe("CheckAgentErrors", func() {
+		var testExecutor *testhelper.TestExecutor
+		errorOutput := &cluster.RemoteOutput{Commands: []cluster.ShellCommand{{Content: 0, Stdout: "error"}}}
+		noErrorOutput := &cluster.RemoteOutput{Commands: []cluster.ShellCommand{{Content: 0}}}
+		BeforeEach(func() {
+			testExecutor = &testhelper.TestExecutor{}
+			testCluster := cluster.NewCluster([]cluster.SegConfig{
+				{ContentID: -1, Hostname: "localhost", DataDir: "/data/gpseg-1"},
+				{ContentID: 0, Hostname: "localhost", DataDir: "/data/gpseg0"},
+			})
+			testCluster.Executor = testExecutor
+			restore.SetCluster(testCluster)
+			restore.SetFPInfo(filepath.NewFilePathInfo(testCluster, "", "20170101010101", "gpseg", false))
+			restore.SetNumDataFiles(2)
+		})
+		AfterEach(func() {
+			restore.SetNumDataFiles(1)
+		})
+		It("reports a stopped helper to every connection restoring its data file", func() {
+			// The error file is removed once found, so later checks on the segments find nothing
+			testExecutor.ClusterOutputs = []*cluster.RemoteOutput{errorOutput, noErrorOutput}
+			testExecutor.UseLastOutput = true
+
+			// Two connections restore data file 1, another one data file 0
+			Expect(errors.Is(restore.CheckAgentErrors(1), utils.AgentErr)).To(BeTrue())
+			Expect(errors.Is(restore.CheckAgentErrors(1), utils.AgentErr)).To(BeTrue())
+			Expect(restore.CheckAgentErrors(0)).To(Succeed())
+			// The failure of data file 1 is not checked on the segments again
+			Expect(testExecutor.NumClusterExecutions).To(Equal(2))
+		})
+	})
+	Describe("GetEntryIdxsForConns", func() {
+		entries := []toc.CoordinatorDataEntry{
+			{Oid: 1, DataFileIdx: 0}, {Oid: 2, DataFileIdx: 1}, {Oid: 3, DataFileIdx: 2},
+			{Oid: 4, DataFileIdx: 0}, {Oid: 5, DataFileIdx: 2}, {Oid: 6, DataFileIdx: 1},
+		}
+		It("spreads the entries round-robin when there is a single data file", func() {
+			Expect(restore.GetEntryIdxsForConns(entries, 1, 2, 1)).To(Equal([][]int{{0, 2, 4}, {1, 3, 5}}))
+		})
+		It("gives all entries of a data file to one connection, in the order of the file", func() {
+			Expect(restore.GetEntryIdxsForConns(entries, 3, 3, 1)).To(Equal([][]int{{0, 3}, {1, 5}, {2, 4}}))
+		})
+		It("gives several data files to a connection when there are fewer connections than data files", func() {
+			Expect(restore.GetEntryIdxsForConns(entries, 3, 2, 1)).To(Equal([][]int{{0, 2, 3, 4}, {1, 5}}))
+			Expect(restore.GetEntryIdxsForConns(entries, 3, 1, 1)).To(Equal([][]int{{0, 1, 2, 3, 4, 5}}))
+		})
+		It("spreads the entries of a data file round-robin over its group of connections", func() {
+			// Groups {0, 1} and {2, 3}: data files 0 and 2 go to the first, data file 1 to the second
+			Expect(restore.GetEntryIdxsForConns(entries, 3, 4, 2)).To(Equal([][]int{{0, 2}, {3, 4}, {1}, {5}}))
+		})
+		It("keeps a connection within the pipes of its data file when a group restores several data files", func() {
+			// With one group of 4 connections, the entries of data file 1 must not shift the
+			// round-robin of data file 0, or connection 3 would wait for its 10th table
+			// while the helper of data file 0 is still on the first one
+			dataFiles := []int{0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0}
+			manyEntries := make([]toc.CoordinatorDataEntry, 0, len(dataFiles))
+			for i, dataFile := range dataFiles {
+				manyEntries = append(manyEntries, toc.CoordinatorDataEntry{Oid: uint32(i + 1), DataFileIdx: dataFile})
+			}
+			Expect(restore.GetEntryIdxsForConns(manyEntries, 2, 4, 4)).To(Equal([][]int{{0, 3, 5, 10}, {1, 6, 7, 11}, {2, 8}, {4, 9}}))
 		})
 	})
 	Describe("CheckRowsRestored", func() {

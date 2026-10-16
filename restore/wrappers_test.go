@@ -1,6 +1,7 @@
 package restore_test
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -115,6 +116,46 @@ var _ = Describe("wrapper tests", func() {
 				To(Equal([]string{"schema1.table1", "schema2.table2"}))
 		})
 
+	})
+	Describe("GetNumDataFilesToRestore", func() {
+		var backupDir string
+		timestamps := []string{"20170101010101", "20170102010101", "20170103010101"}
+		BeforeEach(func() {
+			var err error
+			backupDir, err = ioutil.TempDir("", "num_data_files")
+			Expect(err).ToNot(HaveOccurred())
+			// The full backup has 3 data files, the incremental backups 2 and 1
+			for i, timestamp := range timestamps {
+				tocDir := filepath.Join(backupDir, "backups", timestamp[:8], timestamp)
+				Expect(os.MkdirAll(tocDir, 0777)).To(Succeed())
+				tocContents := fmt.Sprintf("dataentries:\n- schema: public\n  name: t%d\n  datafileidx: %d\n", i, 2-i)
+				Expect(ioutil.WriteFile(filepath.Join(tocDir, fmt.Sprintf("gpbackup_%s_toc.yaml", timestamp)), []byte(tocContents), 0644)).To(Succeed())
+			}
+			testCluster := cluster.NewCluster([]cluster.SegConfig{{ContentID: -1, Hostname: "localhost", DataDir: "/data/gpseg-1"}})
+			restore.SetCluster(testCluster)
+			_ = cmdFlags.Set(options.BACKUP_DIR, backupDir)
+			restore.SetFPInfo(restore.GetBackupFPInfoForTimestamp(timestamps[2]))
+			restore.SetBackupConfig(&history.BackupConfig{SingleDataFile: true, Incremental: true, RestorePlan: []history.RestorePlanEntry{
+				{Timestamp: timestamps[0]}, {Timestamp: timestamps[1]}, {Timestamp: timestamps[2]},
+			}})
+		})
+		AfterEach(func() {
+			os.RemoveAll(backupDir)
+		})
+		It("returns the largest number of data files in an incremental chain", func() {
+			Expect(restore.GetNumDataFilesToRestore()).To(Equal(3))
+		})
+		It("returns the number of data files of the latest backup when restoring only its data", func() {
+			_ = cmdFlags.Set(options.INCREMENTAL, "true")
+			Expect(restore.GetNumDataFilesToRestore()).To(Equal(1))
+		})
+		It("reads the TOC of each backup once", func() {
+			Expect(restore.GetNumDataFilesToRestore()).To(Equal(3))
+			for _, timestamp := range timestamps {
+				Expect(os.Remove(filepath.Join(backupDir, "backups", timestamp[:8], timestamp, fmt.Sprintf("gpbackup_%s_toc.yaml", timestamp)))).To(Succeed())
+			}
+			Expect(restore.GetNumDataFilesToRestore()).To(Equal(3))
+		})
 	})
 	Describe("restore history tests", func() {
 		sampleConfigContents := `

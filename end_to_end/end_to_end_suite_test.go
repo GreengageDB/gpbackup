@@ -3104,12 +3104,16 @@ LANGUAGE plpgsql NO SQL;`)
 				if isFilteredRestore {
 					gprestoreArgs = append(gprestoreArgs, "--include-schema", "schematwo")
 				}
-				if len(size) == 1 {
+				if len(size) >= 1 && size[0] > 0 {
 					if isSingleDataFileRestore {
 						gprestoreArgs = append(gprestoreArgs, "--copy-queue-size", fmt.Sprintf("%d", size[0]))
 					} else {
 						gprestoreArgs = append(gprestoreArgs, "--jobs", fmt.Sprintf("%d", size[0]))
 					}
+				}
+				// A second size is the number of jobs for a backup taken with --single-data-file and --jobs
+				if len(size) == 2 {
+					gprestoreArgs = append(gprestoreArgs, "--jobs", fmt.Sprintf("%d", size[1]))
 				}
 				gprestore(gprestorePath, restoreHelperPath, fullTimestamp, gprestoreArgs...)
 
@@ -3180,6 +3184,16 @@ LANGUAGE plpgsql NO SQL;`)
 			Entry("Can backup a 2-segment cluster and restore to current cluster with filter with jobs", "20220908150238", "", "2-segment-db-filter", false, true, false, false, 3),
 			Entry("Can backup a 2-segment cluster and restore to current cluster with incremental backups and a single data file", "20220909150612", "20220909150622", "2-segment-db-incremental", true, false, true, false),
 			Entry("Can backup a 2-segment cluster and restore to current cluster with incremental backups and a single data file with copy-queue-size", "20220909150612", "20220909150622", "2-segment-db-incremental", true, false, true, false, 3),
+			Entry("Can backup a 2-segment cluster with single data file and jobs and restore to current cluster", "20261016082758", "", "2-segment-db-single-data-file-jobs", false, false, true, false),
+			Entry("Can backup a 2-segment cluster with single data file and jobs and restore to current cluster with jobs", "20261016082758", "", "2-segment-db-single-data-file-jobs", false, false, true, false, 0, 3),
+			Entry("Can backup a 2-segment cluster with single data file and jobs and restore to current cluster with jobs and copy-queue-size", "20261016082758", "", "2-segment-db-single-data-file-jobs", false, false, true, false, 2, 2),
+			Entry("Can backup a 2-segment cluster with single data file and jobs and restore to current cluster with filter and jobs", "20261016082758", "", "2-segment-db-single-data-file-jobs", false, true, true, false, 0, 3),
+			Entry("Can backup a 2-segment cluster with single data file and jobs and restore to current cluster with incremental backups and jobs", "20261016082806", "20261016082814", "2-segment-db-single-data-file-jobs-incremental", true, false, true, false, 0, 3),
+			Entry("Can backup a 7-segment cluster with single data file and jobs and restore to current cluster", "20261016083430", "", "7-segment-db-single-data-file-jobs", false, false, true, false),
+			Entry("Can backup a 7-segment cluster with single data file and jobs and restore to current cluster with jobs", "20261016083430", "", "7-segment-db-single-data-file-jobs", false, false, true, false, 0, 3),
+			Entry("Can backup a 7-segment cluster with single data file and jobs and restore to current cluster with jobs and copy-queue-size", "20261016083430", "", "7-segment-db-single-data-file-jobs", false, false, true, false, 2, 2),
+			Entry("Can backup a 7-segment cluster with single data file and jobs and restore to current cluster with filter and jobs", "20261016083430", "", "7-segment-db-single-data-file-jobs", false, true, true, false, 0, 3),
+			Entry("Can backup a 7-segment cluster with single data file and jobs and restore to current cluster with incremental backups and jobs", "20261016083437", "20261016083446", "7-segment-db-single-data-file-jobs-incremental", true, false, true, false, 0, 3),
 			Entry("Can backup a 1-segment cluster and restore to current cluster", "20220908150735", "", "1-segment-db", false, false, false, false),
 			Entry("Can backup a 1-segment cluster and restore to current cluster with jobs", "20220908150735", "", "1-segment-db", false, false, false, false, 3),
 			Entry("Can backup a 1-segment cluster and restore to current cluster with single data file", "20220908150752", "", "1-segment-db-single-data-file", false, false, true, false),

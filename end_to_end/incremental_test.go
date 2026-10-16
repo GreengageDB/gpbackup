@@ -396,6 +396,61 @@ var _ = Describe("End to End incremental tests", func() {
 				assertArtifactsCleaned(incremental1Timestamp)
 				assertArtifactsCleaned(incremental2Timestamp)
 			})
+			It("Restores from incremental backups taken with single-data-file and different numbers of jobs", func() {
+				output := gpbackup(gpbackupPath, backupHelperPath,
+					"--leaf-partition-data",
+					"--single-data-file",
+					"--jobs", "3",
+					"--plugin-config", examplePluginTestConfig)
+				fullBackupTimestamp := getBackupTimestamp(string(output))
+
+				forceMetadataFileDownloadFromPlugin(backupConn, fullBackupTimestamp)
+				testhelper.AssertQueryRuns(backupConn,
+					"INSERT into schema2.ao1 values(1001)")
+				defer testhelper.AssertQueryRuns(backupConn,
+					"DELETE from schema2.ao1 where i=1001")
+				testhelper.AssertQueryRuns(backupConn,
+					"INSERT into schema2.ao2 values(1001)")
+				defer testhelper.AssertQueryRuns(backupConn,
+					"DELETE from schema2.ao2 where i=1001")
+				output = gpbackup(gpbackupPath, backupHelperPath,
+					"--incremental",
+					"--leaf-partition-data",
+					"--single-data-file",
+					"--jobs", "2",
+					"--from-timestamp", fullBackupTimestamp,
+					"--plugin-config", examplePluginTestConfig)
+				incremental1Timestamp := getBackupTimestamp(string(output))
+
+				forceMetadataFileDownloadFromPlugin(backupConn, incremental1Timestamp)
+
+				testhelper.AssertQueryRuns(backupConn,
+					"INSERT into schema2.ao1 values(1002)")
+				defer testhelper.AssertQueryRuns(backupConn,
+					"DELETE from schema2.ao1 where i=1002")
+				output = gpbackup(gpbackupPath, backupHelperPath,
+					"--incremental",
+					"--leaf-partition-data",
+					"--single-data-file",
+					"--plugin-config", examplePluginTestConfig)
+				incremental2Timestamp := getBackupTimestamp(string(output))
+
+				forceMetadataFileDownloadFromPlugin(backupConn, incremental2Timestamp)
+
+				gprestore(gprestorePath, restoreHelperPath, incremental2Timestamp,
+					"--redirect-db", "restoredb",
+					"--jobs", "3",
+					"--plugin-config", examplePluginTestConfig)
+
+				assertRelationsCreated(restoreConn, TOTAL_RELATIONS)
+				assertDataRestored(restoreConn, publicSchemaTupleCounts)
+				schema2TupleCounts["schema2.ao1"] = 1002
+				schema2TupleCounts["schema2.ao2"] = 1001
+				assertDataRestored(restoreConn, schema2TupleCounts)
+				assertArtifactsCleaned(fullBackupTimestamp)
+				assertArtifactsCleaned(incremental1Timestamp)
+				assertArtifactsCleaned(incremental2Timestamp)
+			})
 			It("Restores from an incremental backup based on a from-timestamp incremental with --copy-queue-size", func() {
 				output := gpbackup(gpbackupPath, backupHelperPath,
 					"--leaf-partition-data",
