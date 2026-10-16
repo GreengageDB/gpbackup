@@ -31,8 +31,15 @@ var (
 	 * segment, each read by its own gpbackup_helper.  The tables of a data file are
 	 * restored by one connection, in the order of the file, and helperOfConn records
 	 * the data file each connection is restoring; it is nil for other backups.
+	 *
+	 * Several connections may restore the tables of one data file, so failedDataFiles
+	 * records the data files whose gpbackup_helper has stopped: with
+	 * --on-error-continue every connection then skips their tables instead of
+	 * waiting for pipes that the helper will not create.
 	 */
-	helperOfConn []int
+	helperOfConn    []int
+	failedDataFiles []atomic.Bool
+	dataFileMutexes []sync.Mutex
 )
 
 func CopyTableIn(queryContext context.Context, connectionPool *dbconn.DBConn, tableName string, tableAttributes string, destinationToRead string, singleDataFile bool, whichConn int) (int64, error) {
@@ -115,7 +122,7 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 		// will hang indefinitely waiting to read from pipes that the helper
 		// was expected to set up
 		if backupConfig.SingleDataFile || resizeCluster {
-			agentErr := utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo, HelperIdx(whichConn)...)
+			agentErr := CheckAgentErrors(whichConn)
 			if agentErr != nil {
 				gplog.Error(agentErr.Error())
 				return agentErr
@@ -300,8 +307,12 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 			utils.StartGpbackupHelpers(globalCluster, fpInfo, "--restore-agent", MustGetFlagString(options.PLUGIN_CONFIG), compressStr, MustGetFlagBool(options.ON_ERROR_CONTINUE), isFilter, &wasTerminated, initialPipes, backupConfig.SingleDataFile, resizeCluster, origSize, destSize, dataFileIdx, gplog.GetVerbosity(), HelperIdx(whichConn)...)
 		}
 	}
+	failedDataFiles = nil
+	dataFileMutexes = nil
 	if numDataFiles > 1 {
 		helperOfConn = make([]int, connectionPool.NumConns)
+		failedDataFiles = make([]atomic.Bool, numDataFiles)
+		dataFileMutexes = make([]sync.Mutex, numDataFiles)
 	}
 	entryIdxsForConn := GetEntryIdxsForConns(dataEntries, numDataFiles, connectionPool.NumConns, connsPerDataFile)
 	/*
@@ -329,11 +340,10 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 			defer workerPool.Done()
 
 			setGUCsForConnection(gucStatements, whichConn)
-			failedDataFile := -1
 			for _, entryIdx := range entryIdxsForConn[whichConn] {
 				entry := dataEntries[entryIdx]
 				if helperOfConn != nil {
-					if entry.DataFileIdx == failedDataFile {
+					if failedDataFiles[entry.DataFileIdx].Load() {
 						continue
 					}
 					helperOfConn[whichConn] = entry.DataFileIdx
@@ -371,8 +381,8 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					if errors.Is(err, utils.AgentErr) && MustGetFlagBool(options.ON_ERROR_CONTINUE) && maxHelpers > 1 {
 						dataProgressBar.(*pb.ProgressBar).NotPrint = true
 						if helperOfConn != nil {
-							// The helper of this data file has stopped, but the other data files can still be restored
-							failedDataFile = entry.DataFileIdx
+							// The helper of this data file has stopped, which CheckAgentErrors has recorded
+							// for all connections, but the other data files can still be restored
 							continue
 						}
 						return
@@ -424,6 +434,31 @@ func CreateInitialSegmentPipes(oidList []string, c *cluster.Cluster, numConns in
 		utils.CreateSegmentPipeOnAllHostsForRestore(oidList[i], c, fpInfo, helperIdx...)
 	}
 	return maxPipes
+}
+
+/*
+ * CheckAgentErrors returns an error if the gpbackup_helper that a connection reads
+ * from has stopped.  CheckAgentErrorsOnSegments removes the error file it finds, so
+ * with several data files the first connection to find it records the failure of
+ * the data file for the other connections restoring that file.  The check and the
+ * record are done under the lock of the data file, so that no connection misses
+ * the error between the removal of the file and the record.
+ */
+func CheckAgentErrors(whichConn int) error {
+	if helperOfConn == nil {
+		return utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo, HelperIdx(whichConn)...)
+	}
+	dataFile := helperOfConn[whichConn]
+	dataFileMutexes[dataFile].Lock()
+	defer dataFileMutexes[dataFile].Unlock()
+	if failedDataFiles[dataFile].Load() {
+		return errors.Wrapf(utils.AgentErr, "The gpbackup_helper of data file %d has already stopped", dataFile)
+	}
+	err := utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo, HelperIdx(whichConn)...)
+	if err != nil {
+		failedDataFiles[dataFile].Store(true)
+	}
+	return err
 }
 
 func HelperIdx(whichConn int) []int {

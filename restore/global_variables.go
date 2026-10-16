@@ -93,6 +93,12 @@ func SetTOC(objToc *toc.TOC) {
 	globalTOC = objToc
 }
 
+func SetDataFileOfConns(dataFiles []int, numDataFiles int) {
+	helperOfConn = dataFiles
+	failedDataFiles = make([]atomic.Bool, numDataFiles)
+	dataFileMutexes = make([]sync.Mutex, numDataFiles)
+}
+
 // Util functions to enable ease of access to global flag values
 
 func FlagChanged(flagName string) bool {

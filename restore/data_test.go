@@ -2,6 +2,7 @@ package restore_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -10,7 +11,9 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
+	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/backup"
+	"github.com/GreengageDB/gpbackup/filepath"
 	"github.com/GreengageDB/gpbackup/history"
 	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/restore"
@@ -119,6 +122,37 @@ var _ = Describe("restore/data tests", func() {
 			Expect(err.Error()).To(Equal("Error loading data into table public.foo: " +
 				"COPY foo, line 1: \"5\": " +
 				"ERROR: value of distribution key doesn't belong to segment with ID 0, it belongs to segment with ID 1 (SQLSTATE 22P04)"))
+		})
+	})
+	Describe("CheckAgentErrors", func() {
+		var testExecutor *testhelper.TestExecutor
+		errorOutput := &cluster.RemoteOutput{Commands: []cluster.ShellCommand{{Content: 0, Stdout: "error"}}}
+		noErrorOutput := &cluster.RemoteOutput{Commands: []cluster.ShellCommand{{Content: 0}}}
+		BeforeEach(func() {
+			testExecutor = &testhelper.TestExecutor{}
+			testCluster := cluster.NewCluster([]cluster.SegConfig{
+				{ContentID: -1, Hostname: "localhost", DataDir: "/data/gpseg-1"},
+				{ContentID: 0, Hostname: "localhost", DataDir: "/data/gpseg0"},
+			})
+			testCluster.Executor = testExecutor
+			restore.SetCluster(testCluster)
+			restore.SetFPInfo(filepath.NewFilePathInfo(testCluster, "", "20170101010101", "gpseg", false))
+			// Connections 0 and 1 restore data file 1, connection 2 restores data file 0
+			restore.SetDataFileOfConns([]int{1, 1, 0}, 2)
+		})
+		AfterEach(func() {
+			restore.SetDataFileOfConns(nil, 0)
+		})
+		It("reports a stopped helper to every connection restoring its data file", func() {
+			// The error file is removed once found, so later checks on the segments find nothing
+			testExecutor.ClusterOutputs = []*cluster.RemoteOutput{errorOutput, noErrorOutput}
+			testExecutor.UseLastOutput = true
+
+			Expect(errors.Is(restore.CheckAgentErrors(0), utils.AgentErr)).To(BeTrue())
+			Expect(errors.Is(restore.CheckAgentErrors(1), utils.AgentErr)).To(BeTrue())
+			Expect(restore.CheckAgentErrors(2)).To(Succeed())
+			// The failure of data file 1 is not checked on the segments again
+			Expect(testExecutor.NumClusterExecutions).To(Equal(2))
 		})
 	})
 	Describe("GetEntryIdxsForConns", func() {
