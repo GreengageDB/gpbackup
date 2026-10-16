@@ -138,7 +138,18 @@ var _ = Describe("restore/data tests", func() {
 		})
 		It("spreads the entries of a data file round-robin over its group of connections", func() {
 			// Groups {0, 1} and {2, 3}: data files 0 and 2 go to the first, data file 1 to the second
-			Expect(restore.GetEntryIdxsForConns(entries, 3, 4, 2)).To(Equal([][]int{{0, 3}, {2, 4}, {1}, {5}}))
+			Expect(restore.GetEntryIdxsForConns(entries, 3, 4, 2)).To(Equal([][]int{{0, 2}, {3, 4}, {1}, {5}}))
+		})
+		It("keeps a connection within the pipes of its data file when a group restores several data files", func() {
+			// With one group of 4 connections, the entries of data file 1 must not shift the
+			// round-robin of data file 0, or connection 3 would wait for its 10th table
+			// while the helper of data file 0 is still on the first one
+			dataFiles := []int{0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0}
+			manyEntries := make([]toc.CoordinatorDataEntry, 0, len(dataFiles))
+			for i, dataFile := range dataFiles {
+				manyEntries = append(manyEntries, toc.CoordinatorDataEntry{Oid: uint32(i + 1), DataFileIdx: dataFile})
+			}
+			Expect(restore.GetEntryIdxsForConns(manyEntries, 2, 4, 4)).To(Equal([][]int{{0, 3, 5, 10}, {1, 6, 7, 11}, {2, 8}, {4, 9}}))
 		})
 	})
 	Describe("CheckRowsRestored", func() {

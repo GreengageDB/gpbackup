@@ -446,18 +446,23 @@ func HelperIdx(whichConn int) []int {
  * connection restores its entries in the order of the data entries, the earliest
  * entry that is not restored yet can always proceed.
  *
+ * The round-robin is kept for each data file, not for the whole group: the entry
+ * of a connection that comes before the next one in the same data file is then
+ * connsPerDataFile entries earlier in that file, so a connection never waits for
+ * a table further ahead than the pipes its gpbackup_helper has created.
+ *
  * Otherwise the tables are spread round-robin over all connections.
  */
 func GetEntryIdxsForConns(dataEntries []toc.CoordinatorDataEntry, numDataFiles int, numConns int, connsPerDataFile int) [][]int {
 	entryIdxsForConn := make([][]int, numConns)
 	numGroups := numConns / connsPerDataFile
-	entriesInGroup := make([]int, numGroups)
+	entriesInFile := make([]int, numDataFiles)
 	for entryIdx, entry := range dataEntries {
 		whichConn := entryIdx % numConns
 		if numDataFiles > 1 {
 			group := entry.DataFileIdx % numGroups
-			whichConn = group*connsPerDataFile + entriesInGroup[group]%connsPerDataFile
-			entriesInGroup[group]++
+			whichConn = group*connsPerDataFile + entriesInFile[entry.DataFileIdx]%connsPerDataFile
+			entriesInFile[entry.DataFileIdx]++
 		}
 		entryIdxsForConn[whichConn] = append(entryIdxsForConn[whichConn], entryIdx)
 	}
