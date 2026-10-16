@@ -137,20 +137,20 @@ var _ = Describe("restore/data tests", func() {
 			testCluster.Executor = testExecutor
 			restore.SetCluster(testCluster)
 			restore.SetFPInfo(filepath.NewFilePathInfo(testCluster, "", "20170101010101", "gpseg", false))
-			// Connections 0 and 1 restore data file 1, connection 2 restores data file 0
-			restore.SetDataFileOfConns([]int{1, 1, 0}, 2)
+			restore.SetNumDataFiles(2)
 		})
 		AfterEach(func() {
-			restore.SetDataFileOfConns(nil, 0)
+			restore.SetNumDataFiles(1)
 		})
 		It("reports a stopped helper to every connection restoring its data file", func() {
 			// The error file is removed once found, so later checks on the segments find nothing
 			testExecutor.ClusterOutputs = []*cluster.RemoteOutput{errorOutput, noErrorOutput}
 			testExecutor.UseLastOutput = true
 
-			Expect(errors.Is(restore.CheckAgentErrors(0), utils.AgentErr)).To(BeTrue())
+			// Two connections restore data file 1, another one data file 0
 			Expect(errors.Is(restore.CheckAgentErrors(1), utils.AgentErr)).To(BeTrue())
-			Expect(restore.CheckAgentErrors(2)).To(Succeed())
+			Expect(errors.Is(restore.CheckAgentErrors(1), utils.AgentErr)).To(BeTrue())
+			Expect(restore.CheckAgentErrors(0)).To(Succeed())
 			// The failure of data file 1 is not checked on the segments again
 			Expect(testExecutor.NumClusterExecutions).To(Equal(2))
 		})
