@@ -662,7 +662,7 @@ func restoreData() (int, map[string][]toc.CoordinatorDataEntry) {
 	numErrors := int32(0)
 	for timestamp, entries := range filteredDataEntries {
 		gplog.Verbose("Restoring data for %d tables from backup with timestamp: %s", len(entries), timestamp)
-		numErrors = restoreDataFromTimestamp(GetBackupFPInfoForTimestamp(timestamp), entries, gucStatements, dataProgressBar)
+		numErrors += restoreDataFromTimestamp(GetBackupFPInfoForTimestamp(timestamp), entries, gucStatements, dataProgressBar)
 	}
 
 	dataProgressBar.Finish()
