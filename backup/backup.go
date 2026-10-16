@@ -655,6 +655,7 @@ func estimateAOTablePagesOutsideTransaction(tables []Table, pages map[uint32]int
 	defer conn.Close()
 	// So that cancelBlockedQueries cancels the queries if they wait for a lock
 	conn.MustExec(fmt.Sprintf("SET application_name TO 'gpbackup_%s'", globalFPInfo.Timestamp))
+	conn.MustExec("SET search_path TO pg_catalog")
 	EstimateAOTablePages(conn, tables, pages)
 }
 
