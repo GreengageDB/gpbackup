@@ -245,7 +245,7 @@ func RecoverMetadataFilesUsingPlugin() {
 			numDataFiles := backupConfig.SingleDataFileCount
 			if backupConfig.Incremental {
 				// Each backup of an incremental chain may have its own number of data files
-				numDataFiles = toc.GetNumDataFiles(toc.NewTOC(fpInfo.GetTOCFilePath()).DataEntries)
+				numDataFiles = getNumDataFilesOfBackup(fpInfo)
 			}
 			pluginConfig.RestoreSegmentTOCs(globalCluster, fpInfo, origSize, destSize, batches, numDataFiles)
 		}
@@ -367,10 +367,26 @@ func GetNumDataFilesToRestore() int {
 			continue
 		}
 		fpInfo := GetBackupFPInfoForTimestamp(entry.Timestamp)
-		tocFile := fpInfo.GetTOCFilePath()
-		if entryDataFiles := toc.GetNumDataFiles(toc.NewTOC(tocFile).DataEntries); entryDataFiles > numDataFiles {
+		if entryDataFiles := getNumDataFilesOfBackup(fpInfo); entryDataFiles > numDataFiles {
 			numDataFiles = entryDataFiles
 		}
+	}
+	return numDataFiles
+}
+
+/*
+ * The number of data files per segment of a backup, which for the earlier backups
+ * of an incremental chain only their TOCs record.  Reading the TOC of a backup of
+ * many tables takes seconds, so it is read for this once, by its path.
+ */
+var numDataFilesOfTOC = make(map[string]int)
+
+func getNumDataFilesOfBackup(fpInfo filepath.FilePathInfo) int {
+	tocFile := fpInfo.GetTOCFilePath()
+	numDataFiles, ok := numDataFilesOfTOC[tocFile]
+	if !ok {
+		numDataFiles = toc.GetNumDataFiles(toc.NewTOC(tocFile).DataEntries)
+		numDataFilesOfTOC[tocFile] = numDataFiles
 	}
 	return numDataFiles
 }

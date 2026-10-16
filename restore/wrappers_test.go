@@ -149,6 +149,13 @@ var _ = Describe("wrapper tests", func() {
 			_ = cmdFlags.Set(options.INCREMENTAL, "true")
 			Expect(restore.GetNumDataFilesToRestore()).To(Equal(1))
 		})
+		It("reads the TOC of each backup once", func() {
+			Expect(restore.GetNumDataFilesToRestore()).To(Equal(3))
+			for _, timestamp := range timestamps {
+				Expect(os.Remove(filepath.Join(backupDir, "backups", timestamp[:8], timestamp, fmt.Sprintf("gpbackup_%s_toc.yaml", timestamp)))).To(Succeed())
+			}
+			Expect(restore.GetNumDataFilesToRestore()).To(Equal(3))
+		})
 	})
 	Describe("restore history tests", func() {
 		sampleConfigContents := `
