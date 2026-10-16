@@ -149,7 +149,8 @@ func GetTablePages(connectionPool *dbconn.DBConn, tables []Table) map[uint32]int
  * EstimateAOTablePages fills in the size of such tables from it, counting
  * estimatedBytesPerValue bytes for each value.  For a partition root, the tuples of
  * its partitions are counted.  GPDB 7 keeps the aoseg tables only on the segments,
- * which would be too costly to query for every table.
+ * which would be too costly to query for every table.  The aoseg tables read stay
+ * locked until the end of the transaction of connectionPool, if there is one.
  */
 const (
 	estimatedBytesPerValue = 8

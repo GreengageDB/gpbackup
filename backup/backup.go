@@ -402,7 +402,7 @@ func backupData(tables []Table) {
 		if numDataFiles > 1 {
 			gplog.Verbose("Writing data to %d data files per segment", numDataFiles)
 			pages := GetTablePages(connectionPool, tables)
-			EstimateAOTablePages(connectionPool, tables, pages)
+			estimateAOTablePagesOutsideTransaction(tables, pages)
 			dataFileForTable = AssignTablesToDataFiles(tables, pages, numDataFiles)
 			backupReport.BackupConfig.SingleDataFileCount = numDataFiles
 			numPipes = (connectionPool.NumConns-1)/numDataFiles + 1
@@ -639,6 +639,25 @@ func DoCleanup(backupFailed bool) {
 }
 
 // Cancel blocked gpbackup queries waiting for locks.
+/*
+ * EstimateAOTablePages reads an aoseg table for each append-optimized table without
+ * statistics.  In the backup transaction, which already holds a lock on every table,
+ * each of them would stay locked until the end of the backup and could exhaust the
+ * lock table with many leaf partitions, so they are read through a connection of
+ * their own outside of a transaction, which releases each lock after its query.
+ */
+func estimateAOTablePagesOutsideTransaction(tables []Table, pages map[uint32]int64) {
+	if connectionPool.Version.AtLeast("7") {
+		return
+	}
+	conn := dbconn.NewDBConnFromEnvironment(MustGetFlagString(options.DBNAME))
+	conn.MustConnect(1)
+	defer conn.Close()
+	// So that cancelBlockedQueries cancels the queries if they wait for a lock
+	conn.MustExec(fmt.Sprintf("SET application_name TO 'gpbackup_%s'", globalFPInfo.Timestamp))
+	EstimateAOTablePages(conn, tables, pages)
+}
+
 func cancelBlockedQueries(timestamp string) {
 	conn := dbconn.NewDBConnFromEnvironment(MustGetFlagString(options.DBNAME))
 	conn.MustConnect(1)
