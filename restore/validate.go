@@ -227,12 +227,6 @@ END AS string;`, utils.EscapeSingleQuotes(unquotedDBName))
 }
 
 func ValidateBackupFlagCombinations() {
-	// The backups of an incremental chain may have several data files per segment each,
-	// which --jobs restores in parallel; a single data file is then restored as with
-	// --copy-queue-size.
-	if backupConfig.SingleDataFile && backupConfig.SingleDataFileCount <= 1 && !backupConfig.Incremental && MustGetFlagInt(options.JOBS) != 1 {
-		gplog.Fatal(errors.Errorf("Cannot use jobs flag when restoring backups with a single data file per segment."), "")
-	}
 	if (backupConfig.IncludeTableFiltered || backupConfig.DataOnly) && MustGetFlagBool(options.WITH_GLOBALS) {
 		gplog.Fatal(errors.Errorf("Global metadata is not backed up in table-filtered or data-only backups."), "")
 	}
