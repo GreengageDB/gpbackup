@@ -34,9 +34,9 @@ var AgentErr = errors.New("agent error")
  * possibility that the COPY FROM commands start before gpbackup_helper is done
  * starting up and setting up the first pipe.
  */
-func CreateSegmentPipeOnAllHostsForBackup(oid string, c *cluster.Cluster, fpInfo filepath.FilePathInfo) {
+func CreateSegmentPipeOnAllHostsForBackup(oid string, c *cluster.Cluster, fpInfo filepath.FilePathInfo, helperIdx ...int) {
 	remoteOutput := c.GenerateAndExecuteCommand("Creating segment data pipes", cluster.ON_SEGMENTS, func(contentID int) string {
-		pipeName := fpInfo.GetSegmentPipeFilePath(contentID)
+		pipeName := fpInfo.GetSegmentPipeFilePath(contentID, helperIdx...)
 		pipeName = fmt.Sprintf("%s_%s", pipeName, oid)
 		gplog.Debug("Creating pipe %s", pipeName)
 		return fmt.Sprintf("mkfifo -m 0700 %s", pipeName)
@@ -147,7 +147,7 @@ func VerifyHelperVersionOnSegments(version string, c *cluster.Cluster) {
 	}
 }
 
-func StartGpbackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, operation string, pluginConfigFile string, compressStr string, onErrorContinue bool, isFilter bool, wasTerminated *atomic.Bool, copyQueue int, isSingleDataFile bool, resizeCluster bool, origSize int, destSize int, verbosity int, helperIdx ...int) {
+func StartGpbackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, operation string, pluginConfigFile string, compressStr string, onErrorContinue bool, isFilter bool, wasTerminated *atomic.Bool, copyQueue int, isSingleDataFile bool, resizeCluster bool, origSize int, destSize int, dataFileIdx int, verbosity int, helperIdx ...int) {
 	// A mutex lock for cleaning up and starting gpbackup helpers prevents a
 	// race condition that causes gpbackup_helpers to be orphaned if
 	// gpbackup_helper cleanup happens before they are started.
@@ -181,11 +181,11 @@ func StartGpbackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, oper
 		resizeStr = fmt.Sprintf(" --resize-cluster --orig-seg-count %d --dest-seg-count %d", origSize, destSize)
 	}
 	remoteOutput := c.GenerateAndExecuteCommand("Starting gpbackup_helper agent", cluster.ON_SEGMENTS, func(contentID int) string {
-		tocFile := fpInfo.GetSegmentTOCFilePath(contentID)
+		tocFile := fpInfo.GetSegmentTOCFilePathForDataFile(contentID, dataFileIdx)
 		oidFile := fpInfo.GetSegmentHelperFilePath(contentID, filepath.FormatSuffix("oid", helperIdx...))
 		scriptFile := fpInfo.GetSegmentHelperFilePath(contentID, filepath.FormatSuffix("script", helperIdx...))
 		pipeFile := fpInfo.GetSegmentPipeFilePath(contentID, helperIdx...)
-		backupFile := fpInfo.GetTableBackupFilePath(contentID, 0, GetPipeThroughProgram().Extension, true)
+		backupFile := fpInfo.GetSingleDataFilePath(contentID, GetPipeThroughProgram().Extension, dataFileIdx)
 		helperCmdStr := fmt.Sprintf(`gpbackup_helper %s --toc-file %s --oid-file %s --pipe-file %s --data-file "%s" --content %d%s%s%s%s%s%s --copy-queue-size %d --verbosity %d`,
 			operation, tocFile, oidFile, pipeFile, backupFile, contentID, pluginStr, compressStr, onErrorContinueStr, filterStr, singleDataFileStr, resizeStr, copyQueue, verbosity)
 		// we run these commands in sequence to ensure that any failure is critical; the last command ensures the agent process was successfully started
@@ -270,13 +270,18 @@ func CleanUpHelperFilesOnAllHosts(c *cluster.Cluster, fpInfo filepath.FilePathIn
 	}
 }
 
+// The common prefix of the segment TOC files of all data files, which identifies
+// the gpbackup_helper processes of a backup or restore on a segment.
+func segmentTOCFilePrefix(fpInfo filepath.FilePathInfo, contentID int) string {
+	return strings.TrimSuffix(fpInfo.GetSegmentTOCFilePath(contentID), ".yaml")
+}
+
 // Checks for gpbackup_helper processes on segments.
 // Returns a boolean indicating whether any PIDs were found and a map of hostnames to PIDs.
 func CheckHelperPids(c *cluster.Cluster, fpInfo filepath.FilePathInfo, operation string) (map[string][]int, bool) {
 	var foundPid bool = false
 	remoteOutput := c.GenerateAndExecuteCommand("Checking for leftover gpbackup_helper processes", cluster.ON_SEGMENTS, func(contentID int) string {
-		tocFile := fpInfo.GetSegmentTOCFilePath(contentID)
-		procPattern := fmt.Sprintf("gpbackup_helper --%s-agent --toc-file %s*", operation, tocFile)
+		procPattern := fmt.Sprintf("gpbackup_helper --%s-agent --toc-file %s", operation, segmentTOCFilePrefix(fpInfo, contentID))
 		pipeFile := fpInfo.GetSegmentPipeFilePath(contentID)
 		pipePattern := fmt.Sprintf("--pipe-file %s", pipeFile)
 		return fmt.Sprintf(`ps ux | grep -- "%s" | grep -- "%s" | grep -v grep | awk '{print $2}'`, procPattern, pipePattern)
@@ -316,8 +321,7 @@ func CleanUpSegmentHelperProcesses(c *cluster.Cluster, fpInfo filepath.FilePathI
 				return
 			}
 			c.GenerateAndExecuteCommand("Cleaning up gpbackup_helper processes", cluster.ON_SEGMENTS, func(contentID int) string {
-				tocFile := fpInfo.GetSegmentTOCFilePath(contentID)
-				procPattern := fmt.Sprintf("gpbackup_helper --%s-agent --toc-file %s", operation, tocFile)
+				procPattern := fmt.Sprintf("gpbackup_helper --%s-agent --toc-file %s", operation, segmentTOCFilePrefix(fpInfo, contentID))
 				pipeFile := fpInfo.GetSegmentPipeFilePath(contentID)
 				pipePattern := fmt.Sprintf("--pipe-file %s", pipeFile)
 				return fmt.Sprintf("PIDS=`ps ux | grep -- \"%s\" | grep -- \"%s\" | grep -v grep | awk '{print $2}'`; if [[ ! -z \"$PIDS\" ]]; then kill -USR1 $PIDS; fi", procPattern, pipePattern)

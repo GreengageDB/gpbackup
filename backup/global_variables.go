@@ -111,6 +111,11 @@ func GetReport() *report.Report {
 	return backupReport
 }
 
+func SetDataFileForTable(dataFiles map[uint32]int, numFiles int) {
+	dataFileForTable = dataFiles
+	numDataFiles = numFiles
+}
+
 func SetTOC(toc *toc.TOC) {
 	globalTOC = toc
 }

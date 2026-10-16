@@ -14,6 +14,7 @@ import (
 	"github.com/GreengageDB/gpbackup/history"
 	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/restore"
+	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/jackc/pgconn"
 
@@ -118,6 +119,26 @@ var _ = Describe("restore/data tests", func() {
 			Expect(err.Error()).To(Equal("Error loading data into table public.foo: " +
 				"COPY foo, line 1: \"5\": " +
 				"ERROR: value of distribution key doesn't belong to segment with ID 0, it belongs to segment with ID 1 (SQLSTATE 22P04)"))
+		})
+	})
+	Describe("GetEntryIdxsForConns", func() {
+		entries := []toc.CoordinatorDataEntry{
+			{Oid: 1, DataFileIdx: 0}, {Oid: 2, DataFileIdx: 1}, {Oid: 3, DataFileIdx: 2},
+			{Oid: 4, DataFileIdx: 0}, {Oid: 5, DataFileIdx: 2}, {Oid: 6, DataFileIdx: 1},
+		}
+		It("spreads the entries round-robin when there is a single data file", func() {
+			Expect(restore.GetEntryIdxsForConns(entries, 1, 2, 1)).To(Equal([][]int{{0, 2, 4}, {1, 3, 5}}))
+		})
+		It("gives all entries of a data file to one connection, in the order of the file", func() {
+			Expect(restore.GetEntryIdxsForConns(entries, 3, 3, 1)).To(Equal([][]int{{0, 3}, {1, 5}, {2, 4}}))
+		})
+		It("gives several data files to a connection when there are fewer connections than data files", func() {
+			Expect(restore.GetEntryIdxsForConns(entries, 3, 2, 1)).To(Equal([][]int{{0, 2, 3, 4}, {1, 5}}))
+			Expect(restore.GetEntryIdxsForConns(entries, 3, 1, 1)).To(Equal([][]int{{0, 1, 2, 3, 4, 5}}))
+		})
+		It("spreads the entries of a data file round-robin over its group of connections", func() {
+			// Groups {0, 1} and {2, 3}: data files 0 and 2 go to the first, data file 1 to the second
+			Expect(restore.GetEntryIdxsForConns(entries, 3, 4, 2)).To(Equal([][]int{{0, 3}, {2, 4}, {1}, {5}}))
 		})
 	})
 	Describe("CheckRowsRestored", func() {

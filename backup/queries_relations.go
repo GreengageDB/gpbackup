@@ -88,6 +88,60 @@ func ConvertRelationsOptionsToBackup(inRelations []options.Relation) []Relation 
 	return outRelations
 }
 
+// A join that adds prt.pages, the total relpages of the partitions of a
+// partition root, to a query on pg_class c.
+func partitionPagesJoin(connectionPool *dbconn.DBConn) string {
+	if connectionPool.Version.AtLeast("7") {
+		return `LEFT JOIN (
+			SELECT
+				pg_partition_root(c.oid) oid,
+				sum(c.relpages) AS pages
+			FROM pg_class c
+			WHERE c.relispartition = true OR c.relkind = 'p'
+			GROUP BY 1
+		) AS prt ON prt.oid = c.oid`
+	}
+	return `LEFT JOIN (
+		SELECT
+			p.parrelid,
+			sum(pc.relpages) AS pages
+		FROM pg_partition_rule AS pr
+		JOIN pg_partition AS p ON pr.paroid = p.oid
+		JOIN pg_class AS pc ON pr.parchildrelid = pc.oid
+		GROUP BY p.parrelid
+	) AS prt ON prt.parrelid = c.oid`
+}
+
+// GetTablePages returns the size of each table in pages, counting the
+// partitions of a partition root, from relpages.
+func GetTablePages(connectionPool *dbconn.DBConn, tables []Table) map[uint32]int64 {
+	pages := make(map[uint32]int64, len(tables))
+	if len(tables) == 0 {
+		return pages
+	}
+	oidValues := make([]string, 0, len(tables))
+	for _, table := range tables {
+		oidValues = append(oidValues, fmt.Sprintf("(%d::oid)", table.Oid))
+	}
+	query := fmt.Sprintf(`
+	SELECT c.oid AS oid,
+		coalesce(prt.pages, c.relpages)::bigint AS pages
+	FROM pg_class c
+	%s
+	WHERE c.oid IN (VALUES %s)`, partitionPagesJoin(connectionPool), strings.Join(oidValues, ", "))
+
+	results := make([]struct {
+		Oid   uint32
+		Pages int64
+	}, 0)
+	err := connectionPool.Select(&results, query)
+	gplog.FatalOnError(err)
+	for _, result := range results {
+		pages[result.Oid] = result.Pages
+	}
+	return pages
+}
+
 /*
  * This function also handles exclude table filtering since the way we do
  * it is currently much simpler than the include case.
@@ -105,27 +159,11 @@ func getUserTableRelations(connectionPool *dbconn.DBConn) []options.Relation {
 		WHERE e.reloid IS NULL)`
 	}
 
-	prt := `LEFT JOIN (
-		SELECT
-			p.parrelid,
-			sum(pc.relpages) AS pages
-		FROM pg_partition_rule AS pr
-		JOIN pg_partition AS p ON pr.paroid = p.oid
-		JOIN pg_class AS pc ON pr.parchildrelid = pc.oid
-		GROUP BY p.parrelid
-	) AS prt ON prt.parrelid = c.oid`
+	prt := partitionPagesJoin(connectionPool)
 	// In GPDB 7+, root partitions are marked as relkind 'p'.
 	relkindFilter := `'r'`
 	if connectionPool.Version.AtLeast("7") {
 		relkindFilter = `'r', 'p'`
-		prt = `LEFT JOIN (
-			SELECT
-				pg_partition_root(c.oid) oid,
-				sum(c.relpages) AS pages
-			FROM pg_class c
-			WHERE c.relispartition = true OR c.relkind = 'p'
-			GROUP BY 1
-		) AS prt ON prt.oid = c.oid`
 	}
 
 	query := fmt.Sprintf(`
@@ -154,27 +192,11 @@ func getUserTableRelations(connectionPool *dbconn.DBConn) []options.Relation {
 }
 
 func getUserTableRelationsWithIncludeFiltering(connectionPool *dbconn.DBConn, includeRelationFqns []options.Relation) []options.Relation {
-	prt := `LEFT JOIN (
-		SELECT
-			p.parrelid,
-			sum(pc.relpages) AS pages
-		FROM pg_partition_rule AS pr
-		JOIN pg_partition AS p ON pr.paroid = p.oid
-		JOIN pg_class AS pc ON pr.parchildrelid = pc.oid
-		GROUP BY p.parrelid
-	) AS prt ON prt.parrelid = c.oid`
+	prt := partitionPagesJoin(connectionPool)
 	// In GPDB 7+, root partitions are marked as relkind 'p'.
 	relkindFilter := `'r'`
 	if connectionPool.Version.AtLeast("7") {
 		relkindFilter = `'r', 'p'`
-		prt = `LEFT JOIN (
-			SELECT
-				pg_partition_root(c.oid) oid,
-				sum(c.relpages) AS pages
-			FROM pg_class c
-			WHERE c.relispartition = true OR c.relkind = 'p'
-			GROUP BY 1
-		) AS prt ON prt.oid = c.oid`
 	}
 
 	includeOids := GetOidsFromRelationList(includeRelationFqns)

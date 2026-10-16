@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,7 +24,63 @@ import (
 
 var (
 	tableDelim = ","
+
+	/*
+	 * With --single-data-file and --jobs, the data of each segment is written to
+	 * several data files, each by its own gpbackup_helper, which reads the tables
+	 * of its file one after another.  dataFileForTable records the data file of
+	 * each table; it is nil when there is a single data file.
+	 */
+	dataFileForTable map[uint32]int
+	numDataFiles     = 1
 )
+
+/*
+ * AssignTablesToDataFiles spreads the tables over numFiles data files so that the
+ * files get similar amounts of data: each table, largest first, goes to the file
+ * with the fewest pages so far.  Every table counts as at least one page, so that
+ * tables without statistics are still spread out, and every file gets a table if
+ * there are enough of them.
+ */
+func AssignTablesToDataFiles(tables []Table, pages map[uint32]int64, numFiles int) map[uint32]int {
+	order := make([]int, len(tables))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		return pages[tables[order[a]].Oid] > pages[tables[order[b]].Oid]
+	})
+
+	load := make([]int64, numFiles)
+	dataFiles := make(map[uint32]int, len(tables))
+	for _, i := range order {
+		file := 0
+		for f := 1; f < numFiles; f++ {
+			if load[f] < load[file] {
+				file = f
+			}
+		}
+		dataFiles[tables[i].Oid] = file
+		load[file] += pages[tables[i].Oid] + 1
+	}
+	return dataFiles
+}
+
+func getDataFile(table Table) int {
+	if dataFileForTable == nil {
+		return 0
+	}
+	return dataFileForTable[table.Oid]
+}
+
+// The index of the gpbackup_helper that reads the data of a table; none when
+// there is a single data file, so that its files keep their usual names.
+func getDataFileHelperIdx(table Table) []int {
+	if dataFileForTable == nil {
+		return []int{}
+	}
+	return []int{dataFileForTable[table.Oid]}
+}
 
 func ConstructTableAttributesList(columnDefs []ColumnDefinition) string {
 	// this attribute list used ONLY by CopyTableIn on the restore side
@@ -53,6 +110,7 @@ func AddTableDataEntriesToTOC(tables []Table, rowsCopiedMaps []map[uint32]int64)
 			}
 			attributes := ConstructTableAttributesList(table.ColumnDefs)
 			globalTOC.AddCoordinatorDataEntry(table.Schema, table.Name, table.Oid, attributes, rowsCopied, table.PartitionLevelInfo.RootName, table.DistPolicy.Policy, table.DistPolicy.DistByEnum)
+			globalTOC.DataEntries[len(globalTOC.DataEntries)-1].DataFileIdx = getDataFile(table)
 		}
 	}
 }
@@ -134,7 +192,7 @@ func BackupSingleTableData(queryContext context.Context, table Table, rowsCopied
 
 	destinationToWrite := ""
 	if MustGetFlagBool(options.SINGLE_DATA_FILE) {
-		destinationToWrite = fmt.Sprintf("%s_%d", globalFPInfo.GetSegmentPipePathForCopyCommand(), table.Oid)
+		destinationToWrite = fmt.Sprintf("%s_%d", globalFPInfo.GetSegmentPipePathForCopyCommand(getDataFileHelperIdx(table)...), table.Oid)
 	} else {
 		destinationToWrite = globalFPInfo.GetTableBackupFilePathForCopyCommand(table.Oid, utils.GetPipeThroughProgram().Extension, false)
 	}
@@ -171,15 +229,25 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 	 * TerminateHangingCopySessions to halt any COPY statements
 	 * in progress if they don't finish on their own.
 	 */
-	tasks := make(chan Table, len(tables))
+	/*
+	 * Each data file has its own tasks channel, so that its gpbackup_helper gets its
+	 * tables in the order it reads them.  Without several data files there is one.
+	 */
+	if connectionPool.NumConns-1 < numDataFiles {
+		gplog.Fatal(fmt.Errorf("%d data files need at least as many workers, but there are %d", numDataFiles, connectionPool.NumConns-1), "")
+	}
+	tasks := make([]chan Table, numDataFiles)
+	for file := range tasks {
+		tasks[file] = make(chan Table, len(tables))
+	}
 	var oidMap sync.Map
 	var isErroredBackup atomic.Bool
 	var workerPool sync.WaitGroup
 	// Record and track tables in a hashmap of oids and table states (preloaded with value Unknown).
-	// The tables are loaded into the tasks channel for the subsequent goroutines to work on.
+	// The tables are loaded into the tasks channels for the subsequent goroutines to work on.
 	for _, table := range tables {
 		oidMap.Store(table.Oid, Unknown)
-		tasks <- table
+		tasks[getDataFile(table)] <- table
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -216,7 +284,7 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 			 * Large partition hierarchies result in a large number of locks being held until the
 			 * transaction commits and the locks are released.
 			 */
-			for table := range tasks {
+			for table := range tasks[(whichConn-1)%numDataFiles] {
 				// Check if any error occurred in any other goroutines:
 				select {
 				case <-ctx.Done():
@@ -338,7 +406,9 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 		deferredWorkerDone <- true
 	}()
 
-	close(tasks)
+	for _, fileTasks := range tasks {
+		close(fileTasks)
+	}
 	workerPool.Wait()
 
 	// Allow panics to crash from the main process, invoking DoCleanup

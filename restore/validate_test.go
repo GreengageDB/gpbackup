@@ -415,5 +415,33 @@ var _ = Describe("restore/validate tests", func() {
 				Fail("invalid flag combination passed validation check")
 			}
 		})
+		validateWithArgs := func(config history.BackupConfig, args ...string) error {
+			restore.SetBackupConfig(&config)
+			testCmd := &cobra.Command{
+				Use:  "flag validation",
+				Args: cobra.NoArgs,
+				Run: func(cmd *cobra.Command, args []string) {
+					restore.ValidateBackupFlagCombinations()
+				}}
+			testCmd.SetArgs(args)
+			restore.SetCmdFlags(testCmd.Flags())
+			return testCmd.Execute()
+		}
+		It("restore with jobs should fatal if backup was taken with a single data file", func() {
+			defer testhelper.ShouldPanicWithMessage("Cannot use jobs flag when restoring backups with a single data file per segment.")
+			_ = validateWithArgs(history.BackupConfig{SingleDataFile: true}, "--jobs", "2")
+		})
+		It("restore with jobs passes if an incremental backup was taken with a single data file", func() {
+			err := validateWithArgs(history.BackupConfig{SingleDataFile: true, Incremental: true}, "--jobs", "2")
+			Expect(err).ToNot(HaveOccurred())
+		})
+		It("restore with jobs passes if backup was taken with single-data-file and jobs", func() {
+			err := validateWithArgs(history.BackupConfig{SingleDataFile: true, SingleDataFileCount: 3}, "--jobs", "2")
+			Expect(err).ToNot(HaveOccurred())
+		})
+		It("restore with jobs and copy-queue-size passes if backup was taken with single-data-file and jobs", func() {
+			err := validateWithArgs(history.BackupConfig{SingleDataFile: true, SingleDataFileCount: 3}, "--jobs", "2", "--copy-queue-size", "2")
+			Expect(err).ToNot(HaveOccurred())
+		})
 	})
 })

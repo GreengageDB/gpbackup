@@ -58,6 +58,20 @@ var _ = Describe("backup/data tests", func() {
 			expectedDataEntries := []toc.CoordinatorDataEntry{{Schema: "public", Name: "table", Oid: 1, AttributeString: "(a)"}}
 			Expect(tocfile.DataEntries).To(Equal(expectedDataEntries))
 		})
+		It("records the data file of each table when data is written to several data files", func() {
+			otherTable := backup.Table{
+				Relation:        backup.Relation{Oid: 2, Schema: "public", Name: "other_table"},
+				TableDefinition: backup.TableDefinition{ColumnDefs: []backup.ColumnDefinition{{Oid: 1, Name: "a"}}},
+			}
+			backup.SetDataFileForTable(map[uint32]int{1: 1, 2: 0}, 2)
+			defer backup.SetDataFileForTable(nil, 1)
+			backup.AddTableDataEntriesToTOC([]backup.Table{table, otherTable}, rowsCopiedMaps)
+			expectedDataEntries := []toc.CoordinatorDataEntry{
+				{Schema: "public", Name: "table", Oid: 1, AttributeString: "(a)", DataFileIdx: 1},
+				{Schema: "public", Name: "other_table", Oid: 2, AttributeString: "(a)", DataFileIdx: 0},
+			}
+			Expect(tocfile.DataEntries).To(Equal(expectedDataEntries))
+		})
 		It("does not add an entry for an external table to the TOC", func() {
 			table.IsExternal = true
 			tables := []backup.Table{table}
@@ -70,6 +84,29 @@ var _ = Describe("backup/data tests", func() {
 			tables := []backup.Table{table}
 			backup.AddTableDataEntriesToTOC(tables, rowsCopiedMaps)
 			Expect(tocfile.DataEntries).To(BeNil())
+		})
+	})
+	Describe("AssignTablesToDataFiles", func() {
+		tablesWithOids := func(oids ...uint32) []backup.Table {
+			tables := make([]backup.Table, 0)
+			for _, oid := range oids {
+				tables = append(tables, backup.Table{Relation: backup.Relation{Oid: oid}})
+			}
+			return tables
+		}
+		It("puts each table, largest first, into the data file with the fewest pages", func() {
+			pages := map[uint32]int64{1: 40, 2: 100, 3: 10, 4: 50, 5: 90}
+			dataFiles := backup.AssignTablesToDataFiles(tablesWithOids(1, 2, 3, 4, 5), pages, 2)
+			// 2 -> file 0 (101), 5 -> file 1 (91), 4 -> file 1 (142), 1 -> file 0 (142), 3 -> file 0
+			Expect(dataFiles).To(Equal(map[uint32]int{1: 0, 2: 0, 3: 0, 4: 1, 5: 1}))
+		})
+		It("spreads tables without statistics evenly", func() {
+			dataFiles := backup.AssignTablesToDataFiles(tablesWithOids(1, 2, 3, 4, 5), map[uint32]int64{}, 3)
+			Expect(dataFiles).To(Equal(map[uint32]int{1: 0, 2: 1, 3: 2, 4: 0, 5: 1}))
+		})
+		It("uses the first data files when there are fewer tables than data files", func() {
+			dataFiles := backup.AssignTablesToDataFiles(tablesWithOids(1, 2), map[uint32]int64{1: 5, 2: 7}, 4)
+			Expect(dataFiles).To(Equal(map[uint32]int{1: 1, 2: 0}))
 		})
 	})
 	Describe("CopyTableOut", func() {

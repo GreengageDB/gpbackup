@@ -68,7 +68,11 @@ func SetLoggerVerbosity() {
 
 func CreateConnectionPool(unquotedDBName string) {
 	connectionPool = dbconn.NewDBConnFromEnvironment(unquotedDBName)
-	if FlagChanged(options.COPY_QUEUE_SIZE) {
+	if backupConfig != nil && backupConfig.SingleDataFileCount > 1 && FlagChanged(options.COPY_QUEUE_SIZE) {
+		// The data files of a backup taken with --single-data-file and --jobs are restored
+		// in parallel, each by the given number of COPY commands
+		connectionPool.MustConnect(MustGetFlagInt(options.JOBS) * MustGetFlagInt(options.COPY_QUEUE_SIZE))
+	} else if FlagChanged(options.COPY_QUEUE_SIZE) {
 		connectionPool.MustConnect(MustGetFlagInt(options.COPY_QUEUE_SIZE))
 	} else {
 		connectionPool.MustConnect(MustGetFlagInt(options.JOBS))
@@ -238,7 +242,12 @@ func RecoverMetadataFilesUsingPlugin() {
 		pluginConfig.MustRestoreFile(fpInfo.GetTOCFilePath())
 		if backupConfig.SingleDataFile {
 			origSize, destSize, _, batches := GetResizeClusterInfo()
-			pluginConfig.RestoreSegmentTOCs(globalCluster, fpInfo, origSize, destSize, batches)
+			numDataFiles := backupConfig.SingleDataFileCount
+			if backupConfig.Incremental {
+				// Each backup of an incremental chain may have its own number of data files
+				numDataFiles = toc.GetNumDataFiles(toc.NewTOC(fpInfo.GetTOCFilePath()).DataEntries)
+			}
+			pluginConfig.RestoreSegmentTOCs(globalCluster, fpInfo, origSize, destSize, batches, numDataFiles)
 		}
 	}
 }

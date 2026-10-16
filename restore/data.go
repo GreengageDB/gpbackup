@@ -25,6 +25,14 @@ import (
 var (
 	tableDelim = ","
 	maxHelpers int
+
+	/*
+	 * A backup taken with --single-data-file and --jobs has several data files per
+	 * segment, each read by its own gpbackup_helper.  The tables of a data file are
+	 * restored by one connection, in the order of the file, and helperOfConn records
+	 * the data file each connection is restoring; it is nil for other backups.
+	 */
+	helperOfConn []int
 )
 
 func CopyTableIn(queryContext context.Context, connectionPool *dbconn.DBConn, tableName string, tableAttributes string, destinationToRead string, singleDataFile bool, whichConn int) (int64, error) {
@@ -208,6 +216,16 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	}
 
 	origSize, destSize, resizeCluster, batches := GetResizeClusterInfo()
+	numDataFiles := 1
+	connsPerDataFile := 1
+	if backupConfig.SingleDataFile {
+		numDataFiles = toc.GetNumDataFiles(dataEntries)
+		if numDataFiles > 1 && FlagChanged(options.COPY_QUEUE_SIZE) && MustGetFlagInt(options.COPY_QUEUE_SIZE) <= connectionPool.NumConns {
+			connsPerDataFile = MustGetFlagInt(options.COPY_QUEUE_SIZE)
+		}
+	}
+	// Set up after the helpers are started, as HelperIdx uses it once it is set
+	helperOfConn = nil
 	if backupConfig.SingleDataFile || resizeCluster {
 		msg := ""
 		if backupConfig.SingleDataFile {
@@ -219,7 +237,9 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 		gplog.Verbose("Initializing pipes and gpbackup_helper on segments for %srestore", msg)
 		utils.VerifyHelperVersionOnSegments(version, globalCluster)
 
-		if backupConfig.SingleDataFile {
+		if backupConfig.SingleDataFile && numDataFiles > 1 {
+			maxHelpers = numDataFiles
+		} else if backupConfig.SingleDataFile {
 			maxHelpers = 1
 		} else if connectionPool.NumConns < totalTables {
 			maxHelpers = connectionPool.NumConns
@@ -231,7 +251,25 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 			// During a larger-to-smaller restore, we need to do multiple passes of
 			// data loading so we assign the batches here.
 			oidList := make([]string, 0)
-			for entryIdx := whichConn; entryIdx < totalTables; entryIdx += maxHelpers {
+			numPipes := connectionPool.NumConns * batches
+			entryIdxs := make([]int, 0)
+			if numDataFiles > 1 {
+				// Helper whichConn reads data file whichConn, which is restored by connsPerDataFile connections
+				numPipes = connsPerDataFile * batches
+				for entryIdx := 0; entryIdx < totalTables; entryIdx++ {
+					if dataEntries[entryIdx].DataFileIdx == whichConn {
+						entryIdxs = append(entryIdxs, entryIdx)
+					}
+				}
+				if len(entryIdxs) == 0 {
+					continue
+				}
+			} else {
+				for entryIdx := whichConn; entryIdx < totalTables; entryIdx += maxHelpers {
+					entryIdxs = append(entryIdxs, entryIdx)
+				}
+			}
+			for _, entryIdx := range entryIdxs {
 				if dataEntries[entryIdx].IsReplicated {
 					oidList = append(oidList, fmt.Sprintf("%d,0", dataEntries[entryIdx].Oid))
 					continue
@@ -243,7 +281,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 			}
 
 			utils.WriteOidListToSegments(oidList, globalCluster, fpInfo, HelperIdx(whichConn)...)
-			initialPipes := CreateInitialSegmentPipes(oidList, globalCluster, connectionPool.NumConns*batches, fpInfo, HelperIdx(whichConn)...)
+			initialPipes := CreateInitialSegmentPipes(oidList, globalCluster, numPipes, fpInfo, HelperIdx(whichConn)...)
 			if wasTerminated.Load() {
 				return 0
 			}
@@ -255,9 +293,17 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 			if backupConfig.Compressed {
 				compressStr = fmt.Sprintf(" --compression-type %s ", utils.GetPipeThroughProgram().Name)
 			}
-			utils.StartGpbackupHelpers(globalCluster, fpInfo, "--restore-agent", MustGetFlagString(options.PLUGIN_CONFIG), compressStr, MustGetFlagBool(options.ON_ERROR_CONTINUE), isFilter, &wasTerminated, initialPipes, backupConfig.SingleDataFile, resizeCluster, origSize, destSize, gplog.GetVerbosity(), HelperIdx(whichConn)...)
+			dataFileIdx := 0
+			if numDataFiles > 1 {
+				dataFileIdx = whichConn
+			}
+			utils.StartGpbackupHelpers(globalCluster, fpInfo, "--restore-agent", MustGetFlagString(options.PLUGIN_CONFIG), compressStr, MustGetFlagBool(options.ON_ERROR_CONTINUE), isFilter, &wasTerminated, initialPipes, backupConfig.SingleDataFile, resizeCluster, origSize, destSize, dataFileIdx, gplog.GetVerbosity(), HelperIdx(whichConn)...)
 		}
 	}
+	if numDataFiles > 1 {
+		helperOfConn = make([]int, connectionPool.NumConns)
+	}
+	entryIdxsForConn := GetEntryIdxsForConns(dataEntries, numDataFiles, connectionPool.NumConns, connsPerDataFile)
 	/*
 	 * We break when an interrupt is received and rely on
 	 * TerminateHangingCopySessions to stop any COPY
@@ -283,8 +329,15 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 			defer workerPool.Done()
 
 			setGUCsForConnection(gucStatements, whichConn)
-			for entryIdx := whichConn; entryIdx < totalTables; entryIdx += connectionPool.NumConns {
+			failedDataFile := -1
+			for _, entryIdx := range entryIdxsForConn[whichConn] {
 				entry := dataEntries[entryIdx]
+				if helperOfConn != nil {
+					if entry.DataFileIdx == failedDataFile {
+						continue
+					}
+					helperOfConn[whichConn] = entry.DataFileIdx
+				}
 				// Check if any error occurred in any other goroutines:
 				select {
 				case <-ctx.Done():
@@ -317,6 +370,11 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					atomic.AddInt32(&numErrors, 1)
 					if errors.Is(err, utils.AgentErr) && MustGetFlagBool(options.ON_ERROR_CONTINUE) && maxHelpers > 1 {
 						dataProgressBar.(*pb.ProgressBar).NotPrint = true
+						if helperOfConn != nil {
+							// The helper of this data file has stopped, but the other data files can still be restored
+							failedDataFile = entry.DataFileIdx
+							continue
+						}
 						return
 					}
 					if errors.Is(err, utils.AgentErr) || !MustGetFlagBool(options.ON_ERROR_CONTINUE) {
@@ -369,8 +427,39 @@ func CreateInitialSegmentPipes(oidList []string, c *cluster.Cluster, numConns in
 }
 
 func HelperIdx(whichConn int) []int {
+	if helperOfConn != nil {
+		return []int{helperOfConn[whichConn]}
+	}
 	if maxHelpers > 1 {
 		return []int{whichConn}
 	}
 	return []int{}
+}
+
+/*
+ * GetEntryIdxsForConns returns the data entries each connection restores, in order.
+ *
+ * The gpbackup_helper of a data file reads its tables one after another, so with
+ * several data files the connections are split into groups of connsPerDataFile.
+ * Each data file is restored by one group, which takes its tables in the order of
+ * the file, round-robin.  The data files are spread over the groups.  As every
+ * connection restores its entries in the order of the data entries, the earliest
+ * entry that is not restored yet can always proceed.
+ *
+ * Otherwise the tables are spread round-robin over all connections.
+ */
+func GetEntryIdxsForConns(dataEntries []toc.CoordinatorDataEntry, numDataFiles int, numConns int, connsPerDataFile int) [][]int {
+	entryIdxsForConn := make([][]int, numConns)
+	numGroups := numConns / connsPerDataFile
+	entriesInGroup := make([]int, numGroups)
+	for entryIdx, entry := range dataEntries {
+		whichConn := entryIdx % numConns
+		if numDataFiles > 1 {
+			group := entry.DataFileIdx % numGroups
+			whichConn = group*connsPerDataFile + entriesInGroup[group]%connsPerDataFile
+			entriesInGroup[group]++
+		}
+		entryIdxsForConn[whichConn] = append(entryIdxsForConn[whichConn], entryIdx)
+	}
+	return entryIdxsForConn
 }

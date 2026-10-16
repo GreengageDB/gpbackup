@@ -55,6 +55,9 @@ type BackupConfig struct {
 	WithoutGlobals        bool
 	WithStatistics        bool
 	Status                string
+	// Number of data files per segment in a backup taken with --single-data-file
+	// and --jobs; 0 means a single data file.
+	SingleDataFileCount int `yaml:",omitempty"`
 }
 
 func (backup *BackupConfig) Failed() bool {
