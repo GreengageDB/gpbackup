@@ -416,12 +416,13 @@ func (plugin *PluginConfig) BackupSegmentTOCs(c *cluster.Cluster, fpInfo filepat
 	remoteOutput := c.GenerateAndExecuteCommand("Waiting for remaining data to be uploaded to plugin destination",
 		cluster.ON_SEGMENTS,
 		func(contentID int) string {
-			// Each data file has its own segment TOC, written by its own gpbackup_helper
+			// Each data file has its own segment TOC, written by its own gpbackup_helper.  The
+			// wait for each one is grouped, so that the command fails if any TOC is missing.
 			waitCommands := make([]string, 0, numDataFiles)
 			for file := 0; file < numDataFiles; file++ {
 				tocFile := fpInfo.GetSegmentTOCFilePathForDataFile(contentID, file)
 				errorFile := GetErrorFilename(fpInfo.GetSegmentPipeFilePath(contentID, dataFileHelperIdx(file, numDataFiles)...))
-				waitCommands = append(waitCommands, fmt.Sprintf(`while [[ ! -f "%s" && ! -f "%s" ]]; do sleep 1; done; ls "%s"`, tocFile, errorFile, tocFile))
+				waitCommands = append(waitCommands, fmt.Sprintf(`(while [[ ! -f "%s" && ! -f "%s" ]]; do sleep 1; done; ls "%s")`, tocFile, errorFile, tocFile))
 			}
 			command = strings.Join(waitCommands, " && ")
 			return command
