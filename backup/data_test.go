@@ -108,6 +108,13 @@ var _ = Describe("backup/data tests", func() {
 			dataFiles := backup.AssignTablesToDataFiles(tablesWithOids(1, 2), map[uint32]int64{1: 5, 2: 7}, 4)
 			Expect(dataFiles).To(Equal(map[uint32]int{1: 1, 2: 0}))
 		})
+		It("puts a single table into each data file when there are as many data files as tables", func() {
+			// gpbackup then creates a single pipe for each data file, however many workers it has
+			pages := map[uint32]int64{1: 0, 2: 1000, 3: 0, 4: 5}
+			dataFiles := backup.AssignTablesToDataFiles(tablesWithOids(1, 2, 3, 4), pages, 4)
+			// 2 -> file 0 (1001), 4 -> file 1 (6), 1 -> file 2 (1), 3 -> file 3 (1)
+			Expect(dataFiles).To(Equal(map[uint32]int{1: 2, 2: 0, 3: 3, 4: 1}))
+		})
 	})
 	Describe("CopyTableOut", func() {
 		testTable := backup.Table{Relation: backup.Relation{SchemaOid: 2345, Oid: 3456, Schema: "public", Name: "foo"}}
