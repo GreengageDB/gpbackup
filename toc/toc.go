@@ -346,8 +346,23 @@ func (toc *TOC) AddMetadataEntry(section string, entry MetadataEntry, start, end
 }
 
 func (toc *TOC) AddCoordinatorDataEntry(schema string, name string, oid uint32, attributeString string, rowsCopied int64, PartitionRoot string, distPolicy string, distByEnum bool) {
-	isReplicated := strings.Contains(distPolicy, "REPLICATED")
-	toc.DataEntries = append(toc.DataEntries, CoordinatorDataEntry{schema, name, oid, attributeString, rowsCopied, PartitionRoot, isReplicated, distByEnum, 0})
+	toc.AddCoordinatorDataEntryForDataFile(schema, name, oid, attributeString, rowsCopied, PartitionRoot, distPolicy, distByEnum, 0)
+}
+
+// AddCoordinatorDataEntryForDataFile adds the data entry of a table written to the
+// given data file of a backup taken with --single-data-file and --jobs.
+func (toc *TOC) AddCoordinatorDataEntryForDataFile(schema string, name string, oid uint32, attributeString string, rowsCopied int64, PartitionRoot string, distPolicy string, distByEnum bool, dataFileIdx int) {
+	toc.DataEntries = append(toc.DataEntries, CoordinatorDataEntry{
+		Schema:          schema,
+		Name:            name,
+		Oid:             oid,
+		AttributeString: attributeString,
+		RowsCopied:      rowsCopied,
+		PartitionRoot:   PartitionRoot,
+		IsReplicated:    strings.Contains(distPolicy, "REPLICATED"),
+		DistByEnum:      distByEnum,
+		DataFileIdx:     dataFileIdx,
+	})
 }
 
 // GetNumDataFiles returns the number of data files per segment that the data
