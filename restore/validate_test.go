@@ -316,6 +316,10 @@ var _ = Describe("restore/validate tests", func() {
 				}
 			},
 			Entry("--backup-dir combo", "--backup-dir /tmp --plugin-config /tmp/config", false),
+			Entry("--jobs values", "--timestamp=0 --jobs 1", true),
+			Entry("--jobs values", "--timestamp=0 --jobs 0", false),
+			Entry("--jobs values", "--timestamp=0 --jobs -2", false),
+			Entry("--copy-queue-size values", "--timestamp=0 --copy-queue-size 0", false),
 
 			/*
 			 * Below are all the different filter combinations

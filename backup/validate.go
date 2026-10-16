@@ -193,6 +193,10 @@ func validateFlagValues() {
 		gplog.Fatal(errors.Errorf("--copy-queue-size %d is invalid. Must be at least 2",
 			MustGetFlagInt(options.COPY_QUEUE_SIZE)), "")
 	}
+	if MustGetFlagInt(options.JOBS) < 1 {
+		gplog.Fatal(errors.Errorf("--jobs %d is invalid. Must be at least 1",
+			MustGetFlagInt(options.JOBS)), "")
+	}
 }
 
 func validateFromTimestamp(fromTimestamp string) {

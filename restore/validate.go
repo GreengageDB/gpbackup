@@ -294,6 +294,12 @@ func ValidateFlagCombinations(flags *pflag.FlagSet) {
 		gplog.Fatal(errors.Errorf("Must provide --backup-dir if --timestamp is not provided"), "")
 	}
 	options.CheckExclusiveFlags(flags, options.RUN_ANALYZE, options.WITH_STATS)
+	if MustGetFlagInt(options.JOBS) < 1 {
+		gplog.Fatal(errors.Errorf("--jobs %d is invalid. Must be at least 1", MustGetFlagInt(options.JOBS)), "")
+	}
+	if flags.Changed(options.COPY_QUEUE_SIZE) && MustGetFlagInt(options.COPY_QUEUE_SIZE) < 1 {
+		gplog.Fatal(errors.Errorf("--copy-queue-size %d is invalid. Must be at least 1", MustGetFlagInt(options.COPY_QUEUE_SIZE)), "")
+	}
 }
 
 func ValidateSafeToResizeCluster() {
