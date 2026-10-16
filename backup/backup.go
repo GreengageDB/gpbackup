@@ -638,7 +638,6 @@ func DoCleanup(backupFailed bool) {
 	}
 }
 
-// Cancel blocked gpbackup queries waiting for locks.
 /*
  * EstimateAOTablePages reads an aoseg table for each append-optimized table without
  * statistics.  In the backup transaction, which already holds a lock on every table,
@@ -659,6 +658,7 @@ func estimateAOTablePagesOutsideTransaction(tables []Table, pages map[uint32]int
 	EstimateAOTablePages(conn, tables, pages)
 }
 
+// Cancel blocked gpbackup queries waiting for locks.
 func cancelBlockedQueries(timestamp string) {
 	conn := dbconn.NewDBConnFromEnvironment(MustGetFlagString(options.DBNAME))
 	conn.MustConnect(1)

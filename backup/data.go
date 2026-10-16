@@ -233,9 +233,6 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 	 * Each data file has its own tasks channel, so that its gpbackup_helper gets its
 	 * tables in the order it reads them.  Without several data files there is one.
 	 */
-	if connectionPool.NumConns-1 < numDataFiles {
-		gplog.Fatal(fmt.Errorf("%d data files need at least as many workers, but there are %d", numDataFiles, connectionPool.NumConns-1), "")
-	}
 	tasks := make([]chan Table, numDataFiles)
 	for file := range tasks {
 		tasks[file] = make(chan Table, len(tables))
