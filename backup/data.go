@@ -262,6 +262,17 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 	 */
 	panicChan := make(chan error)
 	rowsCopiedMaps[0] = make(map[uint32]int64)
+	/*
+	 * Worker 0 backs up the deferred tables in the order of the tables, waiting for
+	 * each table that is not done yet.  With several data files, a worker of one data
+	 * file may wait in COPY for worker 0 to back up a deferred table of its file, so
+	 * worker 0 must not wait for the tables of another data file whose workers have
+	 * all stopped: the last of them defers the tables left in its file.
+	 */
+	workersOfFile := make([]atomic.Int32, numDataFiles)
+	for connNum := 1; connNum < connectionPool.NumConns; connNum++ {
+		workersOfFile[(connNum-1)%numDataFiles].Add(1)
+	}
 	for connNum := 1; connNum < connectionPool.NumConns; connNum++ {
 		rowsCopiedMaps[connNum] = make(map[uint32]int64)
 		workerPool.Add(1)
@@ -273,6 +284,20 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 				}
 			}()
 			defer workerPool.Done()
+			dataFile := (whichConn - 1) % numDataFiles
+			defer func() {
+				if workersOfFile[dataFile].Add(-1) > 0 || numDataFiles == 1 {
+					return
+				}
+				numDeferred := 0
+				for table := range tasks[dataFile] {
+					oidMap.Store(table.Oid, Deferred)
+					numDeferred++
+				}
+				if numDeferred > 0 && backupSnapshot == "" && !wasTerminated.Load() && !isErroredBackup.Load() {
+					gplog.Warn("All workers of data file %d terminated due to lock issues. Falling back to main worker for its %d remaining table(s).", dataFile, numDeferred)
+				}
+			}()
 			// Close opened transaction to open new transaction with shared snapshot below.
 			if backupSnapshot != "" && connectionPool.Tx[whichConn] != nil {
 				if err := connectionPool.Commit(whichConn); err != nil {
@@ -284,7 +309,7 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 			 * Large partition hierarchies result in a large number of locks being held until the
 			 * transaction commits and the locks are released.
 			 */
-			for table := range tasks[(whichConn-1)%numDataFiles] {
+			for table := range tasks[dataFile] {
 				// Check if any error occurred in any other goroutines:
 				select {
 				case <-ctx.Done():
