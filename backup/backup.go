@@ -401,7 +401,9 @@ func backupData(tables []Table) {
 		numPipes := connectionPool.NumConns
 		if numDataFiles > 1 {
 			gplog.Verbose("Writing data to %d data files per segment", numDataFiles)
-			dataFileForTable = AssignTablesToDataFiles(tables, GetTablePages(connectionPool, tables), numDataFiles)
+			pages := GetTablePages(connectionPool, tables)
+			EstimateAOTablePages(connectionPool, tables, pages)
+			dataFileForTable = AssignTablesToDataFiles(tables, pages, numDataFiles)
 			backupReport.BackupConfig.SingleDataFileCount = numDataFiles
 			numPipes = (connectionPool.NumConns-1)/numDataFiles + 1
 		}
