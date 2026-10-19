@@ -1036,7 +1036,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(files).To(HaveLen(0))
 		})
-		It(`keeps the data of the tables of a data file whose gpbackup_helper has stopped with --single-data-file, --jobs, --truncate-table and --on-error-continue`, func() {
+		DescribeTable(`keeps the data of the tables of a data file whose gpbackup_helper has stopped with --single-data-file, --jobs and --on-error-continue`, func(restoreFlags []string, restoredRows string) {
 			if useOldBackupVersion {
 				Skip("This test is not needed for old backup versions")
 			}
@@ -1074,14 +1074,13 @@ var _ = Describe("backup and restore end to end tests", func() {
 				testhelper.AssertQueryRuns(backupConn, fmt.Sprintf("INSERT INTO helper_stop.t%d SELECT g, 'kept' FROM generate_series(1001, 1005) g", i))
 			}
 
-			gprestoreCmd := exec.Command(gprestorePath,
+			gprestoreArgs := append([]string{
 				"--timestamp", timestamp,
 				"--backup-dir", backupDir,
 				"--data-only",
-				"--truncate-table",
 				"--on-error-continue",
-				"--jobs", "2")
-			restoreOutput, err := gprestoreCmd.CombinedOutput()
+				"--jobs", "2"}, restoreFlags...)
+			restoreOutput, err := exec.Command(gprestorePath, gprestoreArgs...).CombinedOutput()
 			Expect(err).To(HaveOccurred(), string(restoreOutput))
 
 			errorFiles, _ := path.Glob(path.Join(backupDir, "*-1/backups/*", timestamp, "*error_tables_data"))
@@ -1093,16 +1092,21 @@ var _ = Describe("backup and restore end to end tests", func() {
 				tableName := fmt.Sprintf("helper_stop.%s", entry.Name)
 				numRows := dbconn.MustSelectString(backupConn, fmt.Sprintf("SELECT count(*) AS string FROM %s", tableName))
 				if entry.DataFileIdx == 0 {
-					Expect(numRows).To(Equal("1000"), tableName)
+					Expect(numRows).To(Equal(restoredRows), tableName)
 					Expect(errorTables).ToNot(ContainElement(tableName))
-				} else if numRows != "1000" {
+				} else if numRows != restoredRows {
 					Expect(errorTables).To(ContainElement(tableName))
 				}
 			}
-			// The last table of data file 1 is not truncated, as its helper has stopped by then
+			// The last table of data file 1 keeps its rows, as its helper has stopped by then
 			Expect(dbconn.MustSelectString(backupConn, fmt.Sprintf("SELECT count(*) AS string FROM helper_stop.%s", dataFile1[len(dataFile1)-1]))).To(Equal("1005"))
 			assertArtifactsCleaned(timestamp)
-		})
+		},
+			Entry("truncating the tables with --truncate-table", []string{"--truncate-table"}, "1000"),
+			Entry("truncating the tables with --incremental", []string{"--incremental"}, "1000"),
+			// The restored tables then have their 1005 rows and the 1000 of the backup
+			Entry("without truncating the tables", []string{}, "2005"),
+		)
 	})
 	Describe("Redirect Schema", func() {
 		It("runs gprestore with --redirect-schema restoring data and statistics to the new schema", func() {
