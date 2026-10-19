@@ -10,7 +10,6 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
@@ -28,8 +27,6 @@ var (
 	tableDelim = ","
 	maxHelpers int
 )
-
-const helperCheckInterval = time.Second
 
 /*
  * errorFile is the error file of the gpbackup_helper that creates the pipe
@@ -282,14 +279,12 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	 * checked for errors on the segments again.
 	 */
 	failedDataFiles := make([]atomic.Bool, numDataFiles)
-	truncateTable := MustGetFlagBool(options.INCREMENTAL) || MustGetFlagBool(options.TRUNCATE_TABLE)
 	/*
-	 * Before a table is truncated, its helper is checked over ssh on all segments,
-	 * at most once in helperCheckInterval for each helper.  A helper that stops in
-	 * between costs the table that each connection restoring from it truncates
-	 * before its COPY finds the error file.
+	 * A table is truncated in the transaction that restores its data, so that it
+	 * keeps its data if they cannot be restored, whether the helper has stopped or
+	 * the COPY has failed.
 	 */
-	lastHelperChecks := make([]atomic.Int64, maxHelpers+1)
+	truncateTable := MustGetFlagBool(options.INCREMENTAL) || MustGetFlagBool(options.TRUNCATE_TABLE)
 	/*
 	 * We break when an interrupt is received and rely on
 	 * TerminateHangingCopySessions to stop any COPY
@@ -347,31 +342,29 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					continue
 				}
 				var err error
-				if truncateTable && (backupConfig.SingleDataFile || resizeCluster) {
-					// A table is not truncated if the helper that would restore it has stopped
-					lastCheck := &lastHelperChecks[0]
-					if len(helperIdx) > 0 {
-						lastCheck = &lastHelperChecks[helperIdx[0]+1]
-					}
-					if time.Since(time.Unix(0, lastCheck.Load())) >= helperCheckInterval {
-						err = checkAgentErrors(fpInfo, helperIdx)
-						if err != nil {
-							gplog.Error(err.Error())
-						} else {
-							lastCheck.Store(time.Now().UnixNano())
-						}
-					}
-				}
-				// Truncate table before restore, if needed
-				if err == nil && truncateTable {
+				if truncateTable {
 					gplog.Verbose("Truncating table %s prior to restoring data", tableName)
-					_, err := connectionPool.Exec(`TRUNCATE `+tableName, whichConn)
+					err = connectionPool.Begin(whichConn)
+					if err == nil {
+						_, err = connectionPool.Exec(`TRUNCATE `+tableName, whichConn)
+					}
 					if err != nil {
 						gplog.Error(err.Error())
 					}
 				}
 				if err == nil {
 					err = restoreSingleTableData(ctx, &fpInfo, entry, tableName, whichConn, helperIdx)
+				}
+				if truncateTable && connectionPool.Tx[whichConn] != nil {
+					if err == nil {
+						err = connectionPool.Commit(whichConn)
+						if err != nil {
+							gplog.Error(err.Error())
+						}
+					} else {
+						// The table keeps the data it had
+						_ = connectionPool.Rollback(whichConn)
+					}
 				}
 
 				if err != nil {
