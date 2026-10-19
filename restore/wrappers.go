@@ -68,16 +68,22 @@ func SetLoggerVerbosity() {
 
 func CreateConnectionPool(unquotedDBName string) {
 	connectionPool = dbconn.NewDBConnFromEnvironment(unquotedDBName)
-	if backupConfig != nil && FlagChanged(options.COPY_QUEUE_SIZE) && GetNumDataFilesToRestore() > 1 {
-		// The data files of a backup taken with --single-data-file and --jobs are restored
-		// in parallel, each by the given number of COPY commands
-		connectionPool.MustConnect(MustGetFlagInt(options.JOBS) * MustGetFlagInt(options.COPY_QUEUE_SIZE))
-	} else if FlagChanged(options.COPY_QUEUE_SIZE) {
-		connectionPool.MustConnect(MustGetFlagInt(options.COPY_QUEUE_SIZE))
-	} else {
-		connectionPool.MustConnect(MustGetFlagInt(options.JOBS))
-	}
+	connectionPool.MustConnect(GetNumConnections())
 	utils.ValidateGPDBVersionCompatibility(connectionPool)
+}
+
+/*
+ * GetNumConnections returns the number of connections to open.  A backup taken
+ * with --single-data-file is restored by --jobs groups of --copy-queue-size
+ * connections, each group restoring one data file at a time.
+ */
+func GetNumConnections() int {
+	if backupConfig != nil && backupConfig.SingleDataFile && FlagChanged(options.COPY_QUEUE_SIZE) {
+		return MustGetFlagInt(options.JOBS) * MustGetFlagInt(options.COPY_QUEUE_SIZE)
+	} else if FlagChanged(options.COPY_QUEUE_SIZE) {
+		return MustGetFlagInt(options.COPY_QUEUE_SIZE)
+	}
+	return MustGetFlagInt(options.JOBS)
 }
 
 func InitializeConnectionPool(backupTimestamp string, restoreTimestamp string, unquotedDBName string) {
@@ -244,8 +250,9 @@ func RecoverMetadataFilesUsingPlugin() {
 			origSize, destSize, _, batches := GetResizeClusterInfo()
 			numDataFiles := backupConfig.SingleDataFileCount
 			if backupConfig.Incremental {
-				// Each backup of an incremental chain may have its own number of data files
-				numDataFiles = getNumDataFilesOfBackup(fpInfo)
+				// Each backup of an incremental chain may have its own number of data files,
+				// which for the earlier backups of the chain only their TOCs record
+				numDataFiles = toc.GetNumDataFiles(toc.NewTOC(fpInfo.GetTOCFilePath()).DataEntries)
 			}
 			pluginConfig.RestoreSegmentTOCs(globalCluster, fpInfo, origSize, destSize, batches, numDataFiles)
 		}
@@ -342,53 +349,6 @@ func GetBackupFPInfoListFromRestorePlan() []filepath.FilePathInfo {
 	}
 
 	return fpInfoList
-}
-
-/*
- * GetNumDataFilesToRestore returns the largest number of data files per segment
- * among the backups whose data is restored.  The backups of an incremental chain
- * may each have their own number of data files, which for the earlier backups of
- * the chain only their TOCs record, so these are read for an incremental backup.
- */
-func GetNumDataFilesToRestore() int {
-	numDataFiles := 1
-	if backupConfig.SingleDataFileCount > numDataFiles {
-		numDataFiles = backupConfig.SingleDataFileCount
-	}
-	if !backupConfig.SingleDataFile || !backupConfig.Incremental || backupConfig.MetadataOnly {
-		return numDataFiles
-	}
-	restorePlan := backupConfig.RestorePlan
-	if MustGetFlagBool(options.INCREMENTAL) {
-		restorePlan = restorePlan[len(restorePlan)-1:]
-	}
-	for _, entry := range restorePlan {
-		if entry.Timestamp == globalFPInfo.Timestamp {
-			continue
-		}
-		fpInfo := GetBackupFPInfoForTimestamp(entry.Timestamp)
-		if entryDataFiles := getNumDataFilesOfBackup(fpInfo); entryDataFiles > numDataFiles {
-			numDataFiles = entryDataFiles
-		}
-	}
-	return numDataFiles
-}
-
-/*
- * The number of data files per segment of a backup, which for the earlier backups
- * of an incremental chain only their TOCs record.  Reading the TOC of a backup of
- * many tables takes seconds, so it is read for this once, by its path.
- */
-var numDataFilesOfTOC = make(map[string]int)
-
-func getNumDataFilesOfBackup(fpInfo filepath.FilePathInfo) int {
-	tocFile := fpInfo.GetTOCFilePath()
-	numDataFiles, ok := numDataFilesOfTOC[tocFile]
-	if !ok {
-		numDataFiles = toc.GetNumDataFiles(toc.NewTOC(tocFile).DataEntries)
-		numDataFilesOfTOC[tocFile] = numDataFiles
-	}
-	return numDataFiles
 }
 
 func GetBackupFPInfoForTimestamp(timestamp string) filepath.FilePathInfo {

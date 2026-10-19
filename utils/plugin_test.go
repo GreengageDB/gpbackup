@@ -332,19 +332,18 @@ options:
 		})
 	})
 	Describe("BackupSegmentTOCs", func() {
-		It("waits for the segment TOC of every data file, each in its own group", func() {
+		It("uploads the segment TOC of every data file", func() {
 			fpInfo := gpfilepath.NewFilePathInfo(testCluster, "", "20170101010101", "gpseg", false)
 			subject.BackupSegmentTOCs(testCluster, fpInfo, 2)
 
-			waitCommand := func(dataFile int) string {
+			backupCommand := func(dataFile int) string {
 				tocFile := fpInfo.GetSegmentTOCFilePathForDataFile(0, dataFile)
-				errorFile := utils.GetErrorFilename(fpInfo.GetSegmentPipeFilePath(0, dataFile))
-				return fmt.Sprintf(`(while [[ ! -f "%s" && ! -f "%s" ]]; do sleep 1; done; ls "%s")`, tocFile, errorFile, tocFile)
+				return fmt.Sprintf("%s backup_file %s %s && chmod 0755 %s", subject.ExecutablePath, subject.ConfigPath, tocFile, tocFile)
 			}
-			// Without the groups, the command would succeed when only the last segment TOC exists
+			Expect(executor.NumClusterExecutions).To(Equal(1))
 			cc := executor.ClusterCommands[0]
 			Expect(cc[0].Content).To(Equal(0))
-			Expect(cc[0].CommandString).To(ContainSubstring(waitCommand(0) + " && " + waitCommand(1)))
+			Expect(cc[0].CommandString).To(ContainSubstring(backupCommand(0) + " && " + backupCommand(1)))
 		})
 	})
 	Describe("DeleteConfigFileOnSegments", func() {

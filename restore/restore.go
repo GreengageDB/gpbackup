@@ -904,7 +904,7 @@ func DoCleanup(restoreFailed bool) {
 			utils.CleanUpHelperFilesOnAllHosts(globalCluster, fpInfo, cleanupTimeout)
 
 			// Check gpbackup_helper errors here
-			err := utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo)
+			err := utils.CheckAgentErrorsOnSegments(globalCluster, fpInfo)
 			if err != nil {
 				gplog.Error(err.Error())
 			}

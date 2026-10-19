@@ -410,7 +410,7 @@ func backupData(tables []Table) {
 		utils.FinishSlotBackupHelpers(globalCluster, globalFPInfo, dataFiles.GetNextSlots())
 	}
 	AddTableDataEntriesToTOC(tables, rowsCopiedMaps)
-	if MustGetFlagBool(options.SINGLE_DATA_FILE) && MustGetFlagString(options.PLUGIN_CONFIG) != "" {
+	if dataFiles != nil && !wasTerminated.Load() && MustGetFlagString(options.PLUGIN_CONFIG) != "" {
 		pluginConfig.BackupSegmentTOCs(globalCluster, globalFPInfo, numDataFiles)
 	}
 	logCompletionMessage("Data backup")

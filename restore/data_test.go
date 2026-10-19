@@ -2,7 +2,6 @@ package restore_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -11,9 +10,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
-	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/backup"
-	"github.com/GreengageDB/gpbackup/filepath"
 	"github.com/GreengageDB/gpbackup/history"
 	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/restore"
@@ -39,7 +36,7 @@ var _ = Describe("restore/data tests", func() {
 			execStr := regexp.QuoteMeta("COPY public.foo(i,j) FROM PROGRAM 'cat <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456.gz | gzip -d -c' WITH CSV DELIMITER ',' ON SEGMENT")
 			mock.ExpectExec(execStr).WillReturnResult(sqlmock.NewResult(10, 0))
 			filename := "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456.gz"
-			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0)
+			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0, "")
 
 			Expect(err).ShouldNot(HaveOccurred())
 		})
@@ -48,7 +45,7 @@ var _ = Describe("restore/data tests", func() {
 			execStr := regexp.QuoteMeta("COPY public.foo(i,j) FROM PROGRAM 'cat <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456.zst | zstd --decompress -c' WITH CSV DELIMITER ',' ON SEGMENT")
 			mock.ExpectExec(execStr).WillReturnResult(sqlmock.NewResult(10, 0))
 			filename := "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456.zst"
-			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0)
+			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0, "")
 
 			Expect(err).ShouldNot(HaveOccurred())
 		})
@@ -56,7 +53,7 @@ var _ = Describe("restore/data tests", func() {
 			execStr := regexp.QuoteMeta("COPY public.foo(i,j) FROM PROGRAM 'cat <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456' WITH CSV DELIMITER ',' ON SEGMENT")
 			mock.ExpectExec(execStr).WillReturnResult(sqlmock.NewResult(10, 0))
 			filename := "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456"
-			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0)
+			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0, "")
 
 			Expect(err).ShouldNot(HaveOccurred())
 		})
@@ -64,7 +61,7 @@ var _ = Describe("restore/data tests", func() {
 			execStr := regexp.QuoteMeta(fmt.Sprintf("COPY public.foo(i,j) FROM PROGRAM '(timeout --foreground 300 bash -c \"while [[ ! -p \"<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456\" && ! -f \"<SEG_DATA_DIR>/gpbackup_<SEGID>_20170101010101_%d_error\" ]]; do sleep 1; done\" || (echo \"Pipe not found <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456\">&2; exit 1)) && cat <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456' WITH CSV DELIMITER ',' ON SEGMENT", os.Getpid()))
 			mock.ExpectExec(execStr).WillReturnResult(sqlmock.NewResult(10, 0))
 			filename := "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456"
-			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, true, 0)
+			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, true, 0, fmt.Sprintf("<SEG_DATA_DIR>/gpbackup_<SEGID>_20170101010101_%d_error", os.Getpid()))
 
 			Expect(err).ShouldNot(HaveOccurred())
 		})
@@ -77,7 +74,7 @@ var _ = Describe("restore/data tests", func() {
 			mock.ExpectExec(execStr).WillReturnResult(sqlmock.NewResult(10, 0))
 
 			filename := "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456.gz"
-			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0)
+			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0, "")
 
 			Expect(err).ShouldNot(HaveOccurred())
 		})
@@ -90,7 +87,7 @@ var _ = Describe("restore/data tests", func() {
 			mock.ExpectExec(execStr).WillReturnResult(sqlmock.NewResult(10, 0))
 
 			filename := "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456.zst"
-			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0)
+			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0, "")
 
 			Expect(err).ShouldNot(HaveOccurred())
 		})
@@ -102,7 +99,7 @@ var _ = Describe("restore/data tests", func() {
 			mock.ExpectExec(execStr).WillReturnResult(sqlmock.NewResult(10, 0))
 
 			filename := "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456.gz"
-			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0)
+			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0, "")
 
 			Expect(err).ShouldNot(HaveOccurred())
 		})
@@ -116,7 +113,7 @@ var _ = Describe("restore/data tests", func() {
 			}
 			mock.ExpectExec(execStr).WillReturnError(pgErr)
 			filename := "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456"
-			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0)
+			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, false, 0, "")
 
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(Equal("Error loading data into table public.foo: " +
@@ -124,55 +121,25 @@ var _ = Describe("restore/data tests", func() {
 				"ERROR: value of distribution key doesn't belong to segment with ID 0, it belongs to segment with ID 1 (SQLSTATE 22P04)"))
 		})
 	})
-	Describe("CheckAgentErrors", func() {
-		var testExecutor *testhelper.TestExecutor
-		errorOutput := &cluster.RemoteOutput{Commands: []cluster.ShellCommand{{Content: 0, Stdout: "error"}}}
-		noErrorOutput := &cluster.RemoteOutput{Commands: []cluster.ShellCommand{{Content: 0}}}
-		BeforeEach(func() {
-			testExecutor = &testhelper.TestExecutor{}
-			testCluster := cluster.NewCluster([]cluster.SegConfig{
-				{ContentID: -1, Hostname: "localhost", DataDir: "/data/gpseg-1"},
-				{ContentID: 0, Hostname: "localhost", DataDir: "/data/gpseg0"},
-			})
-			testCluster.Executor = testExecutor
-			restore.SetCluster(testCluster)
-			restore.SetFPInfo(filepath.NewFilePathInfo(testCluster, "", "20170101010101", "gpseg", false))
-			restore.SetNumDataFiles(2)
-		})
-		AfterEach(func() {
-			restore.SetNumDataFiles(1)
-		})
-		It("reports a stopped helper to every connection restoring its data file", func() {
-			// The error file is removed once found, so later checks on the segments find nothing
-			testExecutor.ClusterOutputs = []*cluster.RemoteOutput{errorOutput, noErrorOutput}
-			testExecutor.UseLastOutput = true
-
-			// Two connections restore data file 1, another one data file 0
-			Expect(errors.Is(restore.CheckAgentErrors(1), utils.AgentErr)).To(BeTrue())
-			Expect(errors.Is(restore.CheckAgentErrors(1), utils.AgentErr)).To(BeTrue())
-			Expect(restore.CheckAgentErrors(0)).To(Succeed())
-			// The failure of data file 1 is not checked on the segments again
-			Expect(testExecutor.NumClusterExecutions).To(Equal(2))
-		})
-	})
 	Describe("GetEntryIdxsForConns", func() {
 		entries := []toc.CoordinatorDataEntry{
 			{Oid: 1, DataFileIdx: 0}, {Oid: 2, DataFileIdx: 1}, {Oid: 3, DataFileIdx: 2},
 			{Oid: 4, DataFileIdx: 0}, {Oid: 5, DataFileIdx: 2}, {Oid: 6, DataFileIdx: 1},
 		}
-		It("spreads the entries round-robin when there is a single data file", func() {
-			Expect(restore.GetEntryIdxsForConns(entries, 1, 2, 1)).To(Equal([][]int{{0, 2, 4}, {1, 3, 5}}))
+		It("spreads the entries round-robin over all connections when there is a single data file", func() {
+			singleFileEntries := []toc.CoordinatorDataEntry{{Oid: 1}, {Oid: 2}, {Oid: 3}, {Oid: 4}, {Oid: 5}}
+			Expect(restore.GetEntryIdxsForConns(singleFileEntries, 2, 2)).To(Equal([][]int{{0, 2, 4}, {1, 3}}))
 		})
 		It("gives all entries of a data file to one connection, in the order of the file", func() {
-			Expect(restore.GetEntryIdxsForConns(entries, 3, 3, 1)).To(Equal([][]int{{0, 3}, {1, 5}, {2, 4}}))
+			Expect(restore.GetEntryIdxsForConns(entries, 3, 1)).To(Equal([][]int{{0, 3}, {1, 5}, {2, 4}}))
 		})
 		It("gives several data files to a connection when there are fewer connections than data files", func() {
-			Expect(restore.GetEntryIdxsForConns(entries, 3, 2, 1)).To(Equal([][]int{{0, 2, 3, 4}, {1, 5}}))
-			Expect(restore.GetEntryIdxsForConns(entries, 3, 1, 1)).To(Equal([][]int{{0, 1, 2, 3, 4, 5}}))
+			Expect(restore.GetEntryIdxsForConns(entries, 2, 1)).To(Equal([][]int{{0, 2, 3, 4}, {1, 5}}))
+			Expect(restore.GetEntryIdxsForConns(entries, 1, 1)).To(Equal([][]int{{0, 1, 2, 3, 4, 5}}))
 		})
 		It("spreads the entries of a data file round-robin over its group of connections", func() {
 			// Groups {0, 1} and {2, 3}: data files 0 and 2 go to the first, data file 1 to the second
-			Expect(restore.GetEntryIdxsForConns(entries, 3, 4, 2)).To(Equal([][]int{{0, 2}, {3, 4}, {1}, {5}}))
+			Expect(restore.GetEntryIdxsForConns(entries, 4, 2)).To(Equal([][]int{{0, 2}, {3, 4}, {1}, {5}}))
 		})
 		It("keeps a connection within the pipes of its data file when a group restores several data files", func() {
 			// With one group of 4 connections, the entries of data file 1 must not shift the
@@ -183,7 +150,7 @@ var _ = Describe("restore/data tests", func() {
 			for i, dataFile := range dataFiles {
 				manyEntries = append(manyEntries, toc.CoordinatorDataEntry{Oid: uint32(i + 1), DataFileIdx: dataFile})
 			}
-			Expect(restore.GetEntryIdxsForConns(manyEntries, 2, 4, 4)).To(Equal([][]int{{0, 3, 5, 10}, {1, 6, 7, 11}, {2, 8}, {4, 9}}))
+			Expect(restore.GetEntryIdxsForConns(manyEntries, 4, 4)).To(Equal([][]int{{0, 3, 5, 10}, {1, 6, 7, 11}, {2, 8}, {4, 9}}))
 		})
 	})
 	Describe("CheckRowsRestored", func() {

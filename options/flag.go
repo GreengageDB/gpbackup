@@ -114,7 +114,7 @@ func SetRestoreFlagDefaults(flagSet *pflag.FlagSet) {
 	flagSet.Bool(QUIET, false, "Suppress non-warning, non-error log messages")
 	flagSet.String(REDIRECT_DB, "", "Restore to the specified database instead of the database that was backed up")
 	flagSet.String(REDIRECT_SCHEMA, "", "Restore to the specified schema instead of the schema that was backed up")
-	flagSet.Int(COPY_QUEUE_SIZE, 1, "Number of COPY commands gprestore should enqueue when restoring a backup taken using the --single-data-file option. For a backup also taken with --jobs, the number for each data file, so that --jobs times this many connections are used")
+	flagSet.Int(COPY_QUEUE_SIZE, 1, "Number of COPY commands gprestore should enqueue when restoring a backup taken using the --single-data-file option. With --jobs, the number for each of the --jobs groups of connections, which restore one data file at a time, so that --jobs times this many connections are used")
 	flagSet.Bool(WITH_GLOBALS, false, "Restore global metadata")
 	flagSet.String(TIMESTAMP, "", "The timestamp to be restored, in the format YYYYMMDDHHMMSS")
 	flagSet.Bool(TRUNCATE_TABLE, false, "Removes data of the tables getting restored")

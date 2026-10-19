@@ -385,6 +385,21 @@ func CleanUpSegmentHelperProcesses(c *cluster.Cluster, fpInfo filepath.FilePathI
 }
 
 func CheckAgentErrorsOnSegments(c *cluster.Cluster, fpInfo filepath.FilePathInfo, helperIdx ...int) error {
+	return checkAgentErrorsOnSegments(c, fpInfo, true, helperIdx...)
+}
+
+/*
+ * CheckAgentErrorsOnSegmentsKeepingErrorFile checks for errors of a gpbackup_helper
+ * that several connections restore from, and leaves its error file for the other
+ * connections to find as well, both in their own checks and while their COPY
+ * commands wait for the pipes that the helper will not create.  The error file is
+ * removed at cleanup.
+ */
+func CheckAgentErrorsOnSegmentsKeepingErrorFile(c *cluster.Cluster, fpInfo filepath.FilePathInfo, helperIdx ...int) error {
+	return checkAgentErrorsOnSegments(c, fpInfo, false, helperIdx...)
+}
+
+func checkAgentErrorsOnSegments(c *cluster.Cluster, fpInfo filepath.FilePathInfo, removeErrorFile bool, helperIdx ...int) error {
 	remoteOutput := c.GenerateAndExecuteCommand("Checking whether segment agents had errors", cluster.ON_SEGMENTS, func(contentID int) string {
 		errorFile := GetErrorFilename(fpInfo.GetSegmentPipeFilePath(contentID, helperIdx...))
 		if len(helperIdx) == 0 {
@@ -395,7 +410,11 @@ func CheckAgentErrorsOnSegments(c *cluster.Cluster, fpInfo filepath.FilePathInfo
 		 * If an error file exists we want to indicate an error, as that means
 		 * the agent errored out.  If no file exists, the agent was successful.
 		 */
-		return fmt.Sprintf("if ls %[1]s >/dev/null 2>/dev/null; then echo 'error'; fi; rm -f %[1]s", errorFile)
+		command := fmt.Sprintf("if ls %s >/dev/null 2>/dev/null; then echo 'error'; fi", errorFile)
+		if removeErrorFile {
+			command += fmt.Sprintf("; rm -f %s", errorFile)
+		}
+		return command
 	})
 
 	agent := filepath.FormatSuffix("agent", helperIdx...)

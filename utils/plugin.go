@@ -409,30 +409,9 @@ func GetSecretKey(pluginName string, mdd string) (string, error) {
 }
 
 func (plugin *PluginConfig) BackupSegmentTOCs(c *cluster.Cluster, fpInfo filepath.FilePathInfo, numDataFiles int) {
-	if numDataFiles < 1 {
-		numDataFiles = 1
-	}
-	var command string
-	remoteOutput := c.GenerateAndExecuteCommand("Waiting for remaining data to be uploaded to plugin destination",
-		cluster.ON_SEGMENTS,
-		func(contentID int) string {
-			// Each data file has its own segment TOC, written by its own gpbackup_helper.  The
-			// wait for each one is grouped, so that the command fails if any TOC is missing.
-			waitCommands := make([]string, 0, numDataFiles)
-			for file := 0; file < numDataFiles; file++ {
-				tocFile := fpInfo.GetSegmentTOCFilePathForDataFile(contentID, file)
-				errorFile := GetErrorFilename(fpInfo.GetSegmentPipeFilePath(contentID, DataFileHelperIdx(file, numDataFiles)...))
-				waitCommands = append(waitCommands, fmt.Sprintf(`(while [[ ! -f "%s" && ! -f "%s" ]]; do sleep 1; done; ls "%s")`, tocFile, errorFile, tocFile))
-			}
-			command = strings.Join(waitCommands, " && ")
-			return command
-		})
-	gplog.Debug("%s", command)
-	c.CheckClusterError(remoteOutput, "Error occurred in gpbackup_helper", func(contentID int) string {
-		return "See gpAdminLog for gpbackup_helper on segment host for details: Error occurred with plugin"
-	})
-
-	remoteOutput = c.GenerateAndExecuteCommand("Processing segment TOC files with plugin", cluster.ON_SEGMENTS,
+	// FinishSlotBackupHelpers has waited for the segment TOC of every data file, which the
+	// helpers write once their data is uploaded
+	remoteOutput := c.GenerateAndExecuteCommand("Processing segment TOC files with plugin", cluster.ON_SEGMENTS,
 		func(contentID int) string {
 			backupCommands := make([]string, 0, numDataFiles)
 			for file := 0; file < numDataFiles; file++ {

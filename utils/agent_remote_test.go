@@ -223,6 +223,15 @@ var _ = Describe("agent remote", func() {
 			expectedCmd1 := fmt.Sprintf(`if ls %[1]s* >/dev/null 2>/dev/null; then echo 'error'; fi; rm -f %[1]s*`, errorFile1)
 			Expect(cc[1].CommandString).To(ContainSubstring(expectedCmd1))
 		})
+		It("leaves the error file of a helper that other connections restore from", func() {
+			testExecutor.ClusterOutput = &cluster.RemoteOutput{Commands: []cluster.ShellCommand{{Content: 0, Stdout: "error"}, {Content: 1}}}
+			err := utils.CheckAgentErrorsOnSegmentsKeepingErrorFile(testCluster, fpInfo, 1)
+			Expect(errors.Is(err, utils.AgentErr)).To(BeTrue())
+
+			cc := testExecutor.ClusterCommands[0]
+			errorFile0 := fmt.Sprintf(`/data/gpseg0/gpbackup_0_11112233445566_%d_error1`, fpInfo.PID)
+			Expect(cc[0].CommandString).To(HaveSuffix(fmt.Sprintf(`if ls %s >/dev/null 2>/dev/null; then echo 'error'; fi`, errorFile0)))
+		})
 
 	})
 })
