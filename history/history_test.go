@@ -159,6 +159,35 @@ var _ = Describe("backup/history tests", func() {
 			Expect(config).To(structmatcher.MatchStruct(testConfig1))
 		})
 
+		It("gets the number of data files of a backup from the database", func() {
+			db, _ := history.InitializeHistoryDatabase(historyDBPath)
+			defer db.Close()
+			testConfig1.SingleDataFile = true
+			testConfig1.SingleDataFileCount = 3
+			err := history.StoreBackupHistory(db, &testConfig1)
+			Expect(err).To(BeNil())
+
+			config, err := history.GetBackupConfig(testConfig1.Timestamp, db)
+			Expect(err).To(BeNil())
+			Expect(config.SingleDataFileCount).To(Equal(3))
+		})
+		It("adds the number of data files to a database created by an earlier version", func() {
+			db, _ := history.InitializeHistoryDatabase(historyDBPath)
+			err := history.StoreBackupHistory(db, &testConfig1)
+			Expect(err).To(BeNil())
+			// The backups table of an earlier version, with its backup
+			_, err = db.Exec("ALTER TABLE backups DROP COLUMN single_data_file_count")
+			Expect(err).To(BeNil())
+			db.Close()
+
+			db, err = history.InitializeHistoryDatabase(historyDBPath)
+			Expect(err).To(BeNil())
+			defer db.Close()
+			config, err := history.GetBackupConfig(testConfig1.Timestamp, db)
+			Expect(err).To(BeNil())
+			Expect(config).To(structmatcher.MatchStruct(testConfig1))
+			Expect(config.SingleDataFileCount).To(Equal(0))
+		})
 		It("refuses to get a config from the database if the timestamp is not present", func() {
 			db, _ := history.InitializeHistoryDatabase(historyDBPath)
 			defer db.Close()

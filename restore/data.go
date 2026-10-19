@@ -7,6 +7,7 @@ package restore
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -44,7 +45,7 @@ func CopyTableIn(queryContext context.Context, connectionPool *dbconn.DBConn, ta
 	if singleDataFile || resizeCluster {
 		//helper.go handles compression, so we don't want to set it here
 		customPipeThroughCommand = utils.DefaultPipeThroughProgram
-		readFromDestinationCommand = fmt.Sprintf("(timeout --foreground 300 bash -c \"while [[ ! -p \"%s\" && ! -f \"%s\" ]]; do sleep 1; done\" || (echo \"Pipe not found %s\">&2; exit 1)) && %s", destinationToRead, errorFile, destinationToRead, readFromDestinationCommand)
+		readFromDestinationCommand = fmt.Sprintf("(timeout --foreground 300 bash -c \"while [[ ! -p \"%s\" && ! -f \"%s\" ]]; do sleep 1; done\" || (echo \"Pipe not found %s\">&2; exit 1)) && (test ! -f \"%s\" || (echo \"Error file found %s\">&2; exit 1)) && %s", destinationToRead, errorFile, destinationToRead, errorFile, errorFile, readFromDestinationCommand)
 	} else if MustGetFlagString(options.PLUGIN_CONFIG) != "" {
 		readFromDestinationCommand = fmt.Sprintf("%s restore_data %s", pluginConfig.ExecutablePath, pluginConfig.ConfigPath)
 	}
@@ -104,25 +105,24 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 			defer connectionPool.MustExec("RESET gp_enable_segment_copy_checking;", whichConn)
 		}
 
-		// In the case where an error file is found, this means that the
-		// restore_helper has encountered an error and has shutdown.
-		// If this occurs we need to error out, as subsequent COPY statements
-		// will hang indefinitely waiting to read from pipes that the helper
-		// was expected to set up.  The first batch is checked by
-		// restoreDataFromTimestamp, before the table is truncated.
-		if (backupConfig.SingleDataFile || resizeCluster) && i > 0 {
-			agentErr := checkAgentErrors(*fpInfo, helperIdx)
-			if agentErr != nil {
-				gplog.Error(agentErr.Error())
-				return agentErr
-			}
-		}
-
+		/*
+		 * An error file means that the restore_helper has encountered an error and
+		 * has shut down, so that the COPY would wait for pipes the helper will not
+		 * create.  The COPY fails on a segment that finds the error file of its
+		 * helper, and a failed COPY is checked for it on all segments.
+		 */
 		errorFile := utils.GetErrorFilename(fpInfo.GetSegmentPipePathForCopyCommand(helperIdx...))
 		partialRowsRestored, copyErr := CopyTableIn(queryContext, connectionPool, tableName, entry.AttributeString, destinationToRead, backupConfig.SingleDataFile, whichConn, errorFile)
 
 		if copyErr != nil {
 			gplog.Error(copyErr.Error())
+			if backupConfig.SingleDataFile || resizeCluster {
+				agentErr := checkAgentErrors(*fpInfo, helperIdx)
+				if agentErr != nil {
+					gplog.Error(agentErr.Error())
+					return agentErr
+				}
+			}
 			if MustGetFlagBool(options.ON_ERROR_CONTINUE) {
 				if connectionPool.Version.AtLeast("6") && (backupConfig.SingleDataFile || resizeCluster) {
 					// inform segment helpers to skip this entry
@@ -300,7 +300,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 			utils.StartGpbackupHelpers(globalCluster, fpInfo, "--restore-agent", MustGetFlagString(options.PLUGIN_CONFIG), compressStr, MustGetFlagBool(options.ON_ERROR_CONTINUE), isFilter, &wasTerminated, initialPipes, backupConfig.SingleDataFile, resizeCluster, origSize, destSize, dataFileIdx, gplog.GetVerbosity(), HelperIdx(whichConn)...)
 		}
 	}
-	entryIdxsForConn := GetEntryIdxsForConns(dataEntries, connectionPool.NumConns, connsPerDataFile)
+	groups := NewDataFileGroups(dataEntries, numDataFiles, connectionPool.NumConns, connsPerDataFile)
 	/*
 	 * With --on-error-continue, the data files whose gpbackup_helper has stopped, so
 	 * that their remaining tables are reported as errors without being truncated or
@@ -332,7 +332,8 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 			defer workerPool.Done()
 
 			setGUCsForConnection(gucStatements, whichConn)
-			for _, entryIdx := range entryIdxsForConn[whichConn] {
+			nextEntryIdx := groups.EntriesOfConn(whichConn)
+			for entryIdx, ok := nextEntryIdx(); ok; entryIdx, ok = nextEntryIdx() {
 				entry := dataEntries[entryIdx]
 				helperIdx := HelperIdx(whichConn)
 				if backupConfig.SingleDataFile {
@@ -363,7 +364,8 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					continue
 				}
 				var err error
-				if backupConfig.SingleDataFile || resizeCluster {
+				truncateTable := MustGetFlagBool(options.INCREMENTAL) || MustGetFlagBool(options.TRUNCATE_TABLE)
+				if truncateTable && (backupConfig.SingleDataFile || resizeCluster) {
 					// A table is not truncated if the helper that would restore it has stopped
 					err = checkAgentErrors(fpInfo, helperIdx)
 					if err != nil {
@@ -371,7 +373,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					}
 				}
 				// Truncate table before restore, if needed
-				if err == nil && (MustGetFlagBool(options.INCREMENTAL) || MustGetFlagBool(options.TRUNCATE_TABLE)) {
+				if err == nil && truncateTable {
 					gplog.Verbose("Truncating table %s prior to restoring data", tableName)
 					_, err := connectionPool.Exec(`TRUNCATE `+tableName, whichConn)
 					if err != nil {
@@ -459,30 +461,94 @@ func HelperIdx(whichConn int) []int {
 }
 
 /*
- * GetEntryIdxsForConns returns the data entries each connection restores, in order.
+ * DataFileGroups gives each connection the data entries it restores, in order.
  *
  * The gpbackup_helper of a data file reads its tables one after another, so the
- * connections are split into groups of connsPerDataFile.  Each data file is
+ * connections are split into groups of connsPerDataFile, and each data file is
  * restored by one group, which takes its tables in the order of the file,
- * round-robin.  The data files are spread over the groups.  As every connection
- * restores its entries in the order of the data entries, the earliest entry that
- * is not restored yet can always proceed.  With a single data file, or without
- * --single-data-file, all connections are one group.
+ * round-robin.  A group that has finished its data file takes the largest data file
+ * left, by rows, so that the groups finish at about the same time.  All
+ * connections of a group restore the same data files, in the same order.  With a
+ * single data file, or without --single-data-file, all connections are one group.
  *
- * The round-robin is kept for each data file, not for the whole group: the entry
- * of a connection that comes before the next one in the same data file is then
- * connsPerDataFile entries earlier in that file, so a connection never waits for
- * a table further ahead than the pipes its gpbackup_helper has created.
+ * A connection never waits for a table further ahead than the pipes its helper has
+ * created, as its previous table in the same data file is connsPerDataFile tables
+ * earlier.  The earliest table of a data file that is not restored yet belongs to a
+ * connection that has not left the data file, so it can always proceed.
+ * Connections beyond the last full group restore nothing, as the tables of their
+ * part of a group would be left to no one.
  */
-func GetEntryIdxsForConns(dataEntries []toc.CoordinatorDataEntry, numConns int, connsPerDataFile int) [][]int {
-	entryIdxsForConn := make([][]int, numConns)
-	numGroups := numConns / connsPerDataFile
-	entriesInFile := make(map[int]int)
-	for entryIdx, entry := range dataEntries {
-		group := entry.DataFileIdx % numGroups
-		whichConn := group*connsPerDataFile + entriesInFile[entry.DataFileIdx]%connsPerDataFile
-		entriesInFile[entry.DataFileIdx]++
-		entryIdxsForConn[whichConn] = append(entryIdxsForConn[whichConn], entryIdx)
+type DataFileGroups struct {
+	mutex            sync.Mutex
+	connsPerDataFile int
+	numGroups        int
+	entriesOfFile    [][]int
+	filesLeft        []int
+	filesOfGroup     [][]int
+}
+
+func NewDataFileGroups(dataEntries []toc.CoordinatorDataEntry, numDataFiles int, numConns int, connsPerDataFile int) *DataFileGroups {
+	groups := &DataFileGroups{
+		connsPerDataFile: connsPerDataFile,
+		numGroups:        numConns / connsPerDataFile,
+		entriesOfFile:    make([][]int, numDataFiles),
 	}
-	return entryIdxsForConn
+	groups.filesOfGroup = make([][]int, groups.numGroups)
+	rowsOfFile := make([]int64, numDataFiles)
+	for entryIdx, entry := range dataEntries {
+		groups.entriesOfFile[entry.DataFileIdx] = append(groups.entriesOfFile[entry.DataFileIdx], entryIdx)
+		rowsOfFile[entry.DataFileIdx] += entry.RowsCopied
+	}
+	for file, entries := range groups.entriesOfFile {
+		if len(entries) > 0 {
+			groups.filesLeft = append(groups.filesLeft, file)
+		}
+	}
+	sort.SliceStable(groups.filesLeft, func(a, b int) bool {
+		return rowsOfFile[groups.filesLeft[a]] > rowsOfFile[groups.filesLeft[b]]
+	})
+	return groups
+}
+
+// The data file a group restores after the given number of others, if one is left
+func (groups *DataFileGroups) fileOfGroup(group int, fileNum int) (int, bool) {
+	groups.mutex.Lock()
+	defer groups.mutex.Unlock()
+	if fileNum == len(groups.filesOfGroup[group]) {
+		if len(groups.filesLeft) == 0 {
+			return 0, false
+		}
+		groups.filesOfGroup[group] = append(groups.filesOfGroup[group], groups.filesLeft[0])
+		groups.filesLeft = groups.filesLeft[1:]
+	}
+	return groups.filesOfGroup[group][fileNum], true
+}
+
+// EntriesOfConn returns a function that gives the next data entry of a connection
+func (groups *DataFileGroups) EntriesOfConn(whichConn int) func() (int, bool) {
+	group := whichConn / groups.connsPerDataFile
+	fileNum := 0
+	var entries []int
+	next := len(entries)
+	done := group >= groups.numGroups
+	return func() (int, bool) {
+		if done {
+			return 0, false
+		}
+		for next >= len(entries) {
+			if entries != nil {
+				fileNum++
+			}
+			file, ok := groups.fileOfGroup(group, fileNum)
+			if !ok {
+				done = true
+				return 0, false
+			}
+			entries = groups.entriesOfFile[file]
+			next = whichConn % groups.connsPerDataFile
+		}
+		entryIdx := entries[next]
+		next += groups.connsPerDataFile
+		return entryIdx, true
+	}
 }

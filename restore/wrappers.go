@@ -86,6 +86,18 @@ func GetNumConnections() int {
 	return MustGetFlagInt(options.JOBS)
 }
 
+/*
+ * GetNumMetadataConns returns the number of connections that restore the metadata
+ * and run ANALYZE in parallel: --jobs of them, without the connections that
+ * --copy-queue-size adds for the data of each of the --jobs groups.
+ */
+func GetNumMetadataConns() int {
+	if FlagChanged(options.JOBS) && MustGetFlagInt(options.JOBS) < connectionPool.NumConns {
+		return MustGetFlagInt(options.JOBS)
+	}
+	return connectionPool.NumConns
+}
+
 func InitializeConnectionPool(backupTimestamp string, restoreTimestamp string, unquotedDBName string) {
 	CreateConnectionPool(unquotedDBName)
 	resizeRestore := MustGetFlagBool(options.RESIZE_CLUSTER)

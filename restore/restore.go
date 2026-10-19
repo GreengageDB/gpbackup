@@ -327,7 +327,7 @@ func restorePredata(metadataFilename string) (int, map[string][]toc.CoordinatorD
 	progressBar.Start()
 
 	RestoreSchemas(schemaStatements, progressBar)
-	executeInParallel := connectionPool.NumConns > 1 && !MustGetFlagBool(options.ON_ERROR_CONTINUE)
+	executeInParallel := GetNumMetadataConns() > 1 && !MustGetFlagBool(options.ON_ERROR_CONTINUE)
 	if executeInParallel {
 		// Batch statements by tier to allow more aggressive parallelization by cohort downstream.
 		first, tiered, last := BatchPredataStatements(statements)
@@ -346,7 +346,7 @@ func restorePredata(metadataFilename string) (int, map[string][]toc.CoordinatorD
 
 			// Begin transactions for each connec worker connection.  In parallel restores we reserve conn 0 for administration and monitoring.
 			txMutex.Lock()
-			for connNum := 1; connNum < connectionPool.NumConns; connNum++ {
+			for connNum := 1; connNum < GetNumMetadataConns(); connNum++ {
 				connectionPool.MustExec(fmt.Sprintf("SET application_name TO 'gprestore_%d_%s'", connNum, MustGetFlagString(options.TIMESTAMP)), connNum)
 				connectionPool.MustBegin(connNum)
 			}
@@ -422,7 +422,7 @@ func restoreSequenceValues(metadataFilename string) {
 	} else {
 		progressBar := utils.NewProgressBar(len(sequenceValueStatements), "Sequence values restored: ", utils.PB_VERBOSE)
 		progressBar.Start()
-		numErrors = ExecuteRestoreMetadataStatements("data", sequenceValueStatements, "Sequence values", progressBar, utils.PB_VERBOSE, connectionPool.NumConns > 1)
+		numErrors = ExecuteRestoreMetadataStatements("data", sequenceValueStatements, "Sequence values", progressBar, utils.PB_VERBOSE, GetNumMetadataConns() > 1)
 		progressBar.Finish()
 	}
 
@@ -525,7 +525,7 @@ func restoreQDOnlyTablesData(metadataFilename string) (int, map[string][]toc.Coo
 	} else {
 		progressBar := utils.NewProgressBar(len(statements), "QD-only tables restored: ", utils.PB_VERBOSE)
 		progressBar.Start()
-		numErrors = ExecuteRestoreMetadataStatements("data", statements, "QD-only tables", progressBar, utils.PB_VERBOSE, connectionPool.NumConns > 1)
+		numErrors = ExecuteRestoreMetadataStatements("data", statements, "QD-only tables", progressBar, utils.PB_VERBOSE, GetNumMetadataConns() > 1)
 		progressBar.Finish()
 	}
 
@@ -691,9 +691,9 @@ func restorePostdata(metadataFilename string) {
 	progressBar := utils.NewProgressBar(len(statements), "Post-data objects restored: ", utils.PB_VERBOSE)
 	progressBar.Start()
 
-	numErrors := ExecuteRestoreMetadataStatements("postdata", firstBatch, "", progressBar, utils.PB_VERBOSE, connectionPool.NumConns > 1)
-	numErrors += ExecuteRestoreMetadataStatements("postdata", secondBatch, "", progressBar, utils.PB_VERBOSE, connectionPool.NumConns > 1)
-	numErrors += ExecuteRestoreMetadataStatements("postdata", thirdBatch, "", progressBar, utils.PB_VERBOSE, connectionPool.NumConns > 1)
+	numErrors := ExecuteRestoreMetadataStatements("postdata", firstBatch, "", progressBar, utils.PB_VERBOSE, GetNumMetadataConns() > 1)
+	numErrors += ExecuteRestoreMetadataStatements("postdata", secondBatch, "", progressBar, utils.PB_VERBOSE, GetNumMetadataConns() > 1)
+	numErrors += ExecuteRestoreMetadataStatements("postdata", thirdBatch, "", progressBar, utils.PB_VERBOSE, GetNumMetadataConns() > 1)
 	progressBar.Finish()
 
 	if wasTerminated.Load() {
@@ -752,7 +752,7 @@ func runAnalyze(filteredDataEntries map[string][]toc.CoordinatorDataEntry) {
 
 	progressBar := utils.NewProgressBar(len(analyzeStatements), "Tables analyzed: ", utils.PB_VERBOSE)
 	progressBar.Start()
-	numErrors := ExecuteStatements(analyzeStatements, progressBar, connectionPool.NumConns > 1)
+	numErrors := ExecuteStatements(analyzeStatements, progressBar, GetNumMetadataConns() > 1)
 	progressBar.Finish()
 
 	if wasTerminated.Load() {

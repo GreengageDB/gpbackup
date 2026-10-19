@@ -116,6 +116,25 @@ var _ = Describe("wrapper tests", func() {
 		})
 
 	})
+	Describe("GetNumMetadataConns", func() {
+		var numConns int
+		BeforeEach(func() {
+			numConns = connectionPool.NumConns
+			connectionPool.NumConns = 6
+		})
+		AfterEach(func() {
+			connectionPool.NumConns = numConns
+			_ = cmdFlags.Set(options.JOBS, "1")
+			cmdFlags.Lookup(options.JOBS).Changed = false
+		})
+		It("restores the metadata with --jobs connections when --copy-queue-size adds more for the data", func() {
+			_ = cmdFlags.Set(options.JOBS, "3")
+			Expect(restore.GetNumMetadataConns()).To(Equal(3))
+		})
+		It("restores the metadata with every connection without --jobs", func() {
+			Expect(restore.GetNumMetadataConns()).To(Equal(6))
+		})
+	})
 	Describe("GetNumConnections", func() {
 		BeforeEach(func() {
 			restore.SetBackupConfig(&history.BackupConfig{SingleDataFile: true})

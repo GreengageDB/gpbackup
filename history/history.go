@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strings"
 
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
@@ -134,10 +135,20 @@ func InitializeHistoryDatabase(historyDBPath string) (*sql.DB, error) {
             end_time TEXT,
             without_globals INT CHECK (without_globals in (0,1)),
             with_statistics INT CHECK (with_statistics in (0,1)),
-            status TEXT
+            status TEXT,
+            single_data_file_count INT
 		);`
 	_, err = tx.Exec(createBackupsTable)
 	if err != nil {
+		tx.Rollback()
+		db.Close()
+		return nil, err
+	}
+
+	// A database created by an earlier version has no column for the number of data
+	// files, which another gpbackup may be adding at the same time
+	_, err = tx.Exec("ALTER TABLE backups ADD COLUMN single_data_file_count INT;")
+	if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 		tx.Rollback()
 		db.Close()
 		return nil, err
@@ -225,9 +236,9 @@ func StoreBackupHistory(db *sql.DB, currentBackupConfig *BackupConfig) error {
 			database_version, segment_count, data_only, date_deleted, exclude_schema_filtered,
 			exclude_table_filtered, include_schema_filtered, include_table_filtered, incremental,
 			leaf_partition_data, metadata_only, plugin, plugin_version, single_data_file, end_time,
-			without_globals, with_statistics, status
+			without_globals, with_statistics, status, single_data_file_count
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
 		currentBackupConfig.Timestamp, currentBackupConfig.BackupDir,
 		currentBackupConfig.BackupVersion, currentBackupConfig.Compressed,
 		currentBackupConfig.CompressionType, currentBackupConfig.DatabaseName,
@@ -239,7 +250,8 @@ func StoreBackupHistory(db *sql.DB, currentBackupConfig *BackupConfig) error {
 		currentBackupConfig.MetadataOnly, currentBackupConfig.Plugin,
 		currentBackupConfig.PluginVersion, currentBackupConfig.SingleDataFile,
 		currentBackupConfig.EndTime, currentBackupConfig.WithoutGlobals,
-		currentBackupConfig.WithStatistics, currentBackupConfig.Status)
+		currentBackupConfig.WithStatistics, currentBackupConfig.Status,
+		currentBackupConfig.SingleDataFileCount)
 	if err != nil {
 		goto CleanupError
 	}
@@ -299,7 +311,7 @@ func GetMainBackupInfo(timestamp string, historyDB *sql.DB) (BackupConfig, error
 			database_version, segment_count, data_only, date_deleted, exclude_schema_filtered,
 			exclude_table_filtered, include_schema_filtered, include_table_filtered, incremental,
 			leaf_partition_data, metadata_only, plugin, plugin_version, single_data_file, end_time,
-			without_globals, with_statistics, status
+			without_globals, with_statistics, status, single_data_file_count
 		FROM backups WHERE timestamp = '%s'`,
 		timestamp)
 	backupRow := historyDB.QueryRow(backupQuery)
@@ -317,6 +329,8 @@ func GetMainBackupInfo(timestamp string, historyDB *sql.DB) (BackupConfig, error
 	var isSingleDataFile int
 	var isWithoutGlobals int
 	var isWithStatistics int
+	// Backups recorded by an earlier version have no number of data files
+	var singleDataFileCount sql.NullInt64
 	err := backupRow.Scan(
 		&backupConfig.Timestamp, &backupConfig.BackupDir, &backupConfig.BackupVersion,
 		&isCompressed, &backupConfig.CompressionType, &backupConfig.DatabaseName,
@@ -324,7 +338,8 @@ func GetMainBackupInfo(timestamp string, historyDB *sql.DB) (BackupConfig, error
 		&backupConfig.DateDeleted, &isExclSchemaFiltered, &isExclTableFiltered,
 		&isInclSchemaFiltered, &isInclTableFiltered, &isIncremental, &isLeafPartition,
 		&isMetadataOnly, &backupConfig.Plugin, &backupConfig.PluginVersion, &isSingleDataFile,
-		&backupConfig.EndTime, &isWithoutGlobals, &isWithStatistics, &backupConfig.Status)
+		&backupConfig.EndTime, &isWithoutGlobals, &isWithStatistics, &backupConfig.Status,
+		&singleDataFileCount)
 	if err == sql.ErrNoRows {
 		return backupConfig, errors.New("timestamp doesn't match any existing backups")
 	} else if err != nil {
@@ -343,6 +358,7 @@ func GetMainBackupInfo(timestamp string, historyDB *sql.DB) (BackupConfig, error
 	backupConfig.SingleDataFile = isSingleDataFile == 1
 	backupConfig.WithoutGlobals = isWithoutGlobals == 1
 	backupConfig.WithStatistics = isWithStatistics == 1
+	backupConfig.SingleDataFileCount = int(singleDataFileCount.Int64)
 
 	return backupConfig, err
 }

@@ -58,7 +58,7 @@ var _ = Describe("restore/data tests", func() {
 			Expect(err).ShouldNot(HaveOccurred())
 		})
 		It("will restore a table from a single data file", func() {
-			execStr := regexp.QuoteMeta(fmt.Sprintf("COPY public.foo(i,j) FROM PROGRAM '(timeout --foreground 300 bash -c \"while [[ ! -p \"<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456\" && ! -f \"<SEG_DATA_DIR>/gpbackup_<SEGID>_20170101010101_%d_error\" ]]; do sleep 1; done\" || (echo \"Pipe not found <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456\">&2; exit 1)) && cat <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456' WITH CSV DELIMITER ',' ON SEGMENT", os.Getpid()))
+			execStr := regexp.QuoteMeta(fmt.Sprintf("COPY public.foo(i,j) FROM PROGRAM '(timeout --foreground 300 bash -c \"while [[ ! -p \"<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456\" && ! -f \"<SEG_DATA_DIR>/gpbackup_<SEGID>_20170101010101_%d_error\" ]]; do sleep 1; done\" || (echo \"Pipe not found <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456\">&2; exit 1)) && (test ! -f \"<SEG_DATA_DIR>/gpbackup_<SEGID>_20170101010101_%[1]d_error\" || (echo \"Error file found <SEG_DATA_DIR>/gpbackup_<SEGID>_20170101010101_%[1]d_error\">&2; exit 1)) && cat <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456' WITH CSV DELIMITER ',' ON SEGMENT", os.Getpid()))
 			mock.ExpectExec(execStr).WillReturnResult(sqlmock.NewResult(10, 0))
 			filename := "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_pipe_3456"
 			_, err := restore.CopyTableIn(context.Background(), connectionPool, "public.foo", "(i,j)", filename, true, 0, fmt.Sprintf("<SEG_DATA_DIR>/gpbackup_<SEGID>_20170101010101_%d_error", os.Getpid()))
@@ -121,36 +121,62 @@ var _ = Describe("restore/data tests", func() {
 				"ERROR: value of distribution key doesn't belong to segment with ID 0, it belongs to segment with ID 1 (SQLSTATE 22P04)"))
 		})
 	})
-	Describe("GetEntryIdxsForConns", func() {
+	Describe("DataFileGroups", func() {
+		// The entries each connection restores, the connections taking their next entry in turn
+		entriesOfConns := func(groups *restore.DataFileGroups, numConns int) [][]int {
+			nextEntryIdx := make([]func() (int, bool), numConns)
+			entries := make([][]int, numConns)
+			for conn := range nextEntryIdx {
+				nextEntryIdx[conn] = groups.EntriesOfConn(conn)
+				entries[conn] = []int{}
+			}
+			for done := 0; done < numConns; {
+				done = 0
+				for conn := range nextEntryIdx {
+					if entryIdx, ok := nextEntryIdx[conn](); ok {
+						entries[conn] = append(entries[conn], entryIdx)
+					} else {
+						done++
+					}
+				}
+			}
+			return entries
+		}
+		// Data files 0, 1 and 2 have 20, 100 and 60 rows
 		entries := []toc.CoordinatorDataEntry{
-			{Oid: 1, DataFileIdx: 0}, {Oid: 2, DataFileIdx: 1}, {Oid: 3, DataFileIdx: 2},
-			{Oid: 4, DataFileIdx: 0}, {Oid: 5, DataFileIdx: 2}, {Oid: 6, DataFileIdx: 1},
+			{Oid: 1, DataFileIdx: 0, RowsCopied: 10}, {Oid: 2, DataFileIdx: 1, RowsCopied: 50}, {Oid: 3, DataFileIdx: 2, RowsCopied: 30},
+			{Oid: 4, DataFileIdx: 0, RowsCopied: 10}, {Oid: 5, DataFileIdx: 1, RowsCopied: 50}, {Oid: 6, DataFileIdx: 2, RowsCopied: 30},
 		}
 		It("spreads the entries round-robin over all connections when there is a single data file", func() {
 			singleFileEntries := []toc.CoordinatorDataEntry{{Oid: 1}, {Oid: 2}, {Oid: 3}, {Oid: 4}, {Oid: 5}}
-			Expect(restore.GetEntryIdxsForConns(singleFileEntries, 2, 2)).To(Equal([][]int{{0, 2, 4}, {1, 3}}))
+			groups := restore.NewDataFileGroups(singleFileEntries, 1, 2, 2)
+			Expect(entriesOfConns(groups, 2)).To(Equal([][]int{{0, 2, 4}, {1, 3}}))
 		})
-		It("gives all entries of a data file to one connection, in the order of the file", func() {
-			Expect(restore.GetEntryIdxsForConns(entries, 3, 1)).To(Equal([][]int{{0, 3}, {1, 5}, {2, 4}}))
+		It("gives the largest data file left to the group that has finished its data file", func() {
+			// Connection 0 takes data file 1 and connection 1 data file 2; connection 0 is then
+			// done first and takes data file 0 as well
+			groups := restore.NewDataFileGroups(entries, 3, 2, 1)
+			Expect(entriesOfConns(groups, 2)).To(Equal([][]int{{1, 4, 0, 3}, {2, 5}}))
 		})
-		It("gives several data files to a connection when there are fewer connections than data files", func() {
-			Expect(restore.GetEntryIdxsForConns(entries, 2, 1)).To(Equal([][]int{{0, 2, 3, 4}, {1, 5}}))
-			Expect(restore.GetEntryIdxsForConns(entries, 1, 1)).To(Equal([][]int{{0, 1, 2, 3, 4, 5}}))
+		It("spreads the entries of each data file round-robin over the connections of its group", func() {
+			groups := restore.NewDataFileGroups(entries, 3, 2, 2)
+			Expect(entriesOfConns(groups, 2)).To(Equal([][]int{{1, 2, 0}, {4, 5, 3}}))
 		})
-		It("spreads the entries of a data file round-robin over its group of connections", func() {
-			// Groups {0, 1} and {2, 3}: data files 0 and 2 go to the first, data file 1 to the second
-			Expect(restore.GetEntryIdxsForConns(entries, 4, 2)).To(Equal([][]int{{0, 2}, {3, 4}, {1}, {5}}))
-		})
-		It("keeps a connection within the pipes of its data file when a group restores several data files", func() {
-			// With one group of 4 connections, the entries of data file 1 must not shift the
-			// round-robin of data file 0, or connection 3 would wait for its 10th table
-			// while the helper of data file 0 is still on the first one
-			dataFiles := []int{0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0}
-			manyEntries := make([]toc.CoordinatorDataEntry, 0, len(dataFiles))
-			for i, dataFile := range dataFiles {
-				manyEntries = append(manyEntries, toc.CoordinatorDataEntry{Oid: uint32(i + 1), DataFileIdx: dataFile})
+		It("lets a connection of a group go on to the next data file of its group", func() {
+			// Data file 1 has a single entry, which connection 0 restores while connection 1 goes on
+			fewEntries := []toc.CoordinatorDataEntry{
+				{Oid: 1, DataFileIdx: 0, RowsCopied: 10}, {Oid: 2, DataFileIdx: 1, RowsCopied: 50}, {Oid: 3, DataFileIdx: 0, RowsCopied: 10},
 			}
-			Expect(restore.GetEntryIdxsForConns(manyEntries, 4, 4)).To(Equal([][]int{{0, 3, 5, 10}, {1, 6, 7, 11}, {2, 8}, {4, 9}}))
+			groups := restore.NewDataFileGroups(fewEntries, 2, 2, 2)
+			Expect(entriesOfConns(groups, 2)).To(Equal([][]int{{1, 0}, {2}}))
+		})
+		It("gives no entries to the connections beyond the last full group", func() {
+			groups := restore.NewDataFileGroups(entries, 3, 3, 2)
+			Expect(entriesOfConns(groups, 3)).To(Equal([][]int{{1, 2, 0}, {4, 5, 3}, {}}))
+		})
+		It("skips data files without entries", func() {
+			groups := restore.NewDataFileGroups([]toc.CoordinatorDataEntry{{Oid: 1, DataFileIdx: 2}}, 3, 2, 1)
+			Expect(entriesOfConns(groups, 2)).To(Equal([][]int{{0}, {}}))
 		})
 	})
 	Describe("CheckRowsRestored", func() {
