@@ -290,6 +290,18 @@ var _ = Describe("restore internal tests", func() {
 			Expect(err).To(MatchError(ContainSubstring("invalid input value for enum")))
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
+		It("returns the error of a failed redistribution of a table distributed by an enum", func() {
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", DistByEnum: true, RowsCopied: 10}
+			localMock.ExpectExec("SET gp_enable_segment_copy_checking TO off").WillReturnResult(sqlmock.NewResult(0, 0))
+			localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 10))
+			localMock.ExpectExec(`ALTER TABLE public.foo SET WITH \(REORGANIZE=true\)`).WillReturnError(errors.New("out of memory"))
+			localMock.ExpectExec("RESET gp_enable_segment_copy_checking").WillReturnResult(sqlmock.NewResult(0, 0))
+
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{})
+			Expect(err).To(MatchError("out of memory"))
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
 	})
 	Describe("getExtensionTableCondition", func() {
 		// This function's own SQL round-trip is mocked directly here (a private

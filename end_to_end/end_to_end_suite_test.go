@@ -2058,6 +2058,30 @@ var _ = Describe("backup and restore end to end tests", func() {
 			assertDataRestored(restoreConn, map[string]int{
 				"public.sales": 1, "public.sales_1_prt_jan17": 1})
 		})
+		DescribeTable("keeps the data of the child of an inherited table restored before its parent", func(backupFlags []string, restoreFlags []string) {
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA truncate_inherit")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA truncate_inherit CASCADE")
+			// The child comes before its parent among the data entries
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE truncate_inherit.child (i int) DISTRIBUTED BY (i);
+				CREATE TABLE truncate_inherit.parent (i int) DISTRIBUTED BY (i);
+				ALTER TABLE truncate_inherit.child INHERIT truncate_inherit.parent;
+				INSERT INTO truncate_inherit.child SELECT generate_series(1, 1000);
+				INSERT INTO truncate_inherit.parent SELECT generate_series(1, 100)`)
+			output := gpbackup(gpbackupPath, backupHelperPath, append([]string{
+				"--include-schema", "truncate_inherit",
+				"--backup-dir", backupDir}, backupFlags...)...)
+			timestamp := getBackupTimestamp(string(output))
+
+			gprestore(gprestorePath, restoreHelperPath, timestamp, append([]string{
+				"--backup-dir", backupDir,
+				"--truncate-table", "--data-only"}, restoreFlags...)...)
+			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM ONLY truncate_inherit.child")).To(Equal("1000"))
+			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM ONLY truncate_inherit.parent")).To(Equal("100"))
+		},
+			Entry("with a data file per table", []string{}, []string{}),
+			// The TRUNCATE of the parent locked the child, whose COPY waited for it, and the helper for that COPY
+			Entry("with a single data file restored by two connections", []string{"--single-data-file"}, []string{"--copy-queue-size", "2"}),
+		)
 	})
 	Describe("Restore with --run-analyze", func() {
 		It("runs gprestore without --run-analyze", func() {

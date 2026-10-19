@@ -117,7 +117,7 @@ var _ = Describe("wrapper tests", func() {
 		})
 
 	})
-	Describe("GetPartitionRootFQNs", func() {
+	Describe("GetPartitionedTableFQNs", func() {
 		var version dbconn.GPDBVersion
 		BeforeEach(func() {
 			version = connectionPool.Version
@@ -125,19 +125,21 @@ var _ = Describe("wrapper tests", func() {
 		AfterEach(func() {
 			connectionPool.Version = version
 		})
-		It("gets the roots of the partition hierarchies from pg_partition before GPDB 7", func() {
+		It("gets the roots and the intermediate levels of the partition hierarchies before GPDB 7", func() {
 			testhelper.SetDBVersion(connectionPool, "6.0.0")
-			mock.ExpectQuery(`FROM pg_catalog.pg_partition p`).WillReturnRows(sqlmock.NewRows([]string{"fqn"}).AddRow("public.sales"))
-			roots, err := restore.GetPartitionRootFQNs()
+			mock.ExpectQuery(`SELECT p.parrelid FROM pg_catalog.pg_partition p\s+UNION SELECT r.parchildrelid FROM pg_catalog.pg_partition_rule r`).
+				WillReturnRows(sqlmock.NewRows([]string{"fqn"}).AddRow("public.sales").AddRow("public.sales_1_prt_2"))
+			partitionedTables, err := restore.GetPartitionedTableFQNs()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(roots).To(Equal([]string{"public.sales"}))
+			Expect(partitionedTables).To(Equal([]string{"public.sales", "public.sales_1_prt_2"}))
 		})
-		It("gets the partitioned tables that are not partitions from GPDB 7", func() {
+		It("gets the partitioned tables from GPDB 7", func() {
 			testhelper.SetDBVersion(connectionPool, "7.0.0")
-			mock.ExpectQuery(`WHERE c.relkind = 'p' AND NOT c.relispartition`).WillReturnRows(sqlmock.NewRows([]string{"fqn"}).AddRow("public.sales"))
-			roots, err := restore.GetPartitionRootFQNs()
+			mock.ExpectQuery(`WHERE c.relkind = 'p';`).
+				WillReturnRows(sqlmock.NewRows([]string{"fqn"}).AddRow("public.sales").AddRow("public.sales_1_prt_2"))
+			partitionedTables, err := restore.GetPartitionedTableFQNs()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(roots).To(Equal([]string{"public.sales"}))
+			Expect(partitionedTables).To(Equal([]string{"public.sales", "public.sales_1_prt_2"}))
 		})
 	})
 	Describe("GetNumMetadataConns", func() {

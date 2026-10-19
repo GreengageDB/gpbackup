@@ -154,18 +154,21 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 		return err
 	}
 
+	/*
+	 * Rows that are not redistributed are on the wrong segments, so the table is
+	 * not restored.  In the transaction of the COPY, its failure is rolled back with
+	 * the data of the table.
+	 */
 	if resizeCluster || entry.DistByEnum {
 		// replicated tables cannot be redistributed, so instead expand them if needed
 		if entry.IsReplicated && (origSize < destSize) {
-			err := ExpandReplicatedTable(origSize, tableName, whichConn)
-			if err != nil {
-				gplog.Error(err.Error())
-			}
+			err = ExpandReplicatedTable(origSize, tableName, whichConn)
 		} else {
-			err := RedistributeTableData(tableName, whichConn)
-			if err != nil {
-				gplog.Error(err.Error())
-			}
+			err = RedistributeTableData(tableName, whichConn)
+		}
+		if err != nil {
+			gplog.Error(err.Error())
+			return err
 		}
 	}
 
@@ -287,18 +290,24 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	/*
 	 * A table is truncated in the transaction that restores its data, so that it
 	 * keeps its data if they cannot be restored, whether the helper has stopped or
-	 * the COPY has failed.  The root of a partition hierarchy is truncated on its
-	 * own, as before: its TRUNCATE locks all its partitions, and holding these
-	 * locks for the whole COPY in several connections at once could fill the lock
-	 * table.
+	 * the COPY has failed.  It is truncated with ONLY, so that the transaction locks
+	 * no other table.  The TRUNCATE of the parent of an inheritance hierarchy would
+	 * lock its children until its data is restored, so that a child earlier in the
+	 * same data file would wait for this lock, and the helper for the child, for
+	 * good; it would also empty a child restored before.
+	 *
+	 * A partitioned table, a root or an intermediate level, is truncated on its own
+	 * and with its partitions, as before: its TRUNCATE locks all its partitions, and
+	 * holding these locks for the whole COPY in several connections at once could
+	 * fill the lock table.
 	 */
 	truncateTable := MustGetFlagBool(options.INCREMENTAL) || MustGetFlagBool(options.TRUNCATE_TABLE)
-	partitionRoots := make(map[string]bool)
+	partitionedTables := make(map[string]bool)
 	if truncateTable {
-		partitionRootFQNs, err := GetPartitionRootFQNs()
+		partitionedTableFQNs, err := GetPartitionedTableFQNs()
 		gplog.FatalOnError(err)
-		for _, partitionRootFQN := range partitionRootFQNs {
-			partitionRoots[partitionRootFQN] = true
+		for _, partitionedTableFQN := range partitionedTableFQNs {
+			partitionedTables[partitionedTableFQN] = true
 		}
 	}
 	/*
@@ -363,14 +372,16 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					continue
 				}
 				var err error
-				inTransaction := truncateTable && !partitionRoots[tableName]
+				inTransaction := truncateTable && !partitionedTables[tableName]
 				if truncateTable {
 					gplog.Verbose("Truncating table %s prior to restoring data", tableName)
+					truncateQuery := `TRUNCATE ` + tableName
 					if inTransaction {
+						truncateQuery = `TRUNCATE ONLY ` + tableName
 						err = connectionPool.Begin(whichConn)
 					}
 					if err == nil {
-						_, err = connectionPool.Exec(`TRUNCATE `+tableName, whichConn)
+						_, err = connectionPool.Exec(truncateQuery, whichConn)
 					}
 					if err != nil {
 						gplog.Error(err.Error())
@@ -401,7 +412,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 								"and its helpers on the other segments are told to skip them", helper)
 							utils.CreateSkipFilesOnSegments(oidsOfHelper(groups, dataEntries, helper, maxHelpers), globalCluster, fpInfo, helperIdx...)
 						}
-					} else if errors.Is(err, utils.AgentErr) || !MustGetFlagBool(options.ON_ERROR_CONTINUE) {
+					} else if !MustGetFlagBool(options.ON_ERROR_CONTINUE) {
 						dataProgressBar.(*pb.ProgressBar).NotPrint = true
 						cancel()
 						return

@@ -433,23 +433,26 @@ func GetExistingTableFQNs() ([]string, error) {
 }
 
 /*
- * GetPartitionRootFQNs returns the roots of the partition hierarchies of the
- * database, as a TRUNCATE of a root locks all its partitions.
+ * GetPartitionedTableFQNs returns the partitioned tables of the database, the roots
+ * of the partition hierarchies and their intermediate levels, as a TRUNCATE of such
+ * a table locks all its partitions.
  */
-func GetPartitionRootFQNs() ([]string, error) {
-	partitionRootFQNs := make([]string, 0)
-	query := `SELECT DISTINCT quote_ident(n.nspname) || '.' || quote_ident(c.relname)
-			  FROM pg_catalog.pg_partition p
-				JOIN pg_catalog.pg_class c ON c.oid = p.parrelid
-				JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace;`
+func GetPartitionedTableFQNs() ([]string, error) {
+	partitionedTableFQNs := make([]string, 0)
+	query := `SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname)
+			  FROM pg_catalog.pg_class c
+				JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			  WHERE c.oid IN (SELECT p.parrelid FROM pg_catalog.pg_partition p
+				UNION SELECT r.parchildrelid FROM pg_catalog.pg_partition_rule r
+					JOIN pg_catalog.pg_inherits i ON i.inhparent = r.parchildrelid);`
 	if connectionPool.Version.AtLeast("7") {
 		query = `SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname)
 			  FROM pg_catalog.pg_class c
 				JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-			  WHERE c.relkind = 'p' AND NOT c.relispartition;`
+			  WHERE c.relkind = 'p';`
 	}
-	err := connectionPool.Select(&partitionRootFQNs, query)
-	return partitionRootFQNs, err
+	err := connectionPool.Select(&partitionedTableFQNs, query)
+	return partitionedTableFQNs, err
 }
 
 func GetExistingSchemas() ([]string, error) {
