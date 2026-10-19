@@ -227,26 +227,39 @@ func DataFileHelperIdx(dataFileIdx int, numDataFiles int) []int {
  * each data file, given by nextSlots, without an oid file, which tells the helper
  * that there is no more data, and waits for the segment TOC that the helper writes
  * once its data file is complete.
+ *
+ * The helper may still be writing the last table of its data file, as a COPY is done
+ * once its data is in the pipe, and its storage may be slow, so both waits last as
+ * long as the helper runs.  A helper that stops without its segment TOC, even
+ * without an error file when it is killed, fails the backup.
  */
 func FinishSlotBackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, nextSlots []int) {
 	remoteOutput := c.GenerateAndExecuteCommand("Finishing gpbackup_helper agents", cluster.ON_SEGMENTS, func(contentID int) string {
 		commands := make([]string, 0, 2*len(nextSlots))
 		for dataFileIdx, slot := range nextSlots {
-			pipeFile := fpInfo.GetSegmentPipeFilePath(contentID, DataFileHelperIdx(dataFileIdx, len(nextSlots))...)
-			nextSlot := fmt.Sprintf("%s_%d", pipeFile, slot)
-			commands = append(commands, fmt.Sprintf(`test -p "%[1]s" && timeout 300 bash -c ': > "%[1]s"'`, nextSlot))
+			nextSlot := fmt.Sprintf("%s_%d", fpInfo.GetSegmentPipeFilePath(contentID, DataFileHelperIdx(dataFileIdx, len(nextSlots))...), slot)
+			helperRunning := backupHelperRunningCommand(fpInfo.GetSegmentTOCFilePathForDataFile(contentID, dataFileIdx))
+			commands = append(commands, fmt.Sprintf(`(until [[ -p "%[1]s" ]] && timeout 10 bash -c ': > "%[1]s"'; do %[2]s || exit 1; sleep 1; done)`, nextSlot, helperRunning))
 		}
 		for dataFileIdx := range nextSlots {
 			tocFile := fpInfo.GetSegmentTOCFilePathForDataFile(contentID, dataFileIdx)
-			pipeFile := fpInfo.GetSegmentPipeFilePath(contentID, DataFileHelperIdx(dataFileIdx, len(nextSlots))...)
-			errorFile := GetErrorFilename(pipeFile)
-			commands = append(commands, fmt.Sprintf(`(while [[ ! -f "%s" && ! -f "%s" ]]; do sleep 1; done; ls "%s")`, tocFile, errorFile, tocFile))
+			errorFile := GetErrorFilename(fpInfo.GetSegmentPipeFilePath(contentID, DataFileHelperIdx(dataFileIdx, len(nextSlots))...))
+			commands = append(commands, fmt.Sprintf(`(while [[ ! -f "%[1]s" && ! -f "%[2]s" ]]; do %[3]s || break; sleep 1; done; ls "%[1]s")`, tocFile, errorFile, backupHelperRunningCommand(tocFile)))
 		}
 		return strings.Join(commands, " && ")
 	})
 	c.CheckClusterError(remoteOutput, "Unable to finish gpbackup_helper agents", func(contentID int) string {
 		return "See gpAdminLog for gpbackup_helper on segment host for details: Unable to finish gpbackup_helper agent"
 	})
+}
+
+/*
+ * A command that succeeds while the gpbackup_helper backing up to the data file of
+ * the given segment TOC runs.  The bracket keeps the pattern from matching the
+ * command itself.
+ */
+func backupHelperRunningCommand(tocFile string) string {
+	return fmt.Sprintf(`ps ux | grep -q -- "[g]pbackup_helper --backup-agent --toc-file %s "`, tocFile)
 }
 
 func findCommandStr(c *cluster.Cluster, fpInfo filepath.FilePathInfo, contentID int) string {

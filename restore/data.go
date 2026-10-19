@@ -108,8 +108,9 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 		// restore_helper has encountered an error and has shutdown.
 		// If this occurs we need to error out, as subsequent COPY statements
 		// will hang indefinitely waiting to read from pipes that the helper
-		// was expected to set up
-		if backupConfig.SingleDataFile || resizeCluster {
+		// was expected to set up.  The first batch is checked by
+		// restoreDataFromTimestamp, before the table is truncated.
+		if (backupConfig.SingleDataFile || resizeCluster) && i > 0 {
 			agentErr := checkAgentErrors(*fpInfo, helperIdx)
 			if agentErr != nil {
 				gplog.Error(agentErr.Error())
@@ -301,6 +302,12 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	}
 	entryIdxsForConn := GetEntryIdxsForConns(dataEntries, connectionPool.NumConns, connsPerDataFile)
 	/*
+	 * With --on-error-continue, the data files whose gpbackup_helper has stopped, so
+	 * that their remaining tables are reported as errors without being truncated or
+	 * checked for errors on the segments again.
+	 */
+	failedDataFiles := make([]atomic.Bool, numDataFiles)
+	/*
 	 * We break when an interrupt is received and rely on
 	 * TerminateHangingCopySessions to stop any COPY
 	 * statements in progress if they don't finish on their own.
@@ -346,9 +353,25 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				if opts.RedirectSchema != "" {
 					tableName = utils.MakeFQN(opts.RedirectSchema, entry.Name)
 				}
-				// Truncate table before restore, if needed
+				if backupConfig.SingleDataFile && failedDataFiles[entry.DataFileIdx].Load() {
+					gplog.Verbose("Skipping data of table %s, as the gpbackup_helper of its data file has stopped", tableName)
+					atomic.AddInt32(&numErrors, 1)
+					mutex.Lock()
+					errorTablesData[tableName] = Empty{}
+					mutex.Unlock()
+					dataProgressBar.Increment()
+					continue
+				}
 				var err error
-				if MustGetFlagBool(options.INCREMENTAL) || MustGetFlagBool(options.TRUNCATE_TABLE) {
+				if backupConfig.SingleDataFile || resizeCluster {
+					// A table is not truncated if the helper that would restore it has stopped
+					err = checkAgentErrors(fpInfo, helperIdx)
+					if err != nil {
+						gplog.Error(err.Error())
+					}
+				}
+				// Truncate table before restore, if needed
+				if err == nil && (MustGetFlagBool(options.INCREMENTAL) || MustGetFlagBool(options.TRUNCATE_TABLE)) {
 					gplog.Verbose("Truncating table %s prior to restoring data", tableName)
 					_, err := connectionPool.Exec(`TRUNCATE `+tableName, whichConn)
 					if err != nil {
@@ -366,8 +389,8 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 						if !backupConfig.SingleDataFile {
 							return
 						}
-						// The helper of this data file has stopped, so each of its remaining tables
-						// fails the same way, but the other data files can still be restored
+						// The helper of this data file has stopped, but the other data files can still be restored
+						failedDataFiles[entry.DataFileIdx].Store(true)
 					} else if errors.Is(err, utils.AgentErr) || !MustGetFlagBool(options.ON_ERROR_CONTINUE) {
 						dataProgressBar.(*pb.ProgressBar).NotPrint = true
 						cancel()

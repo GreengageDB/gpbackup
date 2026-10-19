@@ -184,6 +184,15 @@ var _ = Describe("agent remote", func() {
 		})
 	})
 	Describe("FinishSlotBackupHelpers()", func() {
+		// The commands for the next slot and for the segment TOC of one data file
+		wakeCommand := func(nextSlot string, tocFile string) string {
+			return fmt.Sprintf(`(until [[ -p "%[1]s" ]] && timeout 10 bash -c ': > "%[1]s"'; do `+
+				`ps ux | grep -q -- "[g]pbackup_helper --backup-agent --toc-file %[2]s " || exit 1; sleep 1; done)`, nextSlot, tocFile)
+		}
+		waitCommand := func(tocFile string, errorFile string) string {
+			return fmt.Sprintf(`(while [[ ! -f "%[1]s" && ! -f "%[2]s" ]]; do `+
+				`ps ux | grep -q -- "[g]pbackup_helper --backup-agent --toc-file %[1]s " || break; sleep 1; done; ls "%[1]s")`, tocFile, errorFile)
+		}
 		It("ends the next slot of a single data file, whose files have no index, and waits for its segment TOC", func() {
 			utils.FinishSlotBackupHelpers(testCluster, fpInfo, []int{3})
 
@@ -191,22 +200,21 @@ var _ = Describe("agent remote", func() {
 			finishCommand := testExecutor.ClusterCommands[0][0].CommandString
 			pipeFile := fpInfo.GetSegmentPipeFilePath(0)
 			tocFile := "/data/gpseg0/backups/11112233/11112233445566/gpbackup_0_11112233445566_toc.yaml"
-			errorFile := utils.GetErrorFilename(pipeFile)
-			Expect(finishCommand).To(ContainSubstring(fmt.Sprintf(`test -p "%[1]s_3" && timeout 300 bash -c ': > "%[1]s_3"' && `+
-				`(while [[ ! -f "%[2]s" && ! -f "%[3]s" ]]; do sleep 1; done; ls "%[2]s")`, pipeFile, tocFile, errorFile)))
+			Expect(finishCommand).To(ContainSubstring(wakeCommand(pipeFile+"_3", tocFile) + " && " + waitCommand(tocFile, utils.GetErrorFilename(pipeFile))))
 		})
 		It("ends the next slot of each data file and waits for its segment TOC", func() {
 			utils.FinishSlotBackupHelpers(testCluster, fpInfo, []int{2, 1})
 
 			Expect(testExecutor.NumExecutions).To(Equal(1))
 			finishCommand := testExecutor.ClusterCommands[0][0].CommandString
-			pipePrefix := fpInfo.GetSegmentPipeFilePath(0)
-			tocPrefix := "/data/gpseg0/backups/11112233/11112233445566/gpbackup_0_11112233445566_toc"
-			errorPrefix := fmt.Sprintf("%s_error", pipePrefix[:len(pipePrefix)-len("_pipe")])
-			Expect(finishCommand).To(ContainSubstring(fmt.Sprintf(`test -p "%[1]s0_2" && timeout 300 bash -c ': > "%[1]s0_2"' && `+
-				`test -p "%[1]s1_1" && timeout 300 bash -c ': > "%[1]s1_1"' && `+
-				`(while [[ ! -f "%[2]s.yaml" && ! -f "%[3]s0" ]]; do sleep 1; done; ls "%[2]s.yaml") && `+
-				`(while [[ ! -f "%[2]s1.yaml" && ! -f "%[3]s1" ]]; do sleep 1; done; ls "%[2]s1.yaml")`, pipePrefix, tocPrefix, errorPrefix)))
+			pipeFile := func(dataFile int) string { return fpInfo.GetSegmentPipeFilePath(0, dataFile) }
+			tocFile := func(dataFile int) string { return fpInfo.GetSegmentTOCFilePathForDataFile(0, dataFile) }
+			Expect(finishCommand).To(ContainSubstring(wakeCommand(pipeFile(0)+"_2", tocFile(0)) + " && " +
+				wakeCommand(pipeFile(1)+"_1", tocFile(1)) + " && " +
+				waitCommand(tocFile(0), utils.GetErrorFilename(pipeFile(0))) + " && " +
+				waitCommand(tocFile(1), utils.GetErrorFilename(pipeFile(1)))))
+			Expect(tocFile(0)).To(HaveSuffix("_toc.yaml"))
+			Expect(tocFile(1)).To(HaveSuffix("_toc1.yaml"))
 		})
 	})
 	Describe("CheckAgentErrorsOnSegments", func() {
