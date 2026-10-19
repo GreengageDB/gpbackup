@@ -125,9 +125,9 @@ ggcheckmigrate \
 
 `ggcheckmigrate` finds known compatibility problems before a logical migration from Greengage 6 to Greengage 7. It checks every connectable source database by default. Use `--source-database` to check one database.
 
-Objects in a schema given to `--exclude-schema` or `-N` are not checked in any database. The flag can be repeated, and a missing schema is not an error.
+Objects in a schema given to `--exclude-schema` or `-N` are not checked in any database. A partition and its columns are checked or skipped by the schema of the root partitioned table. The flag can be repeated, and a missing schema is not an error.
 
-Objects that belong to an extension are not reported, but the libraries of extension functions are still required on the target cluster, even when the functions are in an excluded schema.
+Objects that belong to an extension are not reported, and neither are the indexes and partitions of an extension table, but the libraries of extension functions are still required on the target cluster, even when the functions are in an excluded schema.
 
 ```bash
 ggcheckmigrate --source-host <source_host> --source-port <source_port> \

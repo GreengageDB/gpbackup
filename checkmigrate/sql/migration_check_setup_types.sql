@@ -62,6 +62,6 @@ BEGIN
       AND n.nspname NOT LIKE 'pg_temp_%'
       AND n.nspname NOT LIKE 'pg_toast%'
       AND n.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')
-      AND c.oid NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e');
+      AND COALESCE(root_relation.oid, i.indrelid, c.oid) NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e');
 END;
 $function$ LANGUAGE plpgsql;

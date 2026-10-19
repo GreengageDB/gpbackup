@@ -210,6 +210,10 @@ SELECT '2000-01-01 00:00:00'::pg_catalog.abstime AS old_time;
 CREATE VIEW ggcheckmigrate_fixture.extension_member_view AS
 SELECT '2000-01-01 00:00:00'::pg_catalog.abstime AS old_time;
 ALTER EXTENSION plpython2u ADD VIEW ggcheckmigrate_fixture.extension_member_view;
+CREATE TABLE ggcheckmigrate_fixture.extension_member_table (old_time pg_catalog.abstime)
+DISTRIBUTED RANDOMLY;
+CREATE INDEX extension_member_index ON ggcheckmigrate_fixture.extension_member_table (old_time);
+ALTER EXTENSION plpython2u ADD TABLE ggcheckmigrate_fixture.extension_member_table;
 CREATE FUNCTION ggcheckmigrate_fixture.missing_library()
 RETURNS text
 AS '$libdir/gp_check_functions', 'get_tablespace_version_directory_name'
@@ -396,7 +400,8 @@ if ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_c
   exit 1
 fi
 
-for unexpected_text in 'heap_child' 'column_child' 'valid_open_range' 'valid_default_range' 'extension_member_view'; do
+for unexpected_text in 'heap_child' 'column_child' 'valid_open_range' 'valid_default_range' 'extension_member_view' \
+  'extension_member_table' 'extension_member_index'; do
   if grep -Fq "${unexpected_text}" "${output_path}"; then
     echo "The report unexpectedly named ${unexpected_text}" >&2
     cat "${output_path}" >&2

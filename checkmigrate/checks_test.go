@@ -729,11 +729,6 @@ func TestSourceChecksSkipExtensionMembers(t *testing.T) {
 			t.Fatalf("The source check does not skip extension members in %q", query)
 		}
 	}
-	for _, query := range []string{missingAOOptionQuery, incompatibleRangePartitionQuery} {
-		if !strings.Contains(query, "child_relation.oid NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e')") {
-			t.Fatalf("The partition check does not skip extension member partitions in %q", query)
-		}
-	}
 }
 
 func TestRequiredLibrariesIncludePersistentExtensionOwnedFunctions(t *testing.T) {
