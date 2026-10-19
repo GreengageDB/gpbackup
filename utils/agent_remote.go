@@ -154,7 +154,15 @@ func VerifyHelperVersionOnSegments(version string, c *cluster.Cluster) {
 	}
 }
 
-func StartGpbackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, operation string, pluginConfigFile string, compressStr string, onErrorContinue bool, isFilter bool, wasTerminated *atomic.Bool, copyQueue int, isSingleDataFile bool, resizeCluster bool, origSize int, destSize int, dataFileIdx int, verbosity int, helperIdx ...int) {
+/*
+ * LockHelperStart keeps the cleanup of the gpbackup_helpers from running while a
+ * helper is started, from writing its oid list and creating its pipes to starting
+ * the helper itself, so that the cleanup finds either all of these or none, and
+ * returns the function that unlocks it.  Once gpbackup or gprestore is being
+ * terminated, it pauses forever instead and waits for the cleanup to exit the
+ * program.
+ */
+func LockHelperStart(wasTerminated *atomic.Bool) func() {
 	// A mutex lock for cleaning up and starting gpbackup helpers prevents a
 	// race condition that causes gpbackup_helpers to be orphaned if
 	// gpbackup_helper cleanup happens before they are started.
@@ -163,8 +171,11 @@ func StartGpbackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, oper
 		helperMutex.Unlock()
 		select {} // Pause forever and wait for cleanup to exit program.
 	}
-	defer helperMutex.Unlock()
+	return helperMutex.Unlock
+}
 
+// StartGpbackupHelpers starts the gpbackup_helpers; the caller holds LockHelperStart
+func StartGpbackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, operation string, pluginConfigFile string, compressStr string, onErrorContinue bool, isFilter bool, copyQueue int, isSingleDataFile bool, resizeCluster bool, origSize int, destSize int, dataFileIdx int, verbosity int, helperIdx ...int) {
 	gphomePath := operating.System.Getenv("GPHOME")
 	pluginStr := ""
 	if pluginConfigFile != "" {

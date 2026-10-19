@@ -152,39 +152,48 @@ var _ = Describe("agent remote", func() {
 			Expect(err).To(Equal(tw.WriteErr))
 		})
 	})
+	Describe("LockHelperStart()", func() {
+		It("keeps another start or the cleanup of the helpers waiting until it is unlocked", func() {
+			var wasTerminated atomic.Bool
+			unlock := utils.LockHelperStart(&wasTerminated)
+			locked := make(chan bool)
+			go func() {
+				utils.LockHelperStart(&wasTerminated)()
+				close(locked)
+			}()
+			Consistently(locked, "200ms").ShouldNot(BeClosed())
+			unlock()
+			Eventually(locked).Should(BeClosed())
+		})
+	})
 	Describe("StartGpbackupHelpers()", func() {
 		It("Correctly propagates --on-error-continue flag to gpbackup_helper", func() {
-			var wasTerminated atomic.Bool
-			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", true, false, &wasTerminated, 1, true, false, 0, 0, 0, gplog.LOGINFO)
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", true, false, 1, true, false, 0, 0, 0, gplog.LOGINFO)
 
 			cc := testExecutor.ClusterCommands[0]
 			Expect(cc[1].CommandString).To(ContainSubstring(" --on-error-continue"))
 		})
 		It("Correctly propagates --copy-queue-size value to gpbackup_helper", func() {
-			var wasTerminated atomic.Bool
-			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 0, gplog.LOGINFO)
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", false, false, 4, true, false, 0, 0, 0, gplog.LOGINFO)
 
 			cc := testExecutor.ClusterCommands[0]
 			Expect(cc[1].CommandString).To(ContainSubstring(" --copy-queue-size 4"))
 		})
 		It("Correctly propagates verbosity", func() {
-			var wasTerminated atomic.Bool
 			verbosity := gplog.LOGDEBUG
-			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 0, verbosity)
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", false, false, 4, true, false, 0, 0, 0, verbosity)
 
 			cc := testExecutor.ClusterCommands[0]
 			Expect(cc[1].CommandString).To(ContainSubstring("--verbosity %d", gplog.LOGDEBUG))
 		})
 		It("Names the files of the gpbackup_helper of a data file other than the first by its index", func() {
-			var wasTerminated atomic.Bool
-			utils.StartGpbackupHelpers(testCluster, fpInfo, "--restore-agent", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 1, gplog.LOGINFO, 1)
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "--restore-agent", "/tmp/pluginConfigFile.yml", " compressStr", false, false, 4, true, false, 0, 0, 1, gplog.LOGINFO, 1)
 
 			cc := testExecutor.ClusterCommands[0]
 			Expect(cc[1].CommandString).To(MatchRegexp(`--toc-file /data/gpseg1/backups/11112233/11112233445566/gpbackup_1_11112233445566_toc1.yaml --oid-file /data/gpseg1/gpbackup_1_11112233445566_\d+_oid1 --pipe-file /data/gpseg1/gpbackup_1_11112233445566_\d+_pipe1 --data-file "/data/gpseg1/backups/11112233/11112233445566/gpbackup_1_11112233445566_file1"`))
 		})
 		It("Gives no oid file to a gpbackup_helper that backs up", func() {
-			var wasTerminated atomic.Bool
-			utils.StartGpbackupHelpers(testCluster, fpInfo, "--backup-agent", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 1, gplog.LOGINFO, 1)
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "--backup-agent", "/tmp/pluginConfigFile.yml", " compressStr", false, false, 4, true, false, 0, 0, 1, gplog.LOGINFO, 1)
 
 			cc := testExecutor.ClusterCommands[0]
 			Expect(cc[1].CommandString).To(MatchRegexp(`--toc-file /data/gpseg1/backups/11112233/11112233445566/gpbackup_1_11112233445566_toc1.yaml --pipe-file /data/gpseg1/gpbackup_1_11112233445566_\d+_pipe1 `))

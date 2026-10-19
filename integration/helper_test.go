@@ -180,6 +180,29 @@ options:
 			Expect(err).ToNot(HaveOccurred())
 			assertBackupArtifactsWithCompression("zstd", true)
 		})
+		DescribeTable("ends a data file of a backup gpbackup_helper without tables", func(withPlugin bool) {
+			args := []string{"--compression-level", "0", "--data-file", dataFileFullPath}
+			dataFile := dataFileFullPath
+			if withPlugin {
+				args = append(args, "--plugin-config", examplePluginTestConfig)
+				dataFile = examplePluginTestDataFile
+			}
+			helperCmd := gpbackupHelperBackup(gpbackupHelperPath, args...)
+			Expect(finishBackupHelper(0)).To(Succeed())
+			err := helperCmd.Wait()
+			printHelperLogOnError(err)
+			Expect(err).ToNot(HaveOccurred())
+			contents, err := ioutil.ReadFile(dataFile)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(contents).To(BeEmpty())
+			contents, err = ioutil.ReadFile(tocFile)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(contents)).To(Equal("dataentries: {}\n"))
+			assertNoErrors()
+		},
+			Entry("without a plugin", false),
+			Entry("with a plugin", true),
+		)
 		It("fails to end the data file of a backup gpbackup_helper that has been killed", func() {
 			helperCmd := gpbackupHelperBackup(gpbackupHelperPath, "--compression-level", "0", "--data-file", dataFileFullPath)
 			writeTablesToSlots(defaultData, defaultData, defaultData)

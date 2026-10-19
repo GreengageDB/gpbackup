@@ -431,12 +431,18 @@ func startDataFileHelpers(numDataFiles int, compressStr string) {
 		slotNames[slot] = fmt.Sprintf("%d", slot)
 	}
 	for file := 0; file < numDataFiles; file++ {
-		helperIdx := utils.DataFileHelperIdx(file, numDataFiles)
-		utils.CreateSegmentPipesOnAllHostsForBackup(slotNames, globalCluster, globalFPInfo, helperIdx...)
-		// Do not pass through the --on-error-continue flag or the resizeClusterMap because neither apply to gpbackup
-		utils.StartGpbackupHelpers(globalCluster, globalFPInfo, "--backup-agent",
-			MustGetFlagString(options.PLUGIN_CONFIG), compressStr, false, false, &wasTerminated, numPipes, true, false, 0, 0, file, gplog.GetVerbosity(), helperIdx...)
+		startDataFileHelper(file, numDataFiles, slotNames, compressStr)
 	}
+}
+
+func startDataFileHelper(file int, numDataFiles int, slotNames []string, compressStr string) {
+	unlock := utils.LockHelperStart(&wasTerminated)
+	defer unlock()
+	helperIdx := utils.DataFileHelperIdx(file, numDataFiles)
+	utils.CreateSegmentPipesOnAllHostsForBackup(slotNames, globalCluster, globalFPInfo, helperIdx...)
+	// Do not pass through the --on-error-continue flag or the resizeClusterMap because neither apply to gpbackup
+	utils.StartGpbackupHelpers(globalCluster, globalFPInfo, "--backup-agent",
+		MustGetFlagString(options.PLUGIN_CONFIG), compressStr, false, false, len(slotNames), true, false, 0, 0, file, gplog.GetVerbosity(), helperIdx...)
 }
 
 func backupPostdata(metadataFile *utils.FileWithByteCount) {

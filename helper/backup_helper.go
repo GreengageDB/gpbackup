@@ -68,18 +68,19 @@ func doBackupAgent() error {
 		if err != nil {
 			return err
 		}
+		// A data file without tables is written as well, with its segment TOC
+		if slot == 0 {
+			pipeWriter, writeCmd, err = getBackupPipeWriter(&errBuf)
+			if err != nil {
+				logError(fmt.Sprintf("Slot %d: Error encountered getting backup pipe writer: %v", slot, err))
+				return err
+			}
+		}
 		if !found {
 			logInfo(fmt.Sprintf("Slot %d: No more tables to back up", slot))
 			_ = readHandle.Close()
 			deletePipe(currentPipe)
 			break
-		}
-		if slot == 0 {
-			pipeWriter, writeCmd, err = getBackupPipeWriter(&errBuf)
-			if err != nil {
-				logError(fmt.Sprintf("Oid %d: Error encountered getting backup pipe writer: %v", oid, err))
-				return err
-			}
 		}
 
 		logInfo(fmt.Sprintf("Oid %d: Backing up table with pipe %s", oid, currentPipe))

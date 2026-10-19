@@ -274,9 +274,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				for entryIdx := whichConn; entryIdx < totalTables; entryIdx += maxHelpers {
 					entryIdxs = append(entryIdxs, entryIdx)
 				}
-				if !startRestoreHelper(fpInfo, dataEntries, entryIdxs, whichConn, connectionPool.NumConns*batches) {
-					return 0
-				}
+				startRestoreHelper(fpInfo, dataEntries, entryIdxs, whichConn, connectionPool.NumConns*batches)
 			}
 		}
 	}
@@ -461,10 +459,10 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 
 /*
  * startRestoreHelper starts the gpbackup_helper with the given index, which restores
- * the given data entries, with numPipes of their pipes created ahead.  It returns
- * false if gprestore is being terminated.
+ * the given data entries, with numPipes of their pipes created ahead.  Once
+ * gprestore is being terminated, it waits for the cleanup to exit the program.
  */
-func startRestoreHelper(fpInfo filepath.FilePathInfo, dataEntries []toc.CoordinatorDataEntry, entryIdxs []int, whichHelper int, numPipes int) bool {
+func startRestoreHelper(fpInfo filepath.FilePathInfo, dataEntries []toc.CoordinatorDataEntry, entryIdxs []int, whichHelper int, numPipes int) {
 	origSize, destSize, resizeCluster, batches := GetResizeClusterInfo()
 	oidList := make([]string, 0)
 	for _, entryIdx := range entryIdxs {
@@ -478,11 +476,11 @@ func startRestoreHelper(fpInfo filepath.FilePathInfo, dataEntries []toc.Coordina
 		}
 	}
 
+	// The helper of a data file may be started while gprestore is being terminated
+	unlock := utils.LockHelperStart(&wasTerminated)
+	defer unlock()
 	utils.WriteOidListToSegments(oidList, globalCluster, fpInfo, HelperIdx(whichHelper)...)
 	initialPipes := CreateInitialSegmentPipes(oidList, globalCluster, numPipes, fpInfo, HelperIdx(whichHelper)...)
-	if wasTerminated.Load() {
-		return false
-	}
 	isFilter := false
 	if len(opts.IncludedRelations) > 0 || len(opts.ExcludedRelations) > 0 || len(opts.IncludedSchemas) > 0 || len(opts.ExcludedSchemas) > 0 {
 		isFilter = true
@@ -496,8 +494,7 @@ func startRestoreHelper(fpInfo filepath.FilePathInfo, dataEntries []toc.Coordina
 	if backupConfig.SingleDataFile {
 		dataFileIdx = whichHelper
 	}
-	utils.StartGpbackupHelpers(globalCluster, fpInfo, "--restore-agent", MustGetFlagString(options.PLUGIN_CONFIG), compressStr, MustGetFlagBool(options.ON_ERROR_CONTINUE), isFilter, &wasTerminated, initialPipes, backupConfig.SingleDataFile, resizeCluster, origSize, destSize, dataFileIdx, gplog.GetVerbosity(), HelperIdx(whichHelper)...)
-	return true
+	utils.StartGpbackupHelpers(globalCluster, fpInfo, "--restore-agent", MustGetFlagString(options.PLUGIN_CONFIG), compressStr, MustGetFlagBool(options.ON_ERROR_CONTINUE), isFilter, initialPipes, backupConfig.SingleDataFile, resizeCluster, origSize, destSize, dataFileIdx, gplog.GetVerbosity(), HelperIdx(whichHelper)...)
 }
 
 func CreateInitialSegmentPipes(oidList []string, c *cluster.Cluster, numConns int, fpInfo filepath.FilePathInfo, helperIdx ...int) int {
