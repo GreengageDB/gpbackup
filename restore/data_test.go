@@ -174,6 +174,25 @@ var _ = Describe("restore/data tests", func() {
 			groups := restore.NewDataFileGroups(entries, 3, 3, 2)
 			Expect(entriesOfConns(groups, 3)).To(Equal([][]int{{1, 2, 0}, {4, 5, 3}, {}}))
 		})
+		It("starts each data file once, before the first of its entries is given", func() {
+			groups := restore.NewDataFileGroups(entries, 3, 2, 1)
+			started := make([]int, 0)
+			groups.StartDataFile = func(file int) { started = append(started, file) }
+			nextEntryIdx := groups.EntriesOfConn(0)
+			entryIdx, _ := nextEntryIdx()
+			// Connection 0 takes data file 1, the largest
+			Expect(entryIdx).To(Equal(1))
+			Expect(started).To(Equal([]int{1}))
+			nextEntryIdx()
+			Expect(started).To(Equal([]int{1}))
+			entryIdx, _ = nextEntryIdx()
+			Expect(entryIdx).To(Equal(2))
+			Expect(started).To(Equal([]int{1, 2}))
+		})
+		It("gives the oids of the entries of a data file", func() {
+			groups := restore.NewDataFileGroups(entries, 3, 2, 1)
+			Expect(groups.OidsOfDataFile(entries, 2)).To(Equal([]uint32{3, 6}))
+		})
 		It("skips data files without entries", func() {
 			groups := restore.NewDataFileGroups([]toc.CoordinatorDataEntry{{Oid: 1, DataFileIdx: 2}}, 3, 2, 1)
 			Expect(entriesOfConns(groups, 2)).To(Equal([][]int{{0}, {}}))

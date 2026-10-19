@@ -186,12 +186,12 @@ var _ = Describe("agent remote", func() {
 	Describe("FinishSlotBackupHelpers()", func() {
 		// The commands for the next slot and for the segment TOC of one data file
 		wakeCommand := func(nextSlot string, tocFile string) string {
-			return fmt.Sprintf(`(until [[ -p "%[1]s" ]] && timeout 10 bash -c ': > "%[1]s"'; do `+
-				`ps ux | grep -- "[g]pbackup_helper .*--toc-file %[2]s " | grep -q -- "--backup-agent" || exit 1; sleep 1; done)`, nextSlot, tocFile)
+			return fmt.Sprintf(`(while [[ -p "%[1]s" ]]; do timeout 10 bash -c '[[ ! -p "%[1]s" ]] || : > "%[1]s"' && break; `+
+				`ps ux | grep -F -- "--toc-file %[2]s " | grep -- "[g]pbackup_helper" | grep -q -- "--backup-agent" || exit 1; sleep 1; done)`, nextSlot, tocFile)
 		}
 		waitCommand := func(tocFile string, errorFile string) string {
 			return fmt.Sprintf(`(while [[ ! -f "%[1]s" && ! -f "%[2]s" ]]; do `+
-				`ps ux | grep -- "[g]pbackup_helper .*--toc-file %[1]s " | grep -q -- "--backup-agent" || break; sleep 1; done; ls "%[1]s")`, tocFile, errorFile)
+				`ps ux | grep -F -- "--toc-file %[1]s " | grep -- "[g]pbackup_helper" | grep -q -- "--backup-agent" || break; sleep 1; done; ls "%[1]s")`, tocFile, errorFile)
 		}
 		It("ends the next slot of a single data file, whose files have no index, and waits for its segment TOC", func() {
 			utils.FinishSlotBackupHelpers(testCluster, fpInfo, []int{3})
@@ -215,6 +215,25 @@ var _ = Describe("agent remote", func() {
 				waitCommand(tocFile(1), utils.GetErrorFilename(pipeFile(1)))))
 			Expect(tocFile(0)).To(HaveSuffix("_toc.yaml"))
 			Expect(tocFile(1)).To(HaveSuffix("_toc1.yaml"))
+		})
+	})
+	Describe("CreateSkipFilesOnSegments()", func() {
+		It("creates the skip files of the entries a thousand at a time on each segment", func() {
+			oids := make([]uint32, 1500)
+			for i := range oids {
+				oids[i] = uint32(i + 1)
+			}
+			utils.CreateSkipFilesOnSegments(oids, testCluster, fpInfo, 2)
+
+			Expect(testExecutor.NumExecutions).To(Equal(2))
+			skipFile := utils.GetSkipFilename(fpInfo.GetSegmentPipeFilePath(0, 2))
+			first := testExecutor.ClusterCommands[0][0].CommandString
+			Expect(first).To(ContainSubstring(fmt.Sprintf("touch %[1]s_1 %[1]s_2 ", skipFile)))
+			Expect(first).To(ContainSubstring(fmt.Sprintf(" %s_1000", skipFile)))
+			Expect(first).ToNot(ContainSubstring(fmt.Sprintf(" %s_1001", skipFile)))
+			second := testExecutor.ClusterCommands[1][0].CommandString
+			Expect(second).To(ContainSubstring(fmt.Sprintf("touch %s_1001 ", skipFile)))
+			Expect(second).To(HaveSuffix(fmt.Sprintf(" %s_1500", skipFile)))
 		})
 	})
 	Describe("CheckAgentErrorsOnSegments", func() {

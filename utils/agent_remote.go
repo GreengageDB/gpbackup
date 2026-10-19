@@ -258,18 +258,19 @@ func FinishSlotBackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, n
  */
 func FinishSlotBackupHelperCommands(nextSlot string, tocFile string, errorFile string) (string, string) {
 	helperRunning := backupHelperRunningCommand(tocFile)
-	wake := fmt.Sprintf(`(until [[ -p "%[1]s" ]] && timeout 10 bash -c ': > "%[1]s"'; do %[2]s || exit 1; sleep 1; done)`, nextSlot, helperRunning)
+	// Once the pipe of the slot is gone, the helper has read it
+	wake := fmt.Sprintf(`(while [[ -p "%[1]s" ]]; do timeout 10 bash -c '[[ ! -p "%[1]s" ]] || : > "%[1]s"' && break; %[2]s || exit 1; sleep 1; done)`, nextSlot, helperRunning)
 	wait := fmt.Sprintf(`(while [[ ! -f "%[1]s" && ! -f "%[2]s" ]]; do %[3]s || break; sleep 1; done; ls "%[1]s")`, tocFile, errorFile, helperRunning)
 	return wake, wait
 }
 
 /*
  * A command that succeeds while the gpbackup_helper backing up to the data file of
- * the given segment TOC runs.  The bracket keeps the pattern from matching the
- * command itself.
+ * the given segment TOC runs.  The path is matched as a fixed string, and the
+ * bracket keeps the pattern of the helper from matching the command itself.
  */
 func backupHelperRunningCommand(tocFile string) string {
-	return fmt.Sprintf(`ps ux | grep -- "[g]pbackup_helper .*--toc-file %s " | grep -q -- "--backup-agent"`, tocFile)
+	return fmt.Sprintf(`ps ux | grep -F -- "--toc-file %s " | grep -- "[g]pbackup_helper" | grep -q -- "--backup-agent"`, tocFile)
 }
 
 func findCommandStr(c *cluster.Cluster, fpInfo filepath.FilePathInfo, contentID int) string {
@@ -464,6 +465,33 @@ func CreateSkipFileOnSegments(oid uint32, tableName string, c *cluster.Cluster, 
 	c.CheckClusterError(remoteOutput, "Error while creating skip file on segments", func(contentID int) string {
 		return fmt.Sprintf("Could not create skip file %s_%d on segments", GetSkipFilename(fpInfo.GetSegmentPipeFilePath(contentID, helperIdx...)), oid)
 	})
+}
+
+/*
+ * CreateSkipFilesOnSegments creates the skip files of the given restore entries, so
+ * that the helpers on all segments skip them, with skipFilesPerCommand of them in
+ * each command on a segment.
+ */
+const skipFilesPerCommand = 1000
+
+func CreateSkipFilesOnSegments(oids []uint32, c *cluster.Cluster, fpInfo filepath.FilePathInfo, helperIdx ...int) {
+	for start := 0; start < len(oids); start += skipFilesPerCommand {
+		end := start + skipFilesPerCommand
+		if end > len(oids) {
+			end = len(oids)
+		}
+		remoteOutput := c.GenerateAndExecuteCommand(fmt.Sprintf("Creating skip files on segments for %d restore entries", end-start), cluster.ON_SEGMENTS, func(contentID int) string {
+			skipFile := GetSkipFilename(fpInfo.GetSegmentPipeFilePath(contentID, helperIdx...))
+			skipFiles := make([]string, 0, end-start)
+			for _, oid := range oids[start:end] {
+				skipFiles = append(skipFiles, fmt.Sprintf("%s_%d", skipFile, oid))
+			}
+			return fmt.Sprintf("touch %s", strings.Join(skipFiles, " "))
+		})
+		c.CheckClusterError(remoteOutput, "Error while creating skip files on segments", func(contentID int) string {
+			return fmt.Sprintf("Could not create skip files %s_* on segments", GetSkipFilename(fpInfo.GetSegmentPipeFilePath(contentID, helperIdx...)))
+		})
+	}
 }
 
 func GetErrorFilename(pipeFile string) string {
