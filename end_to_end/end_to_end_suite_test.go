@@ -2082,6 +2082,76 @@ var _ = Describe("backup and restore end to end tests", func() {
 			// The TRUNCATE of the parent locked the child, whose COPY waited for it, and the helper for that COPY
 			Entry("with a single data file restored by two connections", []string{"--single-data-file"}, []string{"--copy-queue-size", "2"}),
 		)
+		It("restores the other tables of a data file whose TRUNCATE of a table fails with --on-error-continue", func() {
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA truncate_missing")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA truncate_missing CASCADE")
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE truncate_missing.first (i int) DISTRIBUTED BY (i);
+				CREATE TABLE truncate_missing.second (i int) DISTRIBUTED BY (i);
+				INSERT INTO truncate_missing.first SELECT generate_series(1, 1000);
+				INSERT INTO truncate_missing.second SELECT generate_series(1, 1000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "truncate_missing",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+			// The first table of the data file cannot be truncated, and the second keeps these rows unless restored
+			testhelper.AssertQueryRuns(backupConn, `DROP TABLE truncate_missing.first;
+				INSERT INTO truncate_missing.second SELECT generate_series(1001, 1005)`)
+
+			// Without a skip file for the first table, its helper waited for its COPY, and the COPY of the second for the helper
+			restoreOutput, err := exec.Command(gprestorePath,
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--truncate-table", "--data-only", "--on-error-continue").CombinedOutput()
+			Expect(err).To(HaveOccurred(), string(restoreOutput))
+			Expect(string(restoreOutput)).To(ContainSubstring(`relation "truncate_missing.first" does not exist`))
+			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM truncate_missing.second")).To(Equal("1000"))
+		})
+		It("restores the tables of a data file while a session that has read the first of them reads the next", func() {
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA truncate_reader")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA truncate_reader CASCADE")
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE truncate_reader.first (i int) DISTRIBUTED BY (i);
+				CREATE TABLE truncate_reader.second (i int) DISTRIBUTED BY (i);
+				INSERT INTO truncate_reader.first SELECT generate_series(1, 1000);
+				INSERT INTO truncate_reader.second SELECT generate_series(1, 1000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "truncate_reader",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+
+			// The session has read the first table, so that the TRUNCATE of the first table waits for it
+			readerConn := testutils.SetupTestDbConn("testdb")
+			defer readerConn.Close()
+			readerConn.MustExec("SET statement_timeout = '10s'")
+			readerConn.MustExec("BEGIN; LOCK TABLE truncate_reader.first IN ACCESS SHARE MODE")
+			restoreCmd := exec.Command(gprestorePath,
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--truncate-table", "--data-only",
+				"--copy-queue-size", "2")
+			Expect(restoreCmd.Start()).To(Succeed())
+			truncateWaitsQuery := `SELECT count(*) FROM pg_locks l
+				JOIN pg_class c ON c.oid = l.relation
+				JOIN pg_namespace n ON n.oid = c.relnamespace
+				WHERE n.nspname = 'truncate_reader' AND c.relname = 'first' AND l.mode = 'AccessExclusiveLock' AND NOT l.granted`
+			Eventually(func() int {
+				var numWaiting int
+				_ = readerConn.Get(&numWaiting, truncateWaitsQuery)
+				return numWaiting
+			}, "30s", "100ms").Should(BeNumerically(">", 0))
+			// Long enough for the other connection to truncate the second table if it went ahead
+			time.Sleep(time.Second)
+
+			// The second table is not locked until the first is truncated, so the session can read it and end
+			var numRows int
+			Expect(readerConn.Get(&numRows, "SELECT count(*) FROM truncate_reader.second")).To(Succeed())
+			Expect(numRows).To(Equal(1000))
+			readerConn.MustExec("COMMIT")
+			Expect(restoreCmd.Wait()).To(Succeed())
+			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM truncate_reader.first")).To(Equal("1000"))
+			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM truncate_reader.second")).To(Equal("1000"))
+		})
 	})
 	Describe("Restore with --run-analyze", func() {
 		It("runs gprestore without --run-analyze", func() {

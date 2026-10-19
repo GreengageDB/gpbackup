@@ -197,6 +197,51 @@ var _ = Describe("restore/data tests", func() {
 			groups := restore.NewDataFileGroups([]toc.CoordinatorDataEntry{{Oid: 1, DataFileIdx: 2}}, 3, 2, 1)
 			Expect(entriesOfConns(groups, 2)).To(Equal([][]int{{0}, {}}))
 		})
+		Describe("the order of the truncates", func() {
+			// Whether the truncate of an entry, waited for in the background, may go on
+			waitToTruncate := func(groups *restore.DataFileGroups, ctx context.Context, entryIdx int) chan bool {
+				mayTruncate := make(chan bool, 1)
+				go func() { mayTruncate <- groups.WaitToTruncate(ctx, entryIdx) }()
+				return mayTruncate
+			}
+			It("truncates the tables of each data file in the order of the file", func() {
+				groups := restore.NewDataFileGroups(entries, 3, 4, 2)
+				groups.OrderTruncates = true
+				Expect(groups.WaitToTruncate(context.Background(), 0)).To(BeTrue())
+				// Entry 3 comes after entry 0 in data file 0, entry 4 first in data file 1
+				mayTruncate := waitToTruncate(groups, context.Background(), 3)
+				Expect(groups.WaitToTruncate(context.Background(), 1)).To(BeTrue())
+				groups.TruncateDone(1)
+				Consistently(mayTruncate, "200ms").ShouldNot(Receive())
+				groups.TruncateDone(0)
+				Eventually(mayTruncate).Should(Receive(BeTrue()))
+			})
+			It("lets a table be skipped before the tables before it are truncated", func() {
+				singleFileEntries := []toc.CoordinatorDataEntry{{Oid: 1}, {Oid: 2}, {Oid: 3}, {Oid: 4}}
+				groups := restore.NewDataFileGroups(singleFileEntries, 1, 2, 2)
+				groups.OrderTruncates = true
+				groups.TruncateDone(1)
+				mayTruncate := waitToTruncate(groups, context.Background(), 2)
+				Consistently(mayTruncate, "200ms").ShouldNot(Receive())
+				groups.TruncateDone(0)
+				Eventually(mayTruncate).Should(Receive(BeTrue()))
+			})
+			It("stops waiting once the context is done", func() {
+				groups := restore.NewDataFileGroups(entries, 3, 4, 2)
+				groups.OrderTruncates = true
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				groups.WakeWhenDone(ctx)
+				mayTruncate := waitToTruncate(groups, ctx, 3)
+				Consistently(mayTruncate, "200ms").ShouldNot(Receive())
+				cancel()
+				Eventually(mayTruncate).Should(Receive(BeFalse()))
+			})
+			It("does not wait without OrderTruncates", func() {
+				groups := restore.NewDataFileGroups(entries, 3, 4, 2)
+				Expect(groups.WaitToTruncate(context.Background(), 3)).To(BeTrue())
+			})
+		})
 	})
 	Describe("CheckRowsRestored", func() {
 		var (
