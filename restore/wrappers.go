@@ -432,6 +432,26 @@ func GetExistingTableFQNs() ([]string, error) {
 	return existingTableFQNs, err
 }
 
+/*
+ * GetPartitionRootFQNs returns the roots of the partition hierarchies of the
+ * database, as a TRUNCATE of a root locks all its partitions.
+ */
+func GetPartitionRootFQNs() ([]string, error) {
+	partitionRootFQNs := make([]string, 0)
+	query := `SELECT DISTINCT quote_ident(n.nspname) || '.' || quote_ident(c.relname)
+			  FROM pg_catalog.pg_partition p
+				JOIN pg_catalog.pg_class c ON c.oid = p.parrelid
+				JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace;`
+	if connectionPool.Version.AtLeast("7") {
+		query = `SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname)
+			  FROM pg_catalog.pg_class c
+				JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			  WHERE c.relkind = 'p' AND NOT c.relispartition;`
+	}
+	err := connectionPool.Select(&partitionRootFQNs, query)
+	return partitionRootFQNs, err
+}
+
 func GetExistingSchemas() ([]string, error) {
 	existingSchemas := make([]string, 0)
 

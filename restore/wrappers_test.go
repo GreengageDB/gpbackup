@@ -7,6 +7,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
+	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/history"
 	"github.com/GreengageDB/gpbackup/options"
@@ -115,6 +116,29 @@ var _ = Describe("wrapper tests", func() {
 				To(Equal([]string{"schema1.table1", "schema2.table2"}))
 		})
 
+	})
+	Describe("GetPartitionRootFQNs", func() {
+		var version dbconn.GPDBVersion
+		BeforeEach(func() {
+			version = connectionPool.Version
+		})
+		AfterEach(func() {
+			connectionPool.Version = version
+		})
+		It("gets the roots of the partition hierarchies from pg_partition before GPDB 7", func() {
+			testhelper.SetDBVersion(connectionPool, "6.0.0")
+			mock.ExpectQuery(`FROM pg_catalog.pg_partition p`).WillReturnRows(sqlmock.NewRows([]string{"fqn"}).AddRow("public.sales"))
+			roots, err := restore.GetPartitionRootFQNs()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(roots).To(Equal([]string{"public.sales"}))
+		})
+		It("gets the partitioned tables that are not partitions from GPDB 7", func() {
+			testhelper.SetDBVersion(connectionPool, "7.0.0")
+			mock.ExpectQuery(`WHERE c.relkind = 'p' AND NOT c.relispartition`).WillReturnRows(sqlmock.NewRows([]string{"fqn"}).AddRow("public.sales"))
+			roots, err := restore.GetPartitionRootFQNs()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(roots).To(Equal([]string{"public.sales"}))
+		})
 	})
 	Describe("GetNumMetadataConns", func() {
 		var numConns int

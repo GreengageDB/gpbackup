@@ -282,9 +282,20 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	/*
 	 * A table is truncated in the transaction that restores its data, so that it
 	 * keeps its data if they cannot be restored, whether the helper has stopped or
-	 * the COPY has failed.
+	 * the COPY has failed.  The root of a partition hierarchy is truncated on its
+	 * own, as before: its TRUNCATE locks all its partitions, and holding these
+	 * locks for the whole COPY in several connections at once could fill the lock
+	 * table.
 	 */
 	truncateTable := MustGetFlagBool(options.INCREMENTAL) || MustGetFlagBool(options.TRUNCATE_TABLE)
+	partitionRoots := make(map[string]bool)
+	if truncateTable {
+		partitionRootFQNs, err := GetPartitionRootFQNs()
+		gplog.FatalOnError(err)
+		for _, partitionRootFQN := range partitionRootFQNs {
+			partitionRoots[partitionRootFQN] = true
+		}
+	}
 	/*
 	 * We break when an interrupt is received and rely on
 	 * TerminateHangingCopySessions to stop any COPY
@@ -342,9 +353,12 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					continue
 				}
 				var err error
+				inTransaction := truncateTable && !partitionRoots[tableName]
 				if truncateTable {
 					gplog.Verbose("Truncating table %s prior to restoring data", tableName)
-					err = connectionPool.Begin(whichConn)
+					if inTransaction {
+						err = connectionPool.Begin(whichConn)
+					}
 					if err == nil {
 						_, err = connectionPool.Exec(`TRUNCATE `+tableName, whichConn)
 					}
@@ -355,7 +369,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				if err == nil {
 					err = restoreSingleTableData(ctx, &fpInfo, entry, tableName, whichConn, helperIdx)
 				}
-				if truncateTable && connectionPool.Tx[whichConn] != nil {
+				if inTransaction && connectionPool.Tx[whichConn] != nil {
 					if err == nil {
 						err = connectionPool.Commit(whichConn)
 						if err != nil {
