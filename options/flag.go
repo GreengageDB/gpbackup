@@ -107,7 +107,7 @@ func SetRestoreFlagDefaults(flagSet *pflag.FlagSet) {
 	flagSet.String(INCLUDE_RELATION_FILE, "", "A file containing a list of fully-qualified relation(s) that will be restored")
 	flagSet.Bool(INCREMENTAL, false, "BETA FEATURE: Only restore data for all heap tables and only AO tables that have been modified since the last backup")
 	flagSet.Bool(METADATA_ONLY, false, "Only restore metadata, do not restore data")
-	flagSet.Int(JOBS, 1, "Number of parallel connections to use when restoring table data and post-data. For a backup taken with --single-data-file, the number of groups of --copy-queue-size connections that restore its data files in parallel, each group one data file at a time")
+	flagSet.Int(JOBS, 1, "Number of parallel connections to use when restoring table data and post-data. For a backup taken with --single-data-file and --jobs, the number of groups of --copy-queue-size connections that restore its data files in parallel, each group one data file at a time; for a backup with a single data file, --jobs times --copy-queue-size connections restore it together")
 	flagSet.Bool(ON_ERROR_CONTINUE, false, "Log errors and continue restore, instead of exiting on first error")
 	flagSet.String(PLUGIN_CONFIG, "", "The configuration file to use for a plugin")
 	flagSet.Bool("version", false, "Print version number and exit")
