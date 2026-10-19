@@ -278,11 +278,12 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 		}
 	}
 	/*
-	 * With --on-error-continue, the data files whose gpbackup_helper has stopped, so
-	 * that their remaining tables are reported as errors without being truncated or
-	 * checked for errors on the segments again.
+	 * With --on-error-continue, the gpbackup_helpers that have stopped: that of each
+	 * data file, or with --resize-cluster that of each connection.  Their remaining
+	 * tables are reported as errors without being truncated or checked for errors on
+	 * the segments again.
 	 */
-	failedDataFiles := make([]atomic.Bool, numDataFiles)
+	stoppedHelpers := make([]atomic.Bool, maxHelpers+1)
 	/*
 	 * A table is truncated in the transaction that restores its data, so that it
 	 * keeps its data if they cannot be restored, whether the helper has stopped or
@@ -348,8 +349,12 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				if opts.RedirectSchema != "" {
 					tableName = utils.MakeFQN(opts.RedirectSchema, entry.Name)
 				}
-				if backupConfig.SingleDataFile && failedDataFiles[entry.DataFileIdx].Load() {
-					gplog.Verbose("Skipping data of table %s, as the gpbackup_helper of its data file has stopped", tableName)
+				helper := 0
+				if len(helperIdx) > 0 {
+					helper = helperIdx[0]
+				}
+				if (backupConfig.SingleDataFile || resizeCluster) && stoppedHelpers[helper].Load() {
+					gplog.Verbose("Skipping data of table %s, as the gpbackup_helper of its data has stopped", tableName)
 					atomic.AddInt32(&numErrors, 1)
 					mutex.Lock()
 					errorTablesData[tableName] = Empty{}
@@ -388,16 +393,13 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 
 				if err != nil {
 					atomic.AddInt32(&numErrors, 1)
-					if errors.Is(err, utils.AgentErr) && MustGetFlagBool(options.ON_ERROR_CONTINUE) && maxHelpers > 1 {
+					if errors.Is(err, utils.AgentErr) && MustGetFlagBool(options.ON_ERROR_CONTINUE) {
+						// The helper has stopped, but the tables of the other helpers can still be restored
 						dataProgressBar.(*pb.ProgressBar).NotPrint = true
-						if !backupConfig.SingleDataFile {
-							return
-						}
-						// The helper of this data file has stopped, but the other data files can still be restored
-						if failedDataFiles[entry.DataFileIdx].CompareAndSwap(false, true) {
-							gplog.Warn("The gpbackup_helper of data file %d has stopped on a segment, so its tables left are not restored, "+
-								"and its helpers on the other segments are told to skip them", entry.DataFileIdx)
-							utils.CreateSkipFilesOnSegments(groups.OidsOfDataFile(dataEntries, entry.DataFileIdx), globalCluster, fpInfo, helperIdx...)
+						if stoppedHelpers[helper].CompareAndSwap(false, true) {
+							gplog.Warn("The gpbackup_helper %d has stopped on a segment, so its tables left are not restored, "+
+								"and its helpers on the other segments are told to skip them", helper)
+							utils.CreateSkipFilesOnSegments(oidsOfHelper(groups, dataEntries, helper, maxHelpers), globalCluster, fpInfo, helperIdx...)
 						}
 					} else if errors.Is(err, utils.AgentErr) || !MustGetFlagBool(options.ON_ERROR_CONTINUE) {
 						dataProgressBar.(*pb.ProgressBar).NotPrint = true
@@ -488,12 +490,27 @@ func CreateInitialSegmentPipes(oidList []string, c *cluster.Cluster, numConns in
 }
 
 /*
+ * oidsOfHelper returns the oids of the data entries of a gpbackup_helper: those of
+ * its data file with --single-data-file, or else those of its connection.
+ */
+func oidsOfHelper(groups *DataFileGroups, dataEntries []toc.CoordinatorDataEntry, helper int, numHelpers int) []uint32 {
+	if backupConfig.SingleDataFile {
+		return groups.OidsOfDataFile(dataEntries, helper)
+	}
+	oids := make([]uint32, 0)
+	for entryIdx := helper; entryIdx < len(dataEntries); entryIdx += numHelpers {
+		oids = append(oids, dataEntries[entryIdx].Oid)
+	}
+	return oids
+}
+
+/*
  * checkAgentErrors returns an error if the gpbackup_helper with the given index has
- * stopped.  With several data files, other connections restore the tables of the
- * same helper, so its error file is left for them to find as well.
+ * stopped.  With --single-data-file, several connections may restore the tables of
+ * the same helper, so its error file is left for them to find as well.
  */
 func checkAgentErrors(fpInfo filepath.FilePathInfo, helperIdx []int) error {
-	if backupConfig.SingleDataFile && maxHelpers > 1 {
+	if backupConfig.SingleDataFile {
 		return utils.CheckAgentErrorsOnSegmentsKeepingErrorFile(globalCluster, fpInfo, helperIdx...)
 	}
 	return utils.CheckAgentErrorsOnSegments(globalCluster, fpInfo, helperIdx...)

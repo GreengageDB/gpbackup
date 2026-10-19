@@ -193,8 +193,13 @@ func StartGpbackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, oper
 		scriptFile := fpInfo.GetSegmentHelperFilePath(contentID, filepath.FormatSuffix("script", helperIdx...))
 		pipeFile := fpInfo.GetSegmentPipeFilePath(contentID, helperIdx...)
 		backupFile := fpInfo.GetSingleDataFilePath(contentID, GetPipeThroughProgram().Extension, dataFileIdx)
-		helperCmdStr := fmt.Sprintf(`gpbackup_helper %s --toc-file %s --oid-file %s --pipe-file %s --data-file "%s" --content %d%s%s%s%s%s%s --copy-queue-size %d --verbosity %d`,
-			operation, tocFile, oidFile, pipeFile, backupFile, contentID, pluginStr, compressStr, onErrorContinueStr, filterStr, singleDataFileStr, resizeStr, copyQueue, verbosity)
+		// A helper that backs up gets the oids of its tables next to the pipes of their slots
+		oidFileStr := ""
+		if operation != "--backup-agent" {
+			oidFileStr = fmt.Sprintf(" --oid-file %s", oidFile)
+		}
+		helperCmdStr := fmt.Sprintf(`gpbackup_helper %s --toc-file %s%s --pipe-file %s --data-file "%s" --content %d%s%s%s%s%s%s --copy-queue-size %d --verbosity %d`,
+			operation, tocFile, oidFileStr, pipeFile, backupFile, contentID, pluginStr, compressStr, onErrorContinueStr, filterStr, singleDataFileStr, resizeStr, copyQueue, verbosity)
 		// we run these commands in sequence to ensure that any failure is critical; the last command ensures the agent process was successfully started
 		return fmt.Sprintf(`cat << HEREDOC > %[1]s && chmod +x %[1]s && ( nohup %[1]s &> /dev/null &)
 #!/bin/bash

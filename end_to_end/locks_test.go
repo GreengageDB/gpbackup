@@ -433,6 +433,83 @@ var _ = Describe("Deadlock handling", func() {
 	It("runs gpbackup and defers 2 deadlocked tables to main worker", func() {
 		deferDeadlockedTables(false)
 	})
+	It("runs gpbackup with single-data-file and defers 3 tables in a row to main worker while it copies a large table", func() {
+		if useOldBackupVersion || backupConn.Version.Before(backup.SNAPSHOT_GPDB_MIN_VERSION) {
+			Skip(fmt.Sprintf("This test is not needed for old backup versions or GPDB versions < %s", backup.SNAPSHOT_GPDB_MIN_VERSION))
+		}
+		// The first table of the backup is large, so that the main worker is still copying
+		// it once worker 1 has deferred the next two tables as well
+		testhelper.AssertQueryRuns(backupConn, `CREATE SCHEMA pipe_test;
+			CREATE TABLE pipe_test.t1 (a int) DISTRIBUTED BY (a);
+			INSERT INTO pipe_test.t1 SELECT generate_series(1, 3000000)`)
+		defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA pipe_test CASCADE")
+		defer testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA IF EXISTS pipe_test CASCADE")
+		for i := 2; i <= 6; i++ {
+			testhelper.AssertQueryRuns(backupConn, fmt.Sprintf(`CREATE TABLE pipe_test.t%[1]d (a int) DISTRIBUTED BY (a);
+				INSERT INTO pipe_test.t%[1]d SELECT generate_series(1, 1000)`, i))
+		}
+		testhelper.AssertQueryRuns(backupConn, "ANALYZE pipe_test.t1")
+
+		anotherConn := testutils.SetupTestDbConn("testdb")
+		defer anotherConn.Close()
+		waitForCount := func(query string, count int) {
+			var actual int
+			for iterations := 0; iterations < 300; iterations++ {
+				_ = anotherConn.Get(&actual, query)
+				if actual >= count {
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			Fail(fmt.Sprintf("Timed out waiting for %d: %s", count, query))
+		}
+		ungrantedLocks := func(relname string, mode string) string {
+			return fmt.Sprintf(`SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+				WHERE c.relname = '%s' AND l.mode = '%s' AND NOT l.granted`, relname, mode)
+		}
+
+		// Block gpbackup while it locks the tables, then in its metadata dump
+		backupConn.MustExec("BEGIN; LOCK TABLE pipe_test.t1 IN ACCESS EXCLUSIVE MODE")
+		cmd := exec.Command(gpbackupPath, "--dbname", "testdb", "--backup-dir", backupDir,
+			"--single-data-file", "--include-schema", "pipe_test", "--verbose")
+		output := make(chan string)
+		go func() {
+			defer GinkgoRecover()
+			stdout, _ := cmd.CombinedOutput()
+			output <- string(stdout)
+		}()
+		waitForCount(ungrantedLocks("t1", "AccessShareLock"), 1)
+		anotherConn.MustExec("BEGIN; LOCK TABLE pg_catalog.pg_trigger IN ACCESS EXCLUSIVE MODE")
+		backupConn.MustExec("COMMIT")
+		waitForCount(ungrantedLocks("pg_trigger", "AccessShareLock"), 1)
+
+		// Queue ACCESS EXCLUSIVE lock requests on the first 3 tables, behind the locks of
+		// gpbackup, so that worker 1 cannot lock them and defers them to the main worker
+		for i := 1; i <= 3; i++ {
+			go func(table int) {
+				defer GinkgoRecover()
+				lockConn := testutils.SetupTestDbConn("testdb")
+				defer lockConn.Close()
+				lockConn.MustExec(fmt.Sprintf("BEGIN; LOCK TABLE pipe_test.t%d IN ACCESS EXCLUSIVE MODE; COMMIT", table))
+			}(i)
+		}
+		waitForCount(`SELECT count(*) FROM pg_locks WHERE locktype = 'relation' AND mode = 'AccessExclusiveLock' AND NOT granted`, 3)
+		anotherConn.MustExec("COMMIT")
+
+		stdout := <-output
+		for i := 1; i <= 3; i++ {
+			Expect(stdout).To(ContainSubstring(fmt.Sprintf("[WARNING]:-Worker 1 could not acquire AccessShareLock for table pipe_test.t%d.", i)))
+		}
+		Expect(stdout).To(ContainSubstring("Backup completed successfully"))
+
+		timestamp := getBackupTimestamp(stdout)
+		gprestore(gprestorePath, restoreHelperPath, timestamp,
+			"--redirect-db", "restoredb",
+			"--backup-dir", backupDir)
+		assertDataRestored(restoreConn, map[string]int{"pipe_test.t1": 3000000, "pipe_test.t2": 1000, "pipe_test.t3": 1000,
+			"pipe_test.t4": 1000, "pipe_test.t5": 1000, "pipe_test.t6": 1000})
+		assertArtifactsCleaned(timestamp)
+	})
 	It("runs gpbackup and defers 2 deadlocked tables to main worker with single-data-file and jobs", func() {
 		deferDeadlockedTables(true)
 	})

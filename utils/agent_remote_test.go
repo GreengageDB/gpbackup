@@ -177,10 +177,18 @@ var _ = Describe("agent remote", func() {
 		})
 		It("Names the files of the gpbackup_helper of a data file other than the first by its index", func() {
 			var wasTerminated atomic.Bool
-			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 1, gplog.LOGINFO, 1)
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "--restore-agent", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 1, gplog.LOGINFO, 1)
 
 			cc := testExecutor.ClusterCommands[0]
 			Expect(cc[1].CommandString).To(MatchRegexp(`--toc-file /data/gpseg1/backups/11112233/11112233445566/gpbackup_1_11112233445566_toc1.yaml --oid-file /data/gpseg1/gpbackup_1_11112233445566_\d+_oid1 --pipe-file /data/gpseg1/gpbackup_1_11112233445566_\d+_pipe1 --data-file "/data/gpseg1/backups/11112233/11112233445566/gpbackup_1_11112233445566_file1"`))
+		})
+		It("Gives no oid file to a gpbackup_helper that backs up", func() {
+			var wasTerminated atomic.Bool
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "--backup-agent", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 1, gplog.LOGINFO, 1)
+
+			cc := testExecutor.ClusterCommands[0]
+			Expect(cc[1].CommandString).To(MatchRegexp(`--toc-file /data/gpseg1/backups/11112233/11112233445566/gpbackup_1_11112233445566_toc1.yaml --pipe-file /data/gpseg1/gpbackup_1_11112233445566_\d+_pipe1 `))
+			Expect(cc[1].CommandString).ToNot(ContainSubstring("--oid-file"))
 		})
 	})
 	Describe("FinishSlotBackupHelpers()", func() {

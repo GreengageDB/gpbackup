@@ -1036,7 +1036,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(files).To(HaveLen(0))
 		})
-		DescribeTable(`keeps the data of the tables of a data file whose gpbackup_helper has stopped with --single-data-file, --jobs and --on-error-continue`, func(restoreFlags []string, restoredRows string, truncates bool) {
+		DescribeTable(`keeps the data of the tables of a data file whose gpbackup_helper has stopped with --single-data-file and --on-error-continue`, func(backupJobs int, restoreFlags []string, restoredRows string, truncates bool) {
 			if useOldBackupVersion {
 				Skip("This test is not needed for old backup versions")
 			}
@@ -1048,25 +1048,31 @@ var _ = Describe("backup and restore end to end tests", func() {
 			}
 			output := gpbackup(gpbackupPath, backupHelperPath,
 				"--single-data-file",
-				"--jobs", "2",
+				"--jobs", fmt.Sprintf("%d", backupJobs),
 				"--include-schema", "helper_stop",
 				"--backup-dir", backupDir)
 			timestamp := getBackupTimestamp(string(output))
 
+			// The last data file of the backup is broken
+			brokenDataFile := backupJobs - 1
 			tocFiles, _ := path.Glob(path.Join(backupDir, "*-1/backups/*", timestamp, fmt.Sprintf("gpbackup_%s_toc.yaml", timestamp)))
 			Expect(tocFiles).To(HaveLen(1))
 			dataEntries := toc.NewTOC(tocFiles[0]).DataEntries
-			dataFile1 := make([]string, 0)
+			brokenTables := make([]string, 0)
 			for _, entry := range dataEntries {
-				if entry.DataFileIdx == 1 {
-					dataFile1 = append(dataFile1, entry.Name)
+				if entry.DataFileIdx == brokenDataFile {
+					brokenTables = append(brokenTables, entry.Name)
 				}
 			}
 			// The helper may notice that it has stopped only a few tables later
-			Expect(len(dataFile1)).To(BeNumerically(">=", 4))
+			Expect(len(brokenTables)).To(BeNumerically(">=", 4))
 
-			// Data file 1 of segment 0 ends in its first table, so that its helper stops there
-			dataFiles, _ := path.Glob(path.Join(backupDir, "*/backups/*", timestamp, fmt.Sprintf("gpbackup_0_%s_file1.gz", timestamp)))
+			// The data file of segment 0 ends in its first table, so that its helper stops there
+			dataFileName := fmt.Sprintf("gpbackup_0_%s.gz", timestamp)
+			if brokenDataFile > 0 {
+				dataFileName = fmt.Sprintf("gpbackup_0_%s_file%d.gz", timestamp, brokenDataFile)
+			}
+			dataFiles, _ := path.Glob(path.Join(backupDir, "*/backups/*", timestamp, dataFileName))
 			Expect(dataFiles).To(HaveLen(1))
 			Expect(os.Truncate(dataFiles[0], 100)).To(Succeed())
 			// Rows that a table keeps if it is not truncated
@@ -1091,7 +1097,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 			for _, entry := range dataEntries {
 				tableName := fmt.Sprintf("helper_stop.%s", entry.Name)
 				numRows := dbconn.MustSelectString(backupConn, fmt.Sprintf("SELECT count(*) AS string FROM %s", tableName))
-				if entry.DataFileIdx == 0 {
+				if entry.DataFileIdx != brokenDataFile {
 					Expect(numRows).To(Equal(restoredRows), tableName)
 					Expect(errorTables).ToNot(ContainElement(tableName))
 				} else if numRows != restoredRows {
@@ -1102,14 +1108,15 @@ var _ = Describe("backup and restore end to end tests", func() {
 					}
 				}
 			}
-			// The last table of data file 1 keeps its rows, as its helper has stopped by then
-			Expect(dbconn.MustSelectString(backupConn, fmt.Sprintf("SELECT count(*) AS string FROM helper_stop.%s", dataFile1[len(dataFile1)-1]))).To(Equal("1005"))
+			// The last table of the broken data file keeps its rows, as its helper has stopped by then
+			Expect(dbconn.MustSelectString(backupConn, fmt.Sprintf("SELECT count(*) AS string FROM helper_stop.%s", brokenTables[len(brokenTables)-1]))).To(Equal("1005"))
 			assertArtifactsCleaned(timestamp)
 		},
-			Entry("truncating the tables with --truncate-table", []string{"--truncate-table"}, "1000", true),
-			Entry("truncating the tables with --incremental", []string{"--incremental"}, "1000", true),
+			Entry("with two data files, truncating the tables with --truncate-table", 2, []string{"--truncate-table"}, "1000", true),
+			Entry("with two data files, truncating the tables with --incremental", 2, []string{"--incremental"}, "1000", true),
 			// The restored tables then have their 1005 rows and the 1000 of the backup
-			Entry("without truncating the tables", []string{}, "2005", false),
+			Entry("with two data files, without truncating the tables", 2, []string{}, "2005", false),
+			Entry("with a single data file, truncating the tables with --truncate-table", 1, []string{"--truncate-table"}, "1000", true),
 		)
 	})
 	Describe("Redirect Schema", func() {

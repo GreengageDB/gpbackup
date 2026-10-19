@@ -31,7 +31,6 @@ var (
 	examplePluginTestDir       = "/tmp/plugin_dest" // hardcoded in example plugin
 	testDir                    = "/tmp/helper_test/20180101/20180101010101"
 	tocFile                    = fmt.Sprintf("%s/test_toc.yaml", testDir)
-	backupOidFile              = fmt.Sprintf("%s/backup_test_oids", testDir)
 	restoreOidFile             = fmt.Sprintf("%s/restore_test_oids", testDir)
 	pipeFile                   = fmt.Sprintf("%s/test_pipe", testDir)
 	dataFileFullPath           = filepath.Join(testDir, "test_data")
@@ -58,7 +57,7 @@ here is some data
 )
 
 func gpbackupHelperBackup(helperPath string, args ...string) *exec.Cmd {
-	args = append([]string{"--backup-agent", "--oid-file", backupOidFile}, args...)
+	args = append([]string{"--backup-agent"}, args...)
 	return gpbackupHelper(helperPath, args...)
 }
 
