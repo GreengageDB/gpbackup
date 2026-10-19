@@ -119,9 +119,8 @@ options:
 	})
 	Context("backup tests", func() {
 		BeforeEach(func() {
-			f, _ := os.Create(backupOidFile)
-			_, _ = f.WriteString("1\n2\n3\n")
-			err = unix.Mkfifo(fmt.Sprintf("%s_%d", pipeFile, 1), 0700)
+			// gpbackup creates the pipe of the first slot before it starts the helper
+			err = unix.Mkfifo(fmt.Sprintf("%s_%d", pipeFile, 0), 0700)
 			if err != nil {
 				Fail(fmt.Sprintf("%v", err))
 			}
@@ -776,10 +775,20 @@ func printHelperLogOnError(helperErr error) {
 	}
 }
 
+/*
+ * writeToBackupPipes writes the data of the tables with oids 1, 2 and 3 to the
+ * pipes of slots 0, 1 and 2 of the helper, as the COPY commands of gpbackup do,
+ * writing the oid of each table next to the pipe of its slot first.  It then
+ * opens and closes the next slot without an oid, which ends the data file.
+ */
 func writeToBackupPipes(data string) {
-	for i := 1; i <= 3; i++ {
-		currentPipe := fmt.Sprintf("%s_%d", pipeFile, i)
+	for slot := 0; slot < 3; slot++ {
+		currentPipe := fmt.Sprintf("%s_%d", pipeFile, slot)
 		_, err := os.Stat(currentPipe)
+		if err != nil {
+			Fail(fmt.Sprintf("%v", err))
+		}
+		err = os.WriteFile(utils.GetSlotOidFilename(currentPipe), []byte(fmt.Sprintf("%d\n", slot+1)), 0644)
 		if err != nil {
 			Fail(fmt.Sprintf("%v", err))
 		}
@@ -793,13 +802,19 @@ func writeToBackupPipes(data string) {
 			Fail(fmt.Sprintf("%v", err))
 		}
 	}
+	lastSlot := fmt.Sprintf("%s_%d", pipeFile, 3)
+	output, err := exec.Command("bash", "-c", fmt.Sprintf(": > %s", lastSlot)).CombinedOutput()
+	if err != nil {
+		fmt.Printf("%s", output)
+		Fail(fmt.Sprintf("%v", err))
+	}
 }
 
 func waitForPipeCreation() {
 	// wait up to 5 seconds for two pipe files to have been created
 	tries := 0
 	for tries < 1000 {
-		pipes, err := filepath.Glob(pipeFile + "_[1-9]*")
+		pipes, err := filepath.Glob(pipeFile + "_[0-9]*")
 		Expect(err).ToNot(HaveOccurred())
 		if len(pipes) > 1 {
 			return
