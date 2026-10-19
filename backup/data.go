@@ -26,10 +26,10 @@ var (
 	tableDelim = ","
 
 	/*
-	 * With --single-data-file and --jobs, the data of each segment is written to
-	 * several data files, each by its own gpbackup_helper.  dataFiles chooses the
-	 * data file of each table when its COPY starts; it is nil when there is a single
-	 * data file.
+	 * With --single-data-file, the data of each segment is written to one data file,
+	 * or with --jobs to several, each by its own gpbackup_helper.  dataFiles chooses
+	 * the data file and the position of each table when its COPY starts; it is nil
+	 * without --single-data-file.
 	 */
 	dataFiles *DataFileSlots
 )
@@ -76,6 +76,10 @@ func NewDataFileSlots(numDataFiles int, maxCopies int) *DataFileSlots {
 	}
 	slots.slotFreed = sync.NewCond(&slots.mutex)
 	return slots
+}
+
+func (slots *DataFileSlots) NumDataFiles() int {
+	return len(slots.copies)
 }
 
 func (slots *DataFileSlots) Take(oid uint32) DataFileSlot {
@@ -209,10 +213,8 @@ func CopyTableOut(queryContext context.Context, connectionPool *dbconn.DBConn, t
 		 * of the data is backed up.
 		 */
 		checkPipeExistsCommand = fmt.Sprintf("(test -p \"%s\" || (echo \"Pipe not found %s\">&2; exit 1)) && ", destinationToWrite, destinationToWrite)
-		if dataFiles != nil {
-			// The pipe is named by its slot, so the helper reads the oid of the table from a file
-			checkPipeExistsCommand += fmt.Sprintf("echo %d > \"%s\" && ", table.Oid, utils.GetSlotOidFilename(destinationToWrite))
-		}
+		// The pipe is named by its slot, so the helper reads the oid of the table from a file
+		checkPipeExistsCommand += fmt.Sprintf("echo %d > \"%s\" && ", table.Oid, utils.GetSlotOidFilename(destinationToWrite))
 		customPipeThroughCommand = utils.DefaultPipeThroughProgram
 	} else if MustGetFlagString(options.PLUGIN_CONFIG) != "" {
 		sendToDestinationCommand = fmt.Sprintf("| %s backup_data %s", pluginConfig.ExecutablePath, pluginConfig.ConfigPath)
@@ -268,12 +270,11 @@ func BackupSingleTableData(queryContext context.Context, table Table, rowsCopied
 	utils.LogProgress(logMessage + tableCount)
 
 	destinationToWrite := ""
-	if MustGetFlagBool(options.SINGLE_DATA_FILE) && dataFiles != nil {
+	if MustGetFlagBool(options.SINGLE_DATA_FILE) {
 		slot := dataFiles.Take(table.Oid)
 		defer dataFiles.Release(slot)
-		destinationToWrite = fmt.Sprintf("%s_%d", globalFPInfo.GetSegmentPipePathForCopyCommand(slot.DataFile), slot.Slot)
-	} else if MustGetFlagBool(options.SINGLE_DATA_FILE) {
-		destinationToWrite = fmt.Sprintf("%s_%d", globalFPInfo.GetSegmentPipePathForCopyCommand(), table.Oid)
+		helperIdx := utils.DataFileHelperIdx(slot.DataFile, dataFiles.NumDataFiles())
+		destinationToWrite = fmt.Sprintf("%s_%d", globalFPInfo.GetSegmentPipePathForCopyCommand(helperIdx...), slot.Slot)
 	} else {
 		destinationToWrite = globalFPInfo.GetTableBackupFilePathForCopyCommand(table.Oid, utils.GetPipeThroughProgram().Extension, false)
 	}

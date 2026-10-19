@@ -206,7 +206,7 @@ var _ = Describe("backup/data tests", func() {
 		})
 		It("will back up a table to a single file", func() {
 			_ = cmdFlags.Set(options.SINGLE_DATA_FILE, "true")
-			execStr := regexp.QuoteMeta(`COPY public.foo TO PROGRAM '(test -p "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456" || (echo "Pipe not found <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456">&2; exit 1)) && cat - > <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456' WITH CSV DELIMITER ',' ON SEGMENT IGNORE EXTERNAL PARTITIONS;`)
+			execStr := regexp.QuoteMeta(`COPY public.foo TO PROGRAM '(test -p "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456" || (echo "Pipe not found <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456">&2; exit 1)) && echo 3456 > "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456_oid" && cat - > <SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456' WITH CSV DELIMITER ',' ON SEGMENT IGNORE EXTERNAL PARTITIONS;`)
 			mock.ExpectExec(execStr).WillReturnResult(sqlmock.NewResult(10, 0))
 			filename := "<SEG_DATA_DIR>/backups/20170101/20170101010101/gpbackup_<SEGID>_20170101010101_3456"
 
@@ -236,8 +236,11 @@ var _ = Describe("backup/data tests", func() {
 		})
 		It("backs up a single regular table with single data file", func() {
 			_ = cmdFlags.Set(options.SINGLE_DATA_FILE, "true")
+			backup.SetDataFiles(backup.NewDataFileSlots(1, 1))
+			defer backup.SetDataFiles(nil)
 
-			backupFile := fmt.Sprintf("<SEG_DATA_DIR>/gpbackup_<SEGID>_20170101010101_\\d+_pipe_%d", testTable.Oid)
+			// The pipe of the first slot of the data file, whose helper has no index
+			backupFile := "<SEG_DATA_DIR>/gpbackup_<SEGID>_20170101010101_\\d+_pipe_0"
 			copyCmd := fmt.Sprintf(copyFmtStr, backupFile)
 			mock.ExpectExec(copyCmd).WillReturnResult(sqlmock.NewResult(0, 10))
 			err := backup.BackupSingleTableData(context.Background(), testTable, rowsCopiedMap, &counters, 0)

@@ -155,14 +155,14 @@ var _ = Describe("agent remote", func() {
 	Describe("StartGpbackupHelpers()", func() {
 		It("Correctly propagates --on-error-continue flag to gpbackup_helper", func() {
 			var wasTerminated atomic.Bool
-			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", true, false, &wasTerminated, 1, true, false, 0, 0, 0, false, gplog.LOGINFO)
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", true, false, &wasTerminated, 1, true, false, 0, 0, 0, gplog.LOGINFO)
 
 			cc := testExecutor.ClusterCommands[0]
 			Expect(cc[1].CommandString).To(ContainSubstring(" --on-error-continue"))
 		})
 		It("Correctly propagates --copy-queue-size value to gpbackup_helper", func() {
 			var wasTerminated atomic.Bool
-			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 0, false, gplog.LOGINFO)
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 0, gplog.LOGINFO)
 
 			cc := testExecutor.ClusterCommands[0]
 			Expect(cc[1].CommandString).To(ContainSubstring(" --copy-queue-size 4"))
@@ -170,21 +170,31 @@ var _ = Describe("agent remote", func() {
 		It("Correctly propagates verbosity", func() {
 			var wasTerminated atomic.Bool
 			verbosity := gplog.LOGDEBUG
-			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 0, false, verbosity)
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 0, verbosity)
 
 			cc := testExecutor.ClusterCommands[0]
 			Expect(cc[1].CommandString).To(ContainSubstring("--verbosity %d", gplog.LOGDEBUG))
 		})
-		It("Correctly propagates --slot-pipes to gpbackup_helper", func() {
+		It("Names the files of the gpbackup_helper of a data file other than the first by its index", func() {
 			var wasTerminated atomic.Bool
-			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 1, true, gplog.LOGINFO, 1)
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "operation", "/tmp/pluginConfigFile.yml", " compressStr", false, false, &wasTerminated, 4, true, false, 0, 0, 1, gplog.LOGINFO, 1)
 
 			cc := testExecutor.ClusterCommands[0]
-			Expect(cc[1].CommandString).To(ContainSubstring(" --single-data-file --slot-pipes"))
-			Expect(cc[1].CommandString).To(MatchRegexp(`--toc-file /data/gpseg1/backups/11112233/11112233445566/gpbackup_1_11112233445566_toc1.yaml --oid-file /data/gpseg1/gpbackup_1_11112233445566_\d+_oid1 --pipe-file /data/gpseg1/gpbackup_1_11112233445566_\d+_pipe1 `))
+			Expect(cc[1].CommandString).To(MatchRegexp(`--toc-file /data/gpseg1/backups/11112233/11112233445566/gpbackup_1_11112233445566_toc1.yaml --oid-file /data/gpseg1/gpbackup_1_11112233445566_\d+_oid1 --pipe-file /data/gpseg1/gpbackup_1_11112233445566_\d+_pipe1 --data-file "/data/gpseg1/backups/11112233/11112233445566/gpbackup_1_11112233445566_file1"`))
 		})
 	})
 	Describe("FinishSlotBackupHelpers()", func() {
+		It("ends the next slot of a single data file, whose files have no index, and waits for its segment TOC", func() {
+			utils.FinishSlotBackupHelpers(testCluster, fpInfo, []int{3})
+
+			Expect(testExecutor.NumExecutions).To(Equal(1))
+			finishCommand := testExecutor.ClusterCommands[0][0].CommandString
+			pipeFile := fpInfo.GetSegmentPipeFilePath(0)
+			tocFile := "/data/gpseg0/backups/11112233/11112233445566/gpbackup_0_11112233445566_toc.yaml"
+			errorFile := utils.GetErrorFilename(pipeFile)
+			Expect(finishCommand).To(ContainSubstring(fmt.Sprintf(`test -p "%[1]s_3" && timeout 300 bash -c ': > "%[1]s_3"' && `+
+				`(while [[ ! -f "%[2]s" && ! -f "%[3]s" ]]; do sleep 1; done; ls "%[2]s")`, pipeFile, tocFile, errorFile)))
+		})
 		It("ends the next slot of each data file and waits for its segment TOC", func() {
 			utils.FinishSlotBackupHelpers(testCluster, fpInfo, []int{2, 1})
 

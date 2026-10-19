@@ -421,7 +421,7 @@ func (plugin *PluginConfig) BackupSegmentTOCs(c *cluster.Cluster, fpInfo filepat
 			waitCommands := make([]string, 0, numDataFiles)
 			for file := 0; file < numDataFiles; file++ {
 				tocFile := fpInfo.GetSegmentTOCFilePathForDataFile(contentID, file)
-				errorFile := GetErrorFilename(fpInfo.GetSegmentPipeFilePath(contentID, dataFileHelperIdx(file, numDataFiles)...))
+				errorFile := GetErrorFilename(fpInfo.GetSegmentPipeFilePath(contentID, DataFileHelperIdx(file, numDataFiles)...))
 				waitCommands = append(waitCommands, fmt.Sprintf(`(while [[ ! -f "%s" && ! -f "%s" ]]; do sleep 1; done; ls "%s")`, tocFile, errorFile, tocFile))
 			}
 			command = strings.Join(waitCommands, " && ")
@@ -444,14 +444,6 @@ func (plugin *PluginConfig) BackupSegmentTOCs(c *cluster.Cluster, fpInfo filepat
 	c.CheckClusterError(remoteOutput, "Unable to process segment TOC files using plugin", func(contentID int) string {
 		return "See gpAdminLog for gpbackup_helper on segment host for details: Error occurred with plugin"
 	})
-}
-
-// The gpbackup_helper of a data file has no index when there is a single data file
-func dataFileHelperIdx(dataFileIdx int, numDataFiles int) []int {
-	if numDataFiles > 1 {
-		return []int{dataFileIdx}
-	}
-	return []int{}
 }
 
 func (plugin *PluginConfig) RestoreSegmentTOCs(c *cluster.Cluster, fpInfo filepath.FilePathInfo, origSize int, destSize int, batches int, numDataFiles int) {

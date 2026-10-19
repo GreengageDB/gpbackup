@@ -30,23 +30,13 @@ func doBackupAgent() error {
 	tocfile.DataEntries = make(map[uint]toc.SegmentDataEntry)
 
 	/*
-	 * With --slot-pipes, gpbackup chooses the data file of each table when its COPY
-	 * starts, so the tables of this data file are not known in advance.  The pipes
-	 * are named by slot, the position of the table in the data file, and each COPY
-	 * writes the oid of its table to the oid file of its slot before it opens the
-	 * pipe.  Once all tables are backed up, gpbackup opens and closes the next slot
-	 * without an oid file, which ends the data file.
+	 * gpbackup chooses the data file of each table when its COPY starts, so the
+	 * tables of this data file are not known in advance.  The pipes are named by
+	 * slot, the position of the table in the data file, and each COPY writes the oid
+	 * of its table to the oid file of its slot before it opens the pipe.  Once all
+	 * tables are backed up, gpbackup opens and closes the next slot without an oid
+	 * file, which ends the data file.
 	 */
-	var oidList []int
-	var err error
-	if !*slotPipes {
-		oidList, err = getOidListFromFile(*oidFile)
-		if err != nil {
-			// error logging handled in getOidListFromFile
-			return err
-		}
-	}
-
 	var currentPipe string
 	var errBuf bytes.Buffer
 	/*
@@ -54,60 +44,37 @@ func doBackupAgent() error {
 	 * so that we establish a connection to the first pipe (created by gpbackup)
 	 * and properly clean it up if an error occurs while creating the writer.
 	 */
-	for i := 0; *slotPipes || i < len(oidList); i++ {
-		if *slotPipes {
-			currentPipe = fmt.Sprintf("%s_%d", *pipeFile, i)
-		} else {
-			currentPipe = fmt.Sprintf("%s_%d", *pipeFile, oidList[i])
-		}
+	for slot := 0; ; slot++ {
+		currentPipe = fmt.Sprintf("%s_%d", *pipeFile, slot)
 		if wasTerminated.Load() {
 			logError("Terminated due to user request")
 			return errors.New("Terminated due to user request")
 		}
-		if *slotPipes {
-			nextPipeToCreate := fmt.Sprintf("%s_%d", *pipeFile, i+*copyQueue)
-			logVerbose(fmt.Sprintf("Slot %d: Creating pipe %s\n", i+*copyQueue, nextPipeToCreate))
-			err := createPipe(nextPipeToCreate)
-			if err != nil {
-				logError(fmt.Sprintf("Slot %d: Failed to create pipe %s\n", i+*copyQueue, nextPipeToCreate))
-				return err
-			}
-		} else if i < len(oidList)-*copyQueue {
-			nextPipeToCreate := fmt.Sprintf("%s_%d", *pipeFile, oidList[i+*copyQueue])
-			logVerbose(fmt.Sprintf("Oid %d: Creating pipe %s\n", oidList[i+*copyQueue], nextPipeToCreate))
-			err := createPipe(nextPipeToCreate)
-			if err != nil {
-				logError(fmt.Sprintf("Oid %d: Failed to create pipe %s\n", oidList[i+*copyQueue], nextPipeToCreate))
-				return err
-			}
-		}
-
-		var oid int
-		if *slotPipes {
-			logInfo(fmt.Sprintf("Slot %d: Opening pipe %s", i, currentPipe))
-		} else {
-			oid = oidList[i]
-			logInfo(fmt.Sprintf("Oid %d: Opening pipe %s", oid, currentPipe))
-		}
-		reader, readHandle, err := getBackupPipeReader(currentPipe)
+		nextPipeToCreate := fmt.Sprintf("%s_%d", *pipeFile, slot+*copyQueue)
+		logVerbose(fmt.Sprintf("Slot %d: Creating pipe %s\n", slot+*copyQueue, nextPipeToCreate))
+		err := createPipe(nextPipeToCreate)
 		if err != nil {
-			logError(fmt.Sprintf("Oid %d: Error encountered getting backup pipe reader: %v", oid, err))
+			logError(fmt.Sprintf("Slot %d: Failed to create pipe %s\n", slot+*copyQueue, nextPipeToCreate))
 			return err
 		}
-		if *slotPipes {
-			var found bool
-			oid, found, err = readSlotOid(currentPipe)
-			if err != nil {
-				return err
-			}
-			if !found {
-				logInfo(fmt.Sprintf("Slot %d: No more tables to back up", i))
-				_ = readHandle.Close()
-				deletePipe(currentPipe)
-				break
-			}
+
+		logInfo(fmt.Sprintf("Slot %d: Opening pipe %s", slot, currentPipe))
+		reader, readHandle, err := getBackupPipeReader(currentPipe)
+		if err != nil {
+			logError(fmt.Sprintf("Slot %d: Error encountered getting backup pipe reader: %v", slot, err))
+			return err
 		}
-		if i == 0 {
+		oid, found, err := readSlotOid(currentPipe)
+		if err != nil {
+			return err
+		}
+		if !found {
+			logInfo(fmt.Sprintf("Slot %d: No more tables to back up", slot))
+			_ = readHandle.Close()
+			deletePipe(currentPipe)
+			break
+		}
+		if slot == 0 {
 			pipeWriter, writeCmd, err = getBackupPipeWriter(&errBuf)
 			if err != nil {
 				logError(fmt.Sprintf("Oid %d: Error encountered getting backup pipe writer: %v", oid, err))
@@ -148,7 +115,7 @@ func doBackupAgent() error {
 			return errors.Wrap(err, strings.Trim(errBuf.String(), "\x00"))
 		}
 	}
-	err = tocfile.WriteToFileAndMakeReadOnly(*tocFile)
+	err := tocfile.WriteToFileAndMakeReadOnly(*tocFile)
 	if err != nil {
 		// error logging handled in util.go
 		return err

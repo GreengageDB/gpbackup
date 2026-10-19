@@ -6,8 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -48,7 +46,6 @@ var (
 	isFiltered       *bool
 	copyQueue        *int
 	singleDataFile   *bool
-	slotPipes        *bool
 	isResizeRestore  *bool
 	origSize         *int
 	destSize         *int
@@ -108,7 +105,6 @@ func InitializeGlobals() {
 	isFiltered = flag.Bool("with-filters", false, "Used with table/schema filters")
 	copyQueue = flag.Int("copy-queue-size", 1, "Used to know how many COPIES are being queued up")
 	singleDataFile = flag.Bool("single-data-file", false, "Used with single data file restore.")
-	slotPipes = flag.Bool("slot-pipes", false, "Used with backup to one of several data files.  The pipes are named by the position of their table in the data file, and the oid file is written once there is no more data")
 	isResizeRestore = flag.Bool("resize-cluster", false, "Used with resize cluster restore.")
 	origSize = flag.Int("orig-seg-count", 0, "Used with resize restore.  Gives the segment count of the backup.")
 	destSize = flag.Int("dest-seg-count", 0, "Used with resize restore.  Gives the segment count of the current cluster.")
@@ -210,21 +206,6 @@ func openClosePipe(filename string) error {
 		return err
 	}
 	return nil
-}
-
-func getOidListFromFile(oidFileName string) ([]int, error) {
-	oidStr, err := operating.System.ReadFile(oidFileName)
-	if err != nil {
-		logError(fmt.Sprintf("Error encountered reading oid list from file: %v", err))
-		return nil, err
-	}
-	oidStrList := strings.Split(strings.TrimSpace(fmt.Sprintf("%s", oidStr)), "\n")
-	oidList := make([]int, len(oidStrList))
-	for i, oid := range oidStrList {
-		num, _ := strconv.Atoi(oid)
-		oidList[i] = num
-	}
-	return oidList, nil
 }
 
 /*

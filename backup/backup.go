@@ -401,18 +401,8 @@ func backupData(tables []Table) {
 		if numDataFiles > 1 {
 			gplog.Verbose("Writing data to %d data files per segment", numDataFiles)
 			backupReport.BackupConfig.SingleDataFileCount = numDataFiles
-			startDataFileHelpers(numDataFiles, compressStr)
-		} else {
-			oidList := make([]string, 0, len(tables))
-			for _, table := range tables {
-				oidList = append(oidList, fmt.Sprintf("%d", table.Oid))
-			}
-			utils.WriteOidListToSegments(oidList, globalCluster, globalFPInfo)
-			initialPipes := CreateInitialSegmentPipes(oidList, globalCluster, connectionPool.NumConns, globalFPInfo)
-			// Do not pass through the --on-error-continue flag or the resizeClusterMap because neither apply to gpbackup
-			utils.StartGpbackupHelpers(globalCluster, globalFPInfo, "--backup-agent",
-				MustGetFlagString(options.PLUGIN_CONFIG), compressStr, false, false, &wasTerminated, initialPipes, true, false, 0, 0, 0, false, gplog.GetVerbosity())
 		}
+		startDataFileHelpers(numDataFiles, compressStr)
 	}
 	gplog.Info("Writing data to file")
 	rowsCopiedMaps := BackupDataForAllTables(tables)
@@ -427,7 +417,8 @@ func backupData(tables []Table) {
 }
 
 /*
- * startDataFileHelpers starts a gpbackup_helper for each data file, which reads
+ * startDataFileHelpers starts a gpbackup_helper for each data file, one unless
+ * --jobs is given, which reads
  * its tables from the pipes of its slots, as described at DataFileSlots.  Each data
  * file gets as many slots ahead as its share of the workers, plus one for the
  * main worker, which backs up the tables deferred because of lock conflicts.
@@ -440,10 +431,11 @@ func startDataFileHelpers(numDataFiles int, compressStr string) {
 		slotNames[slot] = fmt.Sprintf("%d", slot)
 	}
 	for file := 0; file < numDataFiles; file++ {
-		utils.CreateSegmentPipesOnAllHostsForBackup(slotNames, globalCluster, globalFPInfo, file)
+		helperIdx := utils.DataFileHelperIdx(file, numDataFiles)
+		utils.CreateSegmentPipesOnAllHostsForBackup(slotNames, globalCluster, globalFPInfo, helperIdx...)
 		// Do not pass through the --on-error-continue flag or the resizeClusterMap because neither apply to gpbackup
 		utils.StartGpbackupHelpers(globalCluster, globalFPInfo, "--backup-agent",
-			MustGetFlagString(options.PLUGIN_CONFIG), compressStr, false, false, &wasTerminated, numPipes, true, false, 0, 0, file, true, gplog.GetVerbosity(), file)
+			MustGetFlagString(options.PLUGIN_CONFIG), compressStr, false, false, &wasTerminated, numPipes, true, false, 0, 0, file, gplog.GetVerbosity(), helperIdx...)
 	}
 }
 
@@ -713,16 +705,6 @@ func logCompletionMessage(msg string) {
 	} else {
 		gplog.Info("%s complete", msg)
 	}
-}
-
-func CreateInitialSegmentPipes(oidList []string, c *cluster.Cluster, numPipes int, fpInfo filepath.FilePathInfo, helperIdx ...int) int {
-	// Create min(numPipes, tables) segment pipes on each host
-	maxPipes := numPipes
-	if len(oidList) < maxPipes {
-		maxPipes = len(oidList)
-	}
-	utils.CreateSegmentPipesOnAllHostsForBackup(oidList[:maxPipes], c, fpInfo, helperIdx...)
-	return maxPipes
 }
 
 type TableLocks struct {

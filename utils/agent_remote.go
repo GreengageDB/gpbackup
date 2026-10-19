@@ -154,7 +154,7 @@ func VerifyHelperVersionOnSegments(version string, c *cluster.Cluster) {
 	}
 }
 
-func StartGpbackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, operation string, pluginConfigFile string, compressStr string, onErrorContinue bool, isFilter bool, wasTerminated *atomic.Bool, copyQueue int, isSingleDataFile bool, resizeCluster bool, origSize int, destSize int, dataFileIdx int, slotPipes bool, verbosity int, helperIdx ...int) {
+func StartGpbackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, operation string, pluginConfigFile string, compressStr string, onErrorContinue bool, isFilter bool, wasTerminated *atomic.Bool, copyQueue int, isSingleDataFile bool, resizeCluster bool, origSize int, destSize int, dataFileIdx int, verbosity int, helperIdx ...int) {
 	// A mutex lock for cleaning up and starting gpbackup helpers prevents a
 	// race condition that causes gpbackup_helpers to be orphaned if
 	// gpbackup_helper cleanup happens before they are started.
@@ -182,9 +182,6 @@ func StartGpbackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, oper
 	singleDataFileStr := ""
 	if isSingleDataFile {
 		singleDataFileStr = " --single-data-file"
-	}
-	if slotPipes {
-		singleDataFileStr += " --slot-pipes"
 	}
 	resizeStr := ""
 	if resizeCluster {
@@ -214,22 +211,35 @@ HEREDOC
 }
 
 /*
- * FinishSlotBackupHelpers ends the backup of the gpbackup_helpers started with
- * --slot-pipes, one per data file, once the COPY of every table is done.  It opens
- * and closes the next slot of each data file, given by nextSlots, without an oid
- * file, which tells the helper that there is no more data, and waits for the
- * segment TOC that the helper writes once its data file is complete.
+ * The gpbackup_helper of a data file has no index when there is a single data
+ * file, so that its files keep their usual names.
+ */
+func DataFileHelperIdx(dataFileIdx int, numDataFiles int) []int {
+	if numDataFiles > 1 {
+		return []int{dataFileIdx}
+	}
+	return []int{}
+}
+
+/*
+ * FinishSlotBackupHelpers ends the backup of the gpbackup_helpers, one per data
+ * file, once the COPY of every table is done.  It opens and closes the next slot of
+ * each data file, given by nextSlots, without an oid file, which tells the helper
+ * that there is no more data, and waits for the segment TOC that the helper writes
+ * once its data file is complete.
  */
 func FinishSlotBackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, nextSlots []int) {
 	remoteOutput := c.GenerateAndExecuteCommand("Finishing gpbackup_helper agents", cluster.ON_SEGMENTS, func(contentID int) string {
 		commands := make([]string, 0, 2*len(nextSlots))
 		for dataFileIdx, slot := range nextSlots {
-			nextSlot := fmt.Sprintf("%s_%d", fpInfo.GetSegmentPipeFilePath(contentID, dataFileIdx), slot)
+			pipeFile := fpInfo.GetSegmentPipeFilePath(contentID, DataFileHelperIdx(dataFileIdx, len(nextSlots))...)
+			nextSlot := fmt.Sprintf("%s_%d", pipeFile, slot)
 			commands = append(commands, fmt.Sprintf(`test -p "%[1]s" && timeout 300 bash -c ': > "%[1]s"'`, nextSlot))
 		}
 		for dataFileIdx := range nextSlots {
 			tocFile := fpInfo.GetSegmentTOCFilePathForDataFile(contentID, dataFileIdx)
-			errorFile := GetErrorFilename(fpInfo.GetSegmentPipeFilePath(contentID, dataFileIdx))
+			pipeFile := fpInfo.GetSegmentPipeFilePath(contentID, DataFileHelperIdx(dataFileIdx, len(nextSlots))...)
+			errorFile := GetErrorFilename(pipeFile)
 			commands = append(commands, fmt.Sprintf(`(while [[ ! -f "%s" && ! -f "%s" ]]; do sleep 1; done; ls "%s")`, tocFile, errorFile, tocFile))
 		}
 		return strings.Join(commands, " && ")
