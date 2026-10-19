@@ -1,9 +1,13 @@
 package restore
 
 import (
+	"context"
+
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
+	"github.com/GreengageDB/gpbackup/filepath"
+	"github.com/GreengageDB/gpbackup/history"
 	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/pkg/errors"
 
@@ -260,6 +264,31 @@ var _ = Describe("restore internal tests", func() {
 				//fmt.Println("\n\nACTUAL\n", statements[i], "\nEXPECTED\n", expectedStatements[i])
 				Expect(statements[i]).To(Equal(expectedStatements[i]))
 			}
+		})
+	})
+	Describe("restoreSingleTableData", func() {
+		var localMock sqlmock.Sqlmock
+		BeforeEach(func() {
+			var localConn *dbconn.DBConn
+			localConn, localMock = testhelper.CreateAndConnectMockDB(1)
+			oldConn, oldConfig := connectionPool, backupConfig
+			connectionPool, backupConfig = localConn, &history.BackupConfig{}
+			DeferCleanup(func() { connectionPool, backupConfig = oldConn, oldConfig })
+		})
+		It("returns the error of a failed COPY into a table distributed by an enum when the setting cannot be reset", func() {
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", DistByEnum: true}
+			localMock.ExpectExec("SET gp_enable_segment_copy_checking TO off").WillReturnResult(sqlmock.NewResult(0, 0))
+			localMock.ExpectExec("COPY public.foo").WillReturnError(errors.New("invalid input value for enum"))
+			// The transaction of the COPY, with --truncate-table, is aborted then
+			localMock.ExpectExec("RESET gp_enable_segment_copy_checking").WillReturnError(errors.New("current transaction is aborted"))
+
+			var err error
+			Expect(func() {
+				err = restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{})
+			}).ToNot(Panic())
+			Expect(err).To(MatchError(ContainSubstring("invalid input value for enum")))
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
 	})
 	Describe("getExtensionTableCondition", func() {

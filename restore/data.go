@@ -102,7 +102,11 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 		if entry.DistByEnum {
 			gplog.Verbose("Setting gp_enable_segment_copy_checking TO off for table %s", tableName)
 			connectionPool.MustExec("SET gp_enable_segment_copy_checking TO off;", whichConn)
-			defer connectionPool.MustExec("RESET gp_enable_segment_copy_checking;", whichConn)
+			// In a transaction that the failure of the COPY has aborted, the RESET fails,
+			// and the rollback of the transaction resets the setting instead
+			defer func() {
+				_, _ = connectionPool.Exec("RESET gp_enable_segment_copy_checking;", whichConn)
+			}()
 		}
 
 		/*
@@ -305,20 +309,21 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	var workerPool sync.WaitGroup
 	var numErrors int32
 	var mutex = &sync.Mutex{}
-	panicChan := make(chan error)
+	// Buffered, so that each worker records its panic before it is done
+	panicChan := make(chan error, connectionPool.NumConns)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Make sure it's called to release resources even if no errors
 
 	for i := 0; i < connectionPool.NumConns; i++ {
 		workerPool.Add(1)
 		go func(whichConn int) {
+			defer workerPool.Done()
 			defer func() {
 				if panicErr := recover(); panicErr != nil {
 					cancel()
 					panicChan <- fmt.Errorf("%v", panicErr)
 				}
 			}()
-			defer workerPool.Done()
 
 			setGUCsForConnection(gucStatements, whichConn)
 			nextEntryIdx := groups.EntriesOfConn(whichConn)
