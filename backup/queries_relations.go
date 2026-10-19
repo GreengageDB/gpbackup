@@ -88,144 +88,6 @@ func ConvertRelationsOptionsToBackup(inRelations []options.Relation) []Relation 
 	return outRelations
 }
 
-// A join that adds prt.pages, the total relpages of the partitions of a
-// partition root, to a query on pg_class c.
-func partitionPagesJoin(connectionPool *dbconn.DBConn) string {
-	if connectionPool.Version.AtLeast("7") {
-		return `LEFT JOIN (
-			SELECT
-				pg_partition_root(c.oid) oid,
-				sum(c.relpages) AS pages
-			FROM pg_class c
-			WHERE c.relispartition = true OR c.relkind = 'p'
-			GROUP BY 1
-		) AS prt ON prt.oid = c.oid`
-	}
-	return `LEFT JOIN (
-		SELECT
-			p.parrelid,
-			sum(pc.relpages) AS pages
-		FROM pg_partition_rule AS pr
-		JOIN pg_partition AS p ON pr.paroid = p.oid
-		JOIN pg_class AS pc ON pr.parchildrelid = pc.oid
-		GROUP BY p.parrelid
-	) AS prt ON prt.parrelid = c.oid`
-}
-
-// GetTablePages returns the size of each table in pages, counting the
-// partitions of a partition root, from relpages.
-func GetTablePages(connectionPool *dbconn.DBConn, tables []Table) map[uint32]int64 {
-	pages := make(map[uint32]int64, len(tables))
-	if len(tables) == 0 {
-		return pages
-	}
-	oidValues := make([]string, 0, len(tables))
-	for _, table := range tables {
-		oidValues = append(oidValues, fmt.Sprintf("(%d::oid)", table.Oid))
-	}
-	query := fmt.Sprintf(`
-	SELECT c.oid AS oid,
-		coalesce(prt.pages, c.relpages)::bigint AS pages
-	FROM pg_class c
-	%s
-	WHERE c.oid IN (VALUES %s)`, partitionPagesJoin(connectionPool), strings.Join(oidValues, ", "))
-
-	results := make([]struct {
-		Oid   uint32
-		Pages int64
-	}, 0)
-	err := connectionPool.Select(&results, query)
-	gplog.FatalOnError(err)
-	for _, result := range results {
-		pages[result.Oid] = result.Pages
-	}
-	return pages
-}
-
-/*
- * relpages is 0 for tables that were never analyzed, which includes the leaf
- * partitions of a table loaded through its root.  On GPDB 6 the coordinator keeps
- * the number of tuples of append-optimized tables in their aoseg tables, so
- * EstimateAOTablePages fills in the size of such tables from it, counting
- * estimatedBytesPerValue bytes for each value.  For a partition root, the tuples of
- * its partitions are counted.  GPDB 7 keeps the aoseg tables only on the segments,
- * which would be too costly to query for every table.  The aoseg tables read stay
- * locked until the end of the transaction of connectionPool, if there is one.
- */
-const (
-	estimatedBytesPerValue = 8
-	aosegTablesPerQuery    = 100
-)
-
-func EstimateAOTablePages(connectionPool *dbconn.DBConn, tables []Table, pages map[uint32]int64) {
-	if connectionPool.Version.AtLeast("7") {
-		return
-	}
-	oidValues := make([]string, 0)
-	for _, table := range tables {
-		if pages[table.Oid] == 0 {
-			oidValues = append(oidValues, fmt.Sprintf("(%d::oid)", table.Oid))
-		}
-	}
-	if len(oidValues) == 0 {
-		return
-	}
-
-	segTablesQuery := fmt.Sprintf(`
-	SELECT t.oid AS tableoid,
-		quote_ident(n.nspname) || '.' || quote_ident(sc.relname) AS segtable
-	FROM (VALUES %s) AS t(oid)
-		JOIN (
-			SELECT c.oid AS tableoid, c.oid AS reloid FROM pg_class c
-			UNION ALL
-			SELECT p.parrelid, r.parchildrelid
-			FROM pg_partition p
-				JOIN pg_partition_rule r ON r.paroid = p.oid
-		) rel ON rel.tableoid = t.oid
-		JOIN pg_appendonly a ON a.relid = rel.reloid
-		JOIN pg_class sc ON sc.oid = a.segrelid
-		JOIN pg_namespace n ON n.oid = sc.relnamespace`, strings.Join(oidValues, ", "))
-	segTables := make([]struct {
-		TableOid uint32
-		SegTable string
-	}, 0)
-	err := connectionPool.Select(&segTables, segTablesQuery)
-	gplog.FatalOnError(err)
-
-	tupleCounts := make(map[uint32]int64)
-	for start := 0; start < len(segTables); start += aosegTablesPerQuery {
-		end := start + aosegTablesPerQuery
-		if end > len(segTables) {
-			end = len(segTables)
-		}
-		subqueries := make([]string, 0, end-start)
-		for _, segTable := range segTables[start:end] {
-			subqueries = append(subqueries, fmt.Sprintf("SELECT %d::oid AS oid, (SELECT coalesce(sum(tupcount), 0) FROM %s)::bigint AS tupcount", segTable.TableOid, segTable.SegTable))
-		}
-		results := make([]struct {
-			Oid      uint32
-			TupCount int64
-		}, 0)
-		err = connectionPool.Select(&results, strings.Join(subqueries, "\nUNION ALL\n"))
-		gplog.FatalOnError(err)
-		for _, result := range results {
-			tupleCounts[result.Oid] += result.TupCount
-		}
-	}
-
-	for _, table := range tables {
-		tupleCount := tupleCounts[table.Oid]
-		if pages[table.Oid] != 0 || tupleCount == 0 {
-			continue
-		}
-		numColumns := int64(len(table.ColumnDefs))
-		if numColumns == 0 {
-			numColumns = 1
-		}
-		pages[table.Oid] = tupleCount*numColumns*estimatedBytesPerValue/8192 + 1
-	}
-}
-
 /*
  * This function also handles exclude table filtering since the way we do
  * it is currently much simpler than the include case.
@@ -243,11 +105,27 @@ func getUserTableRelations(connectionPool *dbconn.DBConn) []options.Relation {
 		WHERE e.reloid IS NULL)`
 	}
 
-	prt := partitionPagesJoin(connectionPool)
+	prt := `LEFT JOIN (
+		SELECT
+			p.parrelid,
+			sum(pc.relpages) AS pages
+		FROM pg_partition_rule AS pr
+		JOIN pg_partition AS p ON pr.paroid = p.oid
+		JOIN pg_class AS pc ON pr.parchildrelid = pc.oid
+		GROUP BY p.parrelid
+	) AS prt ON prt.parrelid = c.oid`
 	// In GPDB 7+, root partitions are marked as relkind 'p'.
 	relkindFilter := `'r'`
 	if connectionPool.Version.AtLeast("7") {
 		relkindFilter = `'r', 'p'`
+		prt = `LEFT JOIN (
+			SELECT
+				pg_partition_root(c.oid) oid,
+				sum(c.relpages) AS pages
+			FROM pg_class c
+			WHERE c.relispartition = true OR c.relkind = 'p'
+			GROUP BY 1
+		) AS prt ON prt.oid = c.oid`
 	}
 
 	query := fmt.Sprintf(`
@@ -276,11 +154,27 @@ func getUserTableRelations(connectionPool *dbconn.DBConn) []options.Relation {
 }
 
 func getUserTableRelationsWithIncludeFiltering(connectionPool *dbconn.DBConn, includeRelationFqns []options.Relation) []options.Relation {
-	prt := partitionPagesJoin(connectionPool)
+	prt := `LEFT JOIN (
+		SELECT
+			p.parrelid,
+			sum(pc.relpages) AS pages
+		FROM pg_partition_rule AS pr
+		JOIN pg_partition AS p ON pr.paroid = p.oid
+		JOIN pg_class AS pc ON pr.parchildrelid = pc.oid
+		GROUP BY p.parrelid
+	) AS prt ON prt.parrelid = c.oid`
 	// In GPDB 7+, root partitions are marked as relkind 'p'.
 	relkindFilter := `'r'`
 	if connectionPool.Version.AtLeast("7") {
 		relkindFilter = `'r', 'p'`
+		prt = `LEFT JOIN (
+			SELECT
+				pg_partition_root(c.oid) oid,
+				sum(c.relpages) AS pages
+			FROM pg_class c
+			WHERE c.relispartition = true OR c.relkind = 'p'
+			GROUP BY 1
+		) AS prt ON prt.oid = c.oid`
 	}
 
 	includeOids := GetOidsFromRelationList(includeRelationFqns)

@@ -383,8 +383,8 @@ func backupData(tables []Table) {
 		gplog.Info("Data backup complete")
 		return
 	}
-	numDataFiles = 1
-	dataFileForTable = nil
+	dataFiles = nil
+	numDataFiles := 1
 	if MustGetFlagBool(options.SINGLE_DATA_FILE) {
 		gplog.Verbose("Initializing pipes and gpbackup_helper on segments for single data file backup")
 		utils.VerifyHelperVersionOnSegments(version, globalCluster)
@@ -398,39 +398,53 @@ func backupData(tables []Table) {
 		if numDataFiles > len(tables) {
 			numDataFiles = len(tables)
 		}
-		numPipes := connectionPool.NumConns
 		if numDataFiles > 1 {
 			gplog.Verbose("Writing data to %d data files per segment", numDataFiles)
-			pages := GetTablePages(connectionPool, tables)
-			estimateAOTablePagesOutsideTransaction(tables, pages)
-			dataFileForTable = AssignTablesToDataFiles(tables, pages, numDataFiles)
 			backupReport.BackupConfig.SingleDataFileCount = numDataFiles
-			numPipes = (connectionPool.NumConns-1)/numDataFiles + 1
-		}
-
-		for file := 0; file < numDataFiles; file++ {
+			startDataFileHelpers(numDataFiles, compressStr)
+		} else {
 			oidList := make([]string, 0, len(tables))
-			var helperIdx []int
 			for _, table := range tables {
-				if getDataFile(table) == file {
-					oidList = append(oidList, fmt.Sprintf("%d", table.Oid))
-					helperIdx = getDataFileHelperIdx(table)
-				}
+				oidList = append(oidList, fmt.Sprintf("%d", table.Oid))
 			}
-			utils.WriteOidListToSegments(oidList, globalCluster, globalFPInfo, helperIdx...)
-			initialPipes := CreateInitialSegmentPipes(oidList, globalCluster, numPipes, globalFPInfo, helperIdx...)
+			utils.WriteOidListToSegments(oidList, globalCluster, globalFPInfo)
+			initialPipes := CreateInitialSegmentPipes(oidList, globalCluster, connectionPool.NumConns, globalFPInfo)
 			// Do not pass through the --on-error-continue flag or the resizeClusterMap because neither apply to gpbackup
 			utils.StartGpbackupHelpers(globalCluster, globalFPInfo, "--backup-agent",
-				MustGetFlagString(options.PLUGIN_CONFIG), compressStr, false, false, &wasTerminated, initialPipes, true, false, 0, 0, file, gplog.GetVerbosity(), helperIdx...)
+				MustGetFlagString(options.PLUGIN_CONFIG), compressStr, false, false, &wasTerminated, initialPipes, true, false, 0, 0, 0, false, gplog.GetVerbosity())
 		}
 	}
 	gplog.Info("Writing data to file")
 	rowsCopiedMaps := BackupDataForAllTables(tables)
+	if dataFiles != nil && !wasTerminated.Load() {
+		utils.FinishSlotBackupHelpers(globalCluster, globalFPInfo, dataFiles.GetNextSlots())
+	}
 	AddTableDataEntriesToTOC(tables, rowsCopiedMaps)
 	if MustGetFlagBool(options.SINGLE_DATA_FILE) && MustGetFlagString(options.PLUGIN_CONFIG) != "" {
 		pluginConfig.BackupSegmentTOCs(globalCluster, globalFPInfo, numDataFiles)
 	}
 	logCompletionMessage("Data backup")
+}
+
+/*
+ * startDataFileHelpers starts a gpbackup_helper for each data file, which reads
+ * its tables from the pipes of its slots, as described at DataFileSlots.  Each data
+ * file gets as many slots ahead as its share of the workers, plus one for the
+ * main worker, which backs up the tables deferred because of lock conflicts.
+ */
+func startDataFileHelpers(numDataFiles int, compressStr string) {
+	numPipes := (connectionPool.NumConns-1)/numDataFiles + 1
+	dataFiles = NewDataFileSlots(numDataFiles, numPipes)
+	slotNames := make([]string, numPipes)
+	for slot := range slotNames {
+		slotNames[slot] = fmt.Sprintf("%d", slot)
+	}
+	for file := 0; file < numDataFiles; file++ {
+		utils.CreateSegmentPipesOnAllHostsForBackup(slotNames, globalCluster, globalFPInfo, file)
+		// Do not pass through the --on-error-continue flag or the resizeClusterMap because neither apply to gpbackup
+		utils.StartGpbackupHelpers(globalCluster, globalFPInfo, "--backup-agent",
+			MustGetFlagString(options.PLUGIN_CONFIG), compressStr, false, false, &wasTerminated, numPipes, true, false, 0, 0, file, true, gplog.GetVerbosity(), file)
+	}
 }
 
 func backupPostdata(metadataFile *utils.FileWithByteCount) {
@@ -636,26 +650,6 @@ func DoCleanup(backupFailed bool) {
 	if err != nil && backupLockFile != "" {
 		gplog.Warn("Failed to remove lock file %s.", backupLockFile)
 	}
-}
-
-/*
- * EstimateAOTablePages reads an aoseg table for each append-optimized table without
- * statistics.  In the backup transaction, which already holds a lock on every table,
- * each of them would stay locked until the end of the backup and could exhaust the
- * lock table with many leaf partitions, so they are read through a connection of
- * their own outside of a transaction, which releases each lock after its query.
- */
-func estimateAOTablePagesOutsideTransaction(tables []Table, pages map[uint32]int64) {
-	if connectionPool.Version.AtLeast("7") {
-		return
-	}
-	conn := dbconn.NewDBConnFromEnvironment(MustGetFlagString(options.DBNAME))
-	conn.MustConnect(1)
-	defer conn.Close()
-	// So that cancelBlockedQueries cancels the queries if they wait for a lock
-	conn.MustExec(fmt.Sprintf("SET application_name TO 'gpbackup_%s'", globalFPInfo.Timestamp))
-	conn.MustExec("SET search_path TO pg_catalog")
-	EstimateAOTablePages(conn, tables, pages)
 }
 
 // Cancel blocked gpbackup queries waiting for locks.

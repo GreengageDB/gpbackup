@@ -547,44 +547,4 @@ PARTITION BY LIST (gender)
 			structmatcher.ExpectStructsToMatchExcluding(&materialView, &results[0], "Oid", "ColumnDefs", "DistPolicy.Oid")
 		})
 	})
-	Describe("GetTablePages and EstimateAOTablePages", func() {
-		It("estimates the size of append-optimized tables without statistics from their tuple counts", func() {
-			if connectionPool.Version.AtLeast("7") {
-				Skip("Test only applicable to GPDB6 and earlier")
-			}
-			testhelper.AssertQueryRuns(connectionPool, `CREATE TABLE public.ao_part (id int, d int, v text)
-				WITH (appendonly=true, orientation=column) DISTRIBUTED BY (id)
-				PARTITION BY RANGE (d) (START (1) END (4) EVERY (1))`)
-			defer testhelper.AssertQueryRuns(connectionPool, "DROP TABLE public.ao_part")
-			// Loading through the root leaves relpages of the partitions at 0; partition 3 stays empty
-			testhelper.AssertQueryRuns(connectionPool, "INSERT INTO public.ao_part SELECT g, 1 + g % 2, 'x' FROM generate_series(1, 30000) g")
-			testhelper.AssertQueryRuns(connectionPool, "CREATE TABLE public.heap_table (id int) DISTRIBUTED BY (id)")
-			defer testhelper.AssertQueryRuns(connectionPool, "DROP TABLE public.heap_table")
-
-			columnDefs := []backup.ColumnDefinition{{Name: "id"}, {Name: "d"}, {Name: "v"}}
-			tableNamed := func(name string) backup.Table {
-				return backup.Table{
-					Relation:        backup.Relation{Schema: "public", Name: name, Oid: testutils.OidFromObjectName(connectionPool, "public", name, backup.TYPE_RELATION)},
-					TableDefinition: backup.TableDefinition{ColumnDefs: columnDefs},
-				}
-			}
-			root := tableNamed("ao_part")
-			leaf1, leaf2, emptyLeaf := tableNamed("ao_part_1_prt_1"), tableNamed("ao_part_1_prt_2"), tableNamed("ao_part_1_prt_3")
-			heapTable := tableNamed("heap_table")
-			tables := []backup.Table{root, leaf1, leaf2, emptyLeaf, heapTable}
-
-			pages := backup.GetTablePages(connectionPool, tables)
-			for _, table := range tables {
-				Expect(pages[table.Oid]).To(Equal(int64(0)), table.Name)
-			}
-
-			backup.EstimateAOTablePages(connectionPool, tables, pages)
-			// 15000 tuples of 3 columns of 8 bytes each in each loaded partition
-			Expect(pages[leaf1.Oid]).To(Equal(int64(15000*3*8/8192 + 1)))
-			Expect(pages[leaf2.Oid]).To(Equal(int64(15000*3*8/8192 + 1)))
-			Expect(pages[root.Oid]).To(Equal(int64(30000*3*8/8192 + 1)))
-			Expect(pages[emptyLeaf.Oid]).To(Equal(int64(0)))
-			Expect(pages[heapTable.Oid]).To(Equal(int64(0)))
-		})
-	})
 })
