@@ -271,7 +271,11 @@ PARTITION BY RANGE (partition_key) (
   PARTITION p1 START (0) EXCLUSIVE END (10)
 );
 CREATE SCHEMA ggcheckmigrate_partition_root;
-CREATE TABLE ggcheckmigrate_partition_root.moved_range (id integer, partition_key numeric)
+CREATE TABLE ggcheckmigrate_partition_root.moved_range (
+  id integer,
+  partition_key numeric,
+  abstime_column pg_catalog.abstime
+)
 DISTRIBUTED BY (id)
 PARTITION BY RANGE (partition_key) (
   PARTITION p1 START (0) EXCLUSIVE END (10)
@@ -420,9 +424,9 @@ if [[ ${first_exit_code} -ne 1 || ${second_exit_code} -ne 1 ]]; then
   exit 1
 fi
 
-expected_excluded_finding_count=1
+expected_excluded_finding_count=3
 if [[ -n ${target_host} ]]; then
-  expected_excluded_finding_count=2
+  expected_excluded_finding_count=4
 fi
 excluded_exit_code=0
 run_check --exclude-schema ggcheckmigrate_fixture -N ggcheckmigrate_missing_schema \
@@ -433,9 +437,11 @@ fi
 if ! grep -Eq "completed database checks:[[:space:]]+${expected_database_check_count}$" "${output_path}" ||
   ! grep -Eq "findings:[[:space:]]+${expected_excluded_finding_count}$" "${output_path}" ||
   ! grep -Fq 'Object "moved_range_1_prt_p1" has type "partition" in schema "ggcheckmigrate_fixture"' "${output_path}" ||
+  ! grep -Fq 'Object "abstime_column" has type "column" in schema "ggcheckmigrate_partition_root". Relation "moved_range" contains' "${output_path}" ||
+  ! grep -Fq 'Object "abstime_column" has type "column" in schema "ggcheckmigrate_fixture". Relation "moved_range_1_prt_p1" contains' "${output_path}" ||
   { [[ -n ${target_host} ]] && ! grep -Fq '$libdir/gp_check_functions' "${output_path}"; } ||
   ! grep -Eq 'excluded schemas:[[:space:]]+"ggcheckmigrate_fixture", "ggcheckmigrate_missing_schema"$' "${output_path}"; then
-  echo "The excluded schema run did not report only the moved partition and the extension library" >&2
+  echo "The excluded schema run did not report only the moved partition hierarchy and the extension library" >&2
   cat "${output_path}" >&2
   exit 1
 fi
