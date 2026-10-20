@@ -224,19 +224,14 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	 * With --single-data-file, the gpbackup_helper of each data file reads its tables
 	 * one after another, and a group of connsPerDataFile connections restores them:
 	 * all connections with a single data file, and with several data files as many
-	 * as --copy-queue-size gives.
+	 * as --copy-queue-size gives, or more with fewer data files to restore than
+	 * groups.  Without --single-data-file, all tables are in data file 0.
 	 */
 	numDataFiles := 1
-	connsPerDataFile := connectionPool.NumConns
 	if backupConfig.SingleDataFile {
 		numDataFiles = toc.GetNumDataFiles(dataEntries)
-		if numDataFiles > 1 {
-			connsPerDataFile = 1
-			if FlagChanged(options.COPY_QUEUE_SIZE) && MustGetFlagInt(options.COPY_QUEUE_SIZE) <= connectionPool.NumConns {
-				connsPerDataFile = MustGetFlagInt(options.COPY_QUEUE_SIZE)
-			}
-		}
 	}
+	connsPerDataFile := numConnsPerDataFile(dataEntries, connectionPool.NumConns, MustGetFlagInt(options.COPY_QUEUE_SIZE))
 	groups := NewDataFileGroups(dataEntries, numDataFiles, connectionPool.NumConns, connsPerDataFile)
 	if backupConfig.SingleDataFile || resizeCluster {
 		msg := ""
@@ -385,7 +380,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					truncateQuery := `TRUNCATE ` + tableName
 					if inTransaction {
 						truncateQuery = `TRUNCATE ONLY ` + tableName
-						err = connectionPool.Begin(whichConn)
+						err = beginTableTransaction(whichConn)
 					}
 					if err == nil {
 						_, err = connectionPool.Exec(truncateQuery, whichConn)
@@ -524,6 +519,44 @@ func oidsOfHelper(groups *DataFileGroups, dataEntries []toc.CoordinatorDataEntry
 		oids = append(oids, dataEntries[entryIdx].Oid)
 	}
 	return oids
+}
+
+/*
+ * beginTableTransaction begins the transaction that truncates a table and restores
+ * its data, at the default isolation level.  dbconn.Begin would make it
+ * SERIALIZABLE, with one more statement for every table, which Greengage logs as it
+ * falls back to REPEATABLE READ.
+ */
+func beginTableTransaction(whichConn int) error {
+	tx, err := connectionPool.ConnPool[whichConn].Beginx()
+	if err != nil {
+		return err
+	}
+	connectionPool.Tx[whichConn] = tx
+	return nil
+}
+
+/*
+ * numConnsPerDataFile returns the number of connections that restore each data file
+ * of a backup together, with numConns connections and the given --copy-queue-size:
+ * --copy-queue-size of them, and all of them with a single data file.  With fewer
+ * data files to restore than such groups, as after a filter or with more --jobs
+ * than data files, the connections are split among the data files instead, so that
+ * no group is left without a data file.
+ */
+func numConnsPerDataFile(dataEntries []toc.CoordinatorDataEntry, numConns int, copyQueueSize int) int {
+	filesToRestore := make(map[int]bool)
+	for _, entry := range dataEntries {
+		filesToRestore[entry.DataFileIdx] = true
+	}
+	conns := copyQueueSize
+	if conns < 1 || conns > numConns {
+		conns = numConns
+	}
+	if len(filesToRestore) > 0 && numConns/conns > len(filesToRestore) {
+		conns = numConns / len(filesToRestore)
+	}
+	return conns
 }
 
 /*

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync/atomic"
 
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
@@ -244,13 +245,26 @@ var _ = Describe("agent remote", func() {
 
 			Expect(testExecutor.NumExecutions).To(Equal(2))
 			skipFile := utils.GetSkipFilename(fpInfo.GetSegmentPipeFilePath(0, 2))
+			createSkipFiles := fmt.Sprintf(`; do : > "%s_$oid" || exit 1; done`, skipFile)
 			first := testExecutor.ClusterCommands[0][0].CommandString
-			Expect(first).To(ContainSubstring(fmt.Sprintf("touch %[1]s_1 %[1]s_2 ", skipFile)))
-			Expect(first).To(ContainSubstring(fmt.Sprintf(" %s_1000", skipFile)))
-			Expect(first).ToNot(ContainSubstring(fmt.Sprintf(" %s_1001", skipFile)))
+			Expect(first).To(ContainSubstring("for oid in 1 2 "))
+			Expect(first).To(HaveSuffix(" 1000" + createSkipFiles))
 			second := testExecutor.ClusterCommands[1][0].CommandString
-			Expect(second).To(ContainSubstring(fmt.Sprintf("touch %s_1001 ", skipFile)))
-			Expect(second).To(HaveSuffix(fmt.Sprintf(" %s_1500", skipFile)))
+			Expect(second).To(ContainSubstring("for oid in 1001 "))
+			Expect(second).To(HaveSuffix(" 1500" + createSkipFiles))
+		})
+		It("names the skip file once in a command, so that the command stays short with long paths", func() {
+			oids := make([]uint32, 1000)
+			for i := range oids {
+				oids[i] = uint32(4000000000 + i)
+			}
+			utils.CreateSkipFilesOnSegments(oids, testCluster, fpInfo, 2)
+
+			skipFile := utils.GetSkipFilename(fpInfo.GetSegmentPipeFilePath(0, 2))
+			command := testExecutor.ClusterCommands[0][0].CommandString
+			Expect(strings.Count(command, skipFile)).To(Equal(1))
+			// Each oid takes its digits and a space
+			Expect(len(command)).To(BeNumerically("<", 11*len(oids)+1024))
 		})
 	})
 	Describe("CheckAgentErrorsOnSegments", func() {

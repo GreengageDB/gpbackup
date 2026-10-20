@@ -303,6 +303,49 @@ var _ = Describe("restore internal tests", func() {
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
 	})
+	Describe("beginTableTransaction", func() {
+		It("begins the transaction of a table at the default isolation level", func() {
+			localConn, localMock := testhelper.CreateAndConnectMockDB(2)
+			oldConn := connectionPool
+			connectionPool = localConn
+			DeferCleanup(func() { connectionPool = oldConn })
+			// No SET TRANSACTION ISOLATION LEVEL SERIALIZABLE follows
+			localMock.ExpectBegin()
+			localMock.ExpectExec("TRUNCATE ONLY public.foo").WillReturnResult(sqlmock.NewResult(0, 0))
+			localMock.ExpectCommit()
+
+			Expect(beginTableTransaction(1)).To(Succeed())
+			Expect(connectionPool.Tx[1]).ToNot(BeNil())
+			_, err := connectionPool.Exec("TRUNCATE ONLY public.foo", 1)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(connectionPool.Commit(1)).To(Succeed())
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+	})
+	Describe("numConnsPerDataFile", func() {
+		// Data files 0, 1 and 2, with an entry each
+		entries := []toc.CoordinatorDataEntry{{Oid: 1, DataFileIdx: 0}, {Oid: 2, DataFileIdx: 1}, {Oid: 3, DataFileIdx: 2}}
+		It("gives all connections to a single data file", func() {
+			Expect(numConnsPerDataFile([]toc.CoordinatorDataEntry{{Oid: 1}, {Oid: 2}}, 4, 1)).To(Equal(4))
+			Expect(numConnsPerDataFile([]toc.CoordinatorDataEntry{{Oid: 1}, {Oid: 2}}, 8, 2)).To(Equal(8))
+		})
+		It("gives --copy-queue-size connections to each data file with as many data files as groups or more", func() {
+			Expect(numConnsPerDataFile(entries, 3, 1)).To(Equal(1))
+			Expect(numConnsPerDataFile(entries, 4, 2)).To(Equal(2))
+			Expect(numConnsPerDataFile(entries, 6, 2)).To(Equal(2))
+		})
+		It("splits the connections among fewer data files than groups", func() {
+			Expect(numConnsPerDataFile(entries, 6, 1)).To(Equal(2))
+			Expect(numConnsPerDataFile(entries, 12, 2)).To(Equal(4))
+			// The connections left over restore nothing
+			Expect(numConnsPerDataFile(entries, 8, 1)).To(Equal(2))
+		})
+		It("counts only the data files with entries to restore", func() {
+			// After a filter, only data file 2 of the backup is left
+			Expect(numConnsPerDataFile([]toc.CoordinatorDataEntry{{Oid: 3, DataFileIdx: 2}, {Oid: 6, DataFileIdx: 2}}, 4, 1)).To(Equal(4))
+			Expect(numConnsPerDataFile([]toc.CoordinatorDataEntry{{Oid: 2, DataFileIdx: 1}, {Oid: 3, DataFileIdx: 2}}, 8, 2)).To(Equal(4))
+		})
+	})
 	Describe("getExtensionTableCondition", func() {
 		// This function's own SQL round-trip is mocked directly here (a private
 		// dbconn.DBConn/sqlmock pair, swapped in and restored around each test)

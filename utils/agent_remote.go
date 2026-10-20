@@ -486,7 +486,8 @@ func CreateSkipFileOnSegments(oid uint32, tableName string, c *cluster.Cluster, 
 /*
  * CreateSkipFilesOnSegments creates the skip files of the given restore entries, so
  * that the helpers on all segments skip them, with skipFilesPerCommand of them in
- * each command on a segment.
+ * each command on a segment.  The command is a single argument of ssh, which Linux
+ * limits to 128 KiB, so it names the skip file once and lists the oids only.
  */
 const skipFilesPerCommand = 1000
 
@@ -496,13 +497,13 @@ func CreateSkipFilesOnSegments(oids []uint32, c *cluster.Cluster, fpInfo filepat
 		if end > len(oids) {
 			end = len(oids)
 		}
+		oidList := make([]string, 0, end-start)
+		for _, oid := range oids[start:end] {
+			oidList = append(oidList, fmt.Sprintf("%d", oid))
+		}
 		remoteOutput := c.GenerateAndExecuteCommand(fmt.Sprintf("Creating skip files on segments for %d restore entries", end-start), cluster.ON_SEGMENTS, func(contentID int) string {
 			skipFile := GetSkipFilename(fpInfo.GetSegmentPipeFilePath(contentID, helperIdx...))
-			skipFiles := make([]string, 0, end-start)
-			for _, oid := range oids[start:end] {
-				skipFiles = append(skipFiles, fmt.Sprintf("%s_%d", skipFile, oid))
-			}
-			return fmt.Sprintf("touch %s", strings.Join(skipFiles, " "))
+			return fmt.Sprintf(`for oid in %s; do : > "%s_$oid" || exit 1; done`, strings.Join(oidList, " "), skipFile)
 		})
 		c.CheckClusterError(remoteOutput, "Error while creating skip files on segments", func(contentID int) string {
 			return fmt.Sprintf("Could not create skip files %s_* on segments", GetSkipFilename(fpInfo.GetSegmentPipeFilePath(contentID, helperIdx...)))
