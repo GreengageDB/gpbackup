@@ -33,6 +33,7 @@ override_dh_auto_install:
 	install -D -m 755 $(BUILD_DIR)/gpbackup        $(CURDIR)/debian/tmp/$(GPBACKUP_HOME_REL)/bin/gpbackup
 	install -D -m 755 $(BUILD_DIR)/gprestore       $(CURDIR)/debian/tmp/$(GPBACKUP_HOME_REL)/bin/gprestore
 	install -D -m 755 $(BUILD_DIR)/gpbackup_helper $(CURDIR)/debian/tmp/$(GPBACKUP_HOME_REL)/bin/gpbackup_helper
+	install -D -m 755 $(BUILD_DIR)/ggcheckmigrate   $(CURDIR)/debian/tmp/$(GPBACKUP_HOME_REL)/bin/ggcheckmigrate
 
 override_dh_dwz:
 	@echo "Skipping debug symbols compression (not working properly with Golang)"
