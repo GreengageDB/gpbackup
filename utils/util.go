@@ -176,6 +176,9 @@ func InitializeSignalHandler(cleanupFunc func(bool), procDesc string, termFlag *
 }
 
 // TODO: Uniquely identify COPY commands in the multiple data file case to allow terminating sessions
+//
+// The sessions are those whose application name starts with appName, which a
+// connection may follow with a number of its own.
 func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, timeout time.Duration, interval time.Duration) {
 	gplog.Verbose("Checking for leftover COPY sessions")
 	var pidCol, queryCol string
@@ -194,7 +197,7 @@ func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, 
 
 	copyFileName := fpInfo.GetSegmentPipePathForCopyCommand()
 	fromClause := fmt.Sprintf(`FROM pg_stat_activity
-	WHERE application_name = '%s'
+	WHERE application_name LIKE '%s%%'
 	AND %s LIKE '%%%s%%'
 	AND %s <> pg_backend_pid()`, appName, queryCol, copyFileName, pidCol)
 
@@ -210,6 +213,7 @@ func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, 
 	// Terminate any COPY commands that are still running.
 	// Send a termination query every interval until no COPY commands are running, or timeout is reached.
 	// Check for remaining COPY commands every 20% of the interval duration.
+	timeoutReached := time.After(timeout)
 	for {
 		count := dbconn.MustSelectString(termConn, countQuery)
 		select {
@@ -219,7 +223,7 @@ func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, 
 			}
 		case <-tickerTerminate.C:
 			termConn.MustExec(termQuery)
-		case <-time.After(timeout):
+		case <-timeoutReached:
 			gplog.Warn("Timeout of %ds reached while waiting for %s COPY command(s) to complete.", timeout, count)
 			return
 		}

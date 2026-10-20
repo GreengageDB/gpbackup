@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
@@ -205,7 +206,7 @@ var _ = Describe("agent remote", func() {
 		// The commands for the next slot and for the segment TOC of one data file
 		helperRunning := func(tocFile string) string {
 			// Looked up by the arguments in /proc, which are not escaped for the locale as ps prints them
-			return fmt.Sprintf(`grep -slzxFZ -- "%s" /proc/[0-9]*/cmdline | xargs -0r grep -slzxF -- --backup-agent | grep -q .`, tocFile)
+			return fmt.Sprintf(`printf '%%s\0' /proc/[0-9]*/cmdline | xargs -0 grep -slzxFZ -- "%s" | xargs -0r grep -slzxF -- --backup-agent | grep -q .`, tocFile)
 		}
 		wakeCommand := func(nextSlot string, tocFile string) string {
 			return fmt.Sprintf(`(while [[ -p "%[1]s" ]]; do timeout 10 bash -c '[[ ! -p "%[1]s" ]] || : > "%[1]s"' && break; `+
@@ -269,6 +270,20 @@ var _ = Describe("agent remote", func() {
 			Expect(strings.Count(command, skipFile)).To(Equal(1))
 			// Each oid takes its digits and a space
 			Expect(len(command)).To(BeNumerically("<", 11*len(oids)+1024))
+		})
+	})
+	Describe("CleanUpHelperFilesOnAllHosts()", func() {
+		It("gives up on files that are not removed once its timeout is reached", func() {
+			// Every segment keeps a file, however often it is removed
+			testExecutor.ClusterOutput = &cluster.RemoteOutput{Commands: []cluster.ShellCommand{{Content: 0, Stdout: "1"}, {Content: 1, Stdout: "1"}}}
+			done := make(chan struct{})
+			go func() {
+				defer GinkgoRecover()
+				defer close(done)
+				utils.CleanUpHelperFilesOnAllHosts(testCluster, fpInfo, 2*time.Second)
+			}()
+			// The timeout used to start over at each tick of a second, so it was never reached
+			Eventually(done, "10s").Should(BeClosed())
 		})
 	})
 	Describe("CheckAgentErrorsOnSegments", func() {

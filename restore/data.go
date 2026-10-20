@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -99,7 +100,8 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 		}
 		gplog.Debug("Reading from %s", destinationToRead)
 
-		if entry.DistByEnum {
+		// With --resize-cluster the session has it off already, which RESET would turn on
+		if entry.DistByEnum && !resizeCluster {
 			gplog.Verbose("Setting gp_enable_segment_copy_checking TO off for table %s", tableName)
 			connectionPool.MustExec("SET gp_enable_segment_copy_checking TO off;", whichConn)
 			// In a transaction that the failure of the COPY has aborted, the RESET fails,
@@ -283,8 +285,8 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	/*
 	 * A table is truncated in the transaction that restores its data, so that it
 	 * keeps its data if they cannot be restored, whether the helper has stopped or
-	 * the COPY has failed.  It is truncated with ONLY, so that the transaction locks
-	 * no other table.  The TRUNCATE of the parent of an inheritance hierarchy would
+	 * the COPY has failed.  It is truncated with ONLY, so that the TRUNCATE locks no
+	 * other table.  The TRUNCATE of the parent of an inheritance hierarchy would
 	 * lock its children until its data is restored, so that a child earlier in the
 	 * same data file would wait for this lock, and the helper for the child, for
 	 * good; it would also empty a child restored before.
@@ -294,11 +296,13 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	 * holding these locks for the whole COPY in several connections at once could
 	 * fill the lock table.
 	 *
-	 * With --single-data-file, the tables of each data file are truncated in the
-	 * order of the file, as described at DataFileGroups.
+	 * With --single-data-file, each table is restored in a transaction, which takes
+	 * its locks in the order of the data file, as described at DataFileGroups.  On
+	 * GPDB 7, the COPY into a partition locks all its ancestors until the end of
+	 * its transaction, so the transaction locks them in its turn as well.
 	 */
 	truncateTable := MustGetFlagBool(options.INCREMENTAL) || MustGetFlagBool(options.TRUNCATE_TABLE)
-	groups.OrderTruncates = truncateTable && backupConfig.SingleDataFile
+	groups.OrderTransactions = backupConfig.SingleDataFile
 	partitionedTables := make(map[string]bool)
 	if truncateTable {
 		partitionedTableFQNs, err := GetPartitionedTableFQNs()
@@ -306,6 +310,12 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 		for _, partitionedTableFQN := range partitionedTableFQNs {
 			partitionedTables[partitionedTableFQN] = true
 		}
+	}
+	partitionAncestors := make(map[string][]string)
+	if backupConfig.SingleDataFile && connectionPool.Version.AtLeast("7") {
+		var err error
+		partitionAncestors, err = GetPartitionAncestorFQNs()
+		gplog.FatalOnError(err)
 	}
 	/*
 	 * We break when an interrupt is received and rely on
@@ -321,6 +331,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Make sure it's called to release resources even if no errors
 	groups.WakeWhenDone(ctx)
+	onErrorContinue := MustGetFlagBool(options.ON_ERROR_CONTINUE)
 
 	for i := 0; i < connectionPool.NumConns; i++ {
 		workerPool.Add(1)
@@ -335,6 +346,10 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 
 			setGUCsForConnection(gucStatements, whichConn)
 			nextEntryIdx := groups.EntriesOfConn(whichConn)
+			if resizeCluster && !backupConfig.SingleDataFile {
+				// The gpbackup_helper of the connection has the pipes of these entries only
+				nextEntryIdx = entriesOfHelper(whichConn, maxHelpers, totalTables)
+			}
 			for entryIdx, ok := nextEntryIdx(); ok; entryIdx, ok = nextEntryIdx() {
 				entry := dataEntries[entryIdx]
 				helperIdx := HelperIdx(whichConn)
@@ -361,7 +376,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					helper = helperIdx[0]
 				}
 				if (backupConfig.SingleDataFile || resizeCluster) && stoppedHelpers[helper].Load() {
-					groups.TruncateDone(entryIdx)
+					groups.TurnDone(entryIdx)
 					gplog.Verbose("Skipping data of table %s, as the gpbackup_helper of its data has stopped", tableName)
 					atomic.AddInt32(&numErrors, 1)
 					mutex.Lock()
@@ -371,27 +386,31 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					continue
 				}
 				var err error
-				inTransaction := truncateTable && !partitionedTables[tableName]
-				if truncateTable {
-					if !groups.WaitToTruncate(ctx, entryIdx) {
-						return // Error somewhere, terminate
-					}
+				partitioned := partitionedTables[tableName]
+				inTransaction := backupConfig.SingleDataFile || (truncateTable && !partitioned)
+				if !groups.WaitForTurn(ctx, entryIdx) {
+					return // Error somewhere, terminate
+				}
+				if truncateTable && partitioned {
 					gplog.Verbose("Truncating table %s prior to restoring data", tableName)
-					truncateQuery := `TRUNCATE ` + tableName
-					if inTransaction {
-						truncateQuery = `TRUNCATE ONLY ` + tableName
-						err = beginTableTransaction(whichConn)
-					}
-					if err == nil {
-						_, err = connectionPool.Exec(truncateQuery, whichConn)
-					}
-					groups.TruncateDone(entryIdx)
-					if err != nil {
-						gplog.Error(err.Error())
-						// The COPY of the table is not run, so its helpers are told to skip it
-						if MustGetFlagBool(options.ON_ERROR_CONTINUE) && connectionPool.Version.AtLeast("6") && (backupConfig.SingleDataFile || resizeCluster) {
-							utils.CreateSkipFileOnSegments(entry.Oid, tableName, globalCluster, fpInfo, helperIdx...)
-						}
+					_, err = connectionPool.Exec(`TRUNCATE `+tableName, whichConn)
+				}
+				if err == nil && inTransaction {
+					err = beginTableTransaction(whichConn)
+				}
+				if ancestors := partitionAncestors[tableName]; err == nil && len(ancestors) > 0 {
+					err = lockAncestors(ancestors, whichConn)
+				}
+				if err == nil && truncateTable && !partitioned {
+					gplog.Verbose("Truncating table %s prior to restoring data", tableName)
+					_, err = connectionPool.Exec(`TRUNCATE ONLY `+tableName, whichConn)
+				}
+				groups.TurnDone(entryIdx)
+				if err != nil {
+					gplog.Error(err.Error())
+					// The COPY of the table is not run, so its helpers are told to skip it
+					if onErrorContinue && connectionPool.Version.AtLeast("6") && (backupConfig.SingleDataFile || resizeCluster) {
+						utils.CreateSkipFileOnSegments(entry.Oid, tableName, globalCluster, fpInfo, helperIdx...)
 					}
 				}
 				if err == nil {
@@ -411,7 +430,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 
 				if err != nil {
 					atomic.AddInt32(&numErrors, 1)
-					if errors.Is(err, utils.AgentErr) && MustGetFlagBool(options.ON_ERROR_CONTINUE) {
+					if errors.Is(err, utils.AgentErr) && onErrorContinue {
 						// The helper has stopped, but the tables of the other helpers can still be restored
 						dataProgressBar.(*pb.ProgressBar).NotPrint = true
 						if stoppedHelpers[helper].CompareAndSwap(false, true) {
@@ -419,7 +438,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 								"and its helpers on the other segments are told to skip them", helper)
 							utils.CreateSkipFilesOnSegments(oidsOfHelper(groups, dataEntries, helper, maxHelpers), globalCluster, fpInfo, helperIdx...)
 						}
-					} else if !MustGetFlagBool(options.ON_ERROR_CONTINUE) {
+					} else if !onErrorContinue {
 						dataProgressBar.(*pb.ProgressBar).NotPrint = true
 						cancel()
 						return
@@ -515,10 +534,41 @@ func oidsOfHelper(groups *DataFileGroups, dataEntries []toc.CoordinatorDataEntry
 		return groups.OidsOfDataFile(dataEntries, helper)
 	}
 	oids := make([]uint32, 0)
-	for entryIdx := helper; entryIdx < len(dataEntries); entryIdx += numHelpers {
+	nextEntryIdx := entriesOfHelper(helper, numHelpers, len(dataEntries))
+	for entryIdx, ok := nextEntryIdx(); ok; entryIdx, ok = nextEntryIdx() {
 		oids = append(oids, dataEntries[entryIdx].Oid)
 	}
 	return oids
+}
+
+/*
+ * entriesOfHelper returns a function that gives the data entries of a
+ * gpbackup_helper of a connection, without --single-data-file, in the order in
+ * which the helper restores them: those of the helper, the entries helper,
+ * helper + numHelpers and so on, out of numEntries.  The connection restores the
+ * entries of its own helper only, as only that helper creates their pipes.
+ */
+func entriesOfHelper(helper int, numHelpers int, numEntries int) func() (int, bool) {
+	next := helper
+	return func() (int, bool) {
+		if helper >= numHelpers || next >= numEntries {
+			return 0, false
+		}
+		entryIdx := next
+		next += numHelpers
+		return entryIdx, true
+	}
+}
+
+// lockAncestors locks the given ancestors of a partition in the transaction of the connection
+func lockAncestors(ancestors []string, whichConn int) error {
+	tables := make([]string, 0, len(ancestors))
+	for _, ancestor := range ancestors {
+		// Not their other partitions, which LOCK would lock as well
+		tables = append(tables, "ONLY "+ancestor)
+	}
+	_, err := connectionPool.Exec(fmt.Sprintf("LOCK TABLE %s IN ACCESS SHARE MODE", strings.Join(tables, ", ")), whichConn)
+	return err
 }
 
 /*
@@ -599,16 +649,20 @@ func HelperIdx(whichConn int) []int {
  * restored by a connection, so it can always proceed.  Connections beyond the last
  * full group restore nothing.
  *
- * With OrderTruncates, the tables of each data file are truncated in the order of
- * the file, each one once the tables before it are truncated or skipped.  The
- * transaction of a table holds the lock of its TRUNCATE until its data is
- * restored, while its COPY waits for the helper to restore the tables before it.
- * A connection that truncated its table ahead of them could so hold its lock
- * while another session that has read one of the tables before it waits for this
- * lock, and the TRUNCATE of that table for the session: the database cannot see
- * the wait through the helper, so the restore and the session would wait for
+ * With OrderTransactions, the transactions that restore the tables of each data
+ * file take their turns in the order of the file: each one begins, takes its locks
+ * and truncates its table once the transactions of the tables before it have done
+ * so, or the tables are skipped.  The transaction of a table holds its locks until
+ * its data is restored, while its COPY waits for the helper to restore the tables
+ * before it.  A connection that locked its table ahead of them could so hold its
+ * lock while another session that has read one of the tables before it waits for
+ * this lock, and the TRUNCATE of that table for the session: the database cannot
+ * see the wait through the helper, so the restore and the session would wait for
  * good.  Taking the locks in the order of the file, the order in which the helper
- * restores the tables, leaves no such cycle.
+ * restores the tables, leaves no such cycle.  Neither do resource groups, as a
+ * transaction waits for a slot of its resource group as it begins, after the
+ * transactions of the tables before it have theirs, so that the helper never waits
+ * for a table whose transaction waits for a slot.
  */
 type DataFileGroups struct {
 	mutex            sync.Mutex
@@ -622,13 +676,13 @@ type DataFileGroups struct {
 	// Called once for each data file, before its first entry is given
 	StartDataFile func(file int)
 	started       []sync.Once
-	// Whether the tables of each data file are truncated in the order of the file
-	OrderTruncates  bool
-	fileOfEntry     []int
-	positionOfEntry []int
-	truncated       [][]bool
-	nextToTruncate  []int
-	truncateTurn    *sync.Cond
+	// Whether the transactions of the tables of each data file take turns in the order of the file
+	OrderTransactions bool
+	fileOfEntry       []int
+	positionOfEntry   []int
+	turnTaken         [][]bool
+	nextTurn          []int
+	turnPassed        *sync.Cond
 }
 
 func NewDataFileGroups(dataEntries []toc.CoordinatorDataEntry, numDataFiles int, numConns int, connsPerDataFile int) *DataFileGroups {
@@ -639,10 +693,10 @@ func NewDataFileGroups(dataEntries []toc.CoordinatorDataEntry, numDataFiles int,
 		started:          make([]sync.Once, numDataFiles),
 		fileOfEntry:      make([]int, len(dataEntries)),
 		positionOfEntry:  make([]int, len(dataEntries)),
-		truncated:        make([][]bool, numDataFiles),
-		nextToTruncate:   make([]int, numDataFiles),
+		turnTaken:        make([][]bool, numDataFiles),
+		nextTurn:         make([]int, numDataFiles),
 	}
-	groups.truncateTurn = sync.NewCond(&groups.mutex)
+	groups.turnPassed = sync.NewCond(&groups.mutex)
 	groups.fileOfGroup = make([]int, groups.numGroups)
 	groups.nextOfGroup = make([]int, groups.numGroups)
 	for group := range groups.fileOfGroup {
@@ -653,7 +707,7 @@ func NewDataFileGroups(dataEntries []toc.CoordinatorDataEntry, numDataFiles int,
 		groups.fileOfEntry[entryIdx] = entry.DataFileIdx
 		groups.positionOfEntry[entryIdx] = len(groups.entriesOfFile[entry.DataFileIdx])
 		groups.entriesOfFile[entry.DataFileIdx] = append(groups.entriesOfFile[entry.DataFileIdx], entryIdx)
-		groups.truncated[entry.DataFileIdx] = append(groups.truncated[entry.DataFileIdx], false)
+		groups.turnTaken[entry.DataFileIdx] = append(groups.turnTaken[entry.DataFileIdx], false)
 		rowsOfFile[entry.DataFileIdx] += entry.RowsCopied
 	}
 	for file, entries := range groups.entriesOfFile {
@@ -668,48 +722,48 @@ func NewDataFileGroups(dataEntries []toc.CoordinatorDataEntry, numDataFiles int,
 }
 
 /*
- * WaitToTruncate waits, with OrderTruncates, until the tables before the given data
- * entry in its data file are truncated or skipped.  It returns false if the context
- * is done first.
+ * WaitForTurn waits, with OrderTransactions, until the transactions of the tables
+ * before the given data entry in its data file have taken their turns, or the
+ * tables are skipped.  It returns false if the context is done first.
  */
-func (groups *DataFileGroups) WaitToTruncate(ctx context.Context, entryIdx int) bool {
-	if !groups.OrderTruncates {
+func (groups *DataFileGroups) WaitForTurn(ctx context.Context, entryIdx int) bool {
+	if !groups.OrderTransactions {
 		return true
 	}
 	file, position := groups.fileOfEntry[entryIdx], groups.positionOfEntry[entryIdx]
 	groups.mutex.Lock()
 	defer groups.mutex.Unlock()
-	for groups.nextToTruncate[file] < position && ctx.Err() == nil {
-		groups.truncateTurn.Wait()
+	for groups.nextTurn[file] < position && ctx.Err() == nil {
+		groups.turnPassed.Wait()
 	}
 	return ctx.Err() == nil
 }
 
-// TruncateDone records that the table of a data entry is truncated, or is skipped
-func (groups *DataFileGroups) TruncateDone(entryIdx int) {
-	if !groups.OrderTruncates {
+// TurnDone records that the transaction of the table of a data entry has taken its turn, or the table is skipped
+func (groups *DataFileGroups) TurnDone(entryIdx int) {
+	if !groups.OrderTransactions {
 		return
 	}
 	file := groups.fileOfEntry[entryIdx]
 	groups.mutex.Lock()
 	defer groups.mutex.Unlock()
-	groups.truncated[file][groups.positionOfEntry[entryIdx]] = true
-	for groups.nextToTruncate[file] < len(groups.truncated[file]) && groups.truncated[file][groups.nextToTruncate[file]] {
-		groups.nextToTruncate[file]++
+	groups.turnTaken[file][groups.positionOfEntry[entryIdx]] = true
+	for groups.nextTurn[file] < len(groups.turnTaken[file]) && groups.turnTaken[file][groups.nextTurn[file]] {
+		groups.nextTurn[file]++
 	}
-	groups.truncateTurn.Broadcast()
+	groups.turnPassed.Broadcast()
 }
 
-// WakeWhenDone wakes the connections waiting to truncate their tables once the context is done
+// WakeWhenDone wakes the connections waiting for their turns once the context is done
 func (groups *DataFileGroups) WakeWhenDone(ctx context.Context) {
-	if !groups.OrderTruncates {
+	if !groups.OrderTransactions {
 		return
 	}
 	go func() {
 		<-ctx.Done()
 		groups.mutex.Lock()
 		defer groups.mutex.Unlock()
-		groups.truncateTurn.Broadcast()
+		groups.turnPassed.Broadcast()
 	}()
 }
 

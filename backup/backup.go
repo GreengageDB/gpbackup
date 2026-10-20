@@ -626,12 +626,11 @@ func DoCleanup(backupFailed bool) {
 		utils.CleanUpSegmentHelperProcesses(globalCluster, globalFPInfo, "backup", cleanupTimeout)
 		utils.CleanUpHelperFilesOnAllHosts(globalCluster, globalFPInfo, cleanupTimeout)
 
-		// Check gpbackup_helper errors here if backup was terminated
-		if wasTerminated.Load() {
-			err := utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo)
-			if err != nil {
-				gplog.Error(err.Error())
-			}
+		// Check gpbackup_helper errors here if backup was terminated. The check removes
+		// the error files, which the helpers stopped above write after any failure.
+		err := utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo)
+		if err != nil && wasTerminated.Load() {
+			gplog.Error(err.Error())
 		}
 	}
 

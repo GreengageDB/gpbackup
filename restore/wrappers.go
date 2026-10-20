@@ -455,6 +455,31 @@ func GetPartitionedTableFQNs() ([]string, error) {
 	return partitionedTableFQNs, err
 }
 
+/*
+ * GetPartitionAncestorFQNs returns the ancestors of each partition of the database,
+ * on GPDB 7, where the COPY into a partition locks all its ancestors.
+ */
+func GetPartitionAncestorFQNs() (map[string][]string, error) {
+	partitionAncestors := make([]struct {
+		Partition string
+		Ancestor  string
+	}, 0)
+	query := `SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS partition,
+			quote_ident(an.nspname) || '.' || quote_ident(a.relname) AS ancestor
+		  FROM pg_catalog.pg_class c
+			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			CROSS JOIN LATERAL pg_catalog.pg_partition_ancestors(c.oid) AS anc
+			JOIN pg_catalog.pg_class a ON a.oid = anc.relid
+			JOIN pg_catalog.pg_namespace an ON an.oid = a.relnamespace
+		  WHERE c.relispartition AND anc.relid <> c.oid;`
+	err := connectionPool.Select(&partitionAncestors, query)
+	ancestorsOfPartition := make(map[string][]string)
+	for _, row := range partitionAncestors {
+		ancestorsOfPartition[row.Partition] = append(ancestorsOfPartition[row.Partition], row.Ancestor)
+	}
+	return ancestorsOfPartition, err
+}
+
 func GetExistingSchemas() ([]string, error) {
 	existingSchemas := make([]string, 0)
 

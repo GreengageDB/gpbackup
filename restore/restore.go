@@ -347,7 +347,8 @@ func restorePredata(metadataFilename string) (int, map[string][]toc.CoordinatorD
 			// Begin transactions for each connec worker connection.  In parallel restores we reserve conn 0 for administration and monitoring.
 			txMutex.Lock()
 			for connNum := 1; connNum < GetNumMetadataConns(); connNum++ {
-				connectionPool.MustExec(fmt.Sprintf("SET application_name TO 'gprestore_%d_%s'", connNum, MustGetFlagString(options.TIMESTAMP)), connNum)
+				// The name of the restore, which DoCleanup looks for, with the number of the connection
+				connectionPool.MustExec(fmt.Sprintf("SET application_name TO 'gprestore_%s_%s_%d'", MustGetFlagString(options.TIMESTAMP), restoreStartTime, connNum), connNum)
 				connectionPool.MustBegin(connNum)
 			}
 			txMutex.Unlock()
@@ -897,7 +898,9 @@ func DoCleanup(restoreFailed bool) {
 			// This results in the DoCleanup function passed to the signal handler to never return, blocking the os.Exit call
 
 			// All COPY commands should end on their own for a successful restore, however we cleanup any hanging COPY sessions here as a precaution
-			utils.TerminateHangingCopySessions(fpInfo, fmt.Sprintf("gprestore_%s_%s", fpInfo.Timestamp, restoreStartTime), cleanupTimeout, 5*time.Second)
+			// The connections are named after the restored backup, also for the COPY commands of the
+			// earlier backups of an incremental chain
+			utils.TerminateHangingCopySessions(fpInfo, fmt.Sprintf("gprestore_%s_%s", MustGetFlagString(options.TIMESTAMP), restoreStartTime), cleanupTimeout, 5*time.Second)
 
 			// Ensure we don't leave anything behind on the segments
 			utils.CleanUpSegmentHelperProcesses(globalCluster, fpInfo, "restore", cleanupTimeout)

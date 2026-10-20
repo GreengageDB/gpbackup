@@ -286,15 +286,17 @@ func FinishSlotBackupHelperCommands(nextSlot string, tocFile string, errorFile s
  * A command that succeeds while the gpbackup_helper backing up to the data file of
  * the given segment TOC runs.  On Linux, it looks for a process with both the path
  * and --backup-agent among its arguments in /proc, as ps prints the bytes of a
- * path that are not ASCII as ? in the C locale of a command over ssh.  The command
- * itself has the path in an argument of its own only in its first grep, which does
- * not have --backup-agent.  Elsewhere the path is matched in the output of ps as a
+ * path that are not ASCII as ? in the C locale of a command over ssh.  The files
+ * of /proc go to grep through xargs, as their number on a busy host could exceed
+ * the limit of the arguments of a command.  The command itself has the path in an
+ * argument of its own only in its first xargs and grep, which do not have
+ * --backup-agent.  Elsewhere the path is matched in the output of ps as a
  * fixed string, and the bracket keeps the pattern of the helper from matching the
  * command itself.
  */
 func backupHelperRunningCommand(tocFile string) string {
 	if runtime.GOOS == "linux" {
-		return fmt.Sprintf(`grep -slzxFZ -- "%s" /proc/[0-9]*/cmdline | xargs -0r grep -slzxF -- --backup-agent | grep -q .`, tocFile)
+		return fmt.Sprintf(`printf '%%s\0' /proc/[0-9]*/cmdline | xargs -0 grep -slzxFZ -- "%s" | xargs -0r grep -slzxF -- --backup-agent | grep -q .`, tocFile)
 	}
 	return fmt.Sprintf(`ps ux | grep -F -- "--toc-file %s " | grep -- "[g]pbackup_helper" | grep -q -- "--backup-agent"`, tocFile)
 }
@@ -351,6 +353,8 @@ func CleanUpHelperFilesOnAllHosts(c *cluster.Cluster, fpInfo filepath.FilePathIn
 	defer helperMutex.Unlock()
 	tickerCleanup := time.NewTicker(1 * time.Second)
 
+	// Created once, as the ticker fires before a new one would
+	timeoutReached := time.After(timeout)
 	for {
 		fileCount = GetHelperFileCount(c, fpInfo)
 		select {
@@ -359,7 +363,7 @@ func CleanUpHelperFilesOnAllHosts(c *cluster.Cluster, fpInfo filepath.FilePathIn
 				return
 			}
 			RemoveHelperFiles(c, fpInfo)
-		case <-time.After(timeout):
+		case <-timeoutReached:
 			gplog.Warn("Timeout of %ds reached while waiting for %d gpbackup_helper file(s) to be removed.", int(timeout.Seconds()), fileCount)
 			return
 		}
@@ -409,6 +413,8 @@ func CleanUpSegmentHelperProcesses(c *cluster.Cluster, fpInfo filepath.FilePathI
 	defer helperMutex.Unlock()
 	tickerCleanup := time.NewTicker(1 * time.Second)
 
+	// Created once, as the ticker fires before a new one would
+	timeoutReached := time.After(timeout)
 	for {
 		helperPids, found := CheckHelperPids(c, fpInfo, operation)
 		select {
@@ -422,7 +428,7 @@ func CleanUpSegmentHelperProcesses(c *cluster.Cluster, fpInfo filepath.FilePathI
 				pipePattern := fmt.Sprintf("--pipe-file %s", pipeFile)
 				return fmt.Sprintf("PIDS=`ps ux | grep -- \"%s\" | grep -- \"%s\" | grep -v grep | awk '{print $2}'`; if [[ ! -z \"$PIDS\" ]]; then kill -USR1 $PIDS; fi", procPattern, pipePattern)
 			})
-		case <-time.After(timeout):
+		case <-timeoutReached:
 			for host, pids := range helperPids {
 				if len(pids) > 0 {
 					gplog.Warn("Unable to terminate segment helper process(es) on host %s. ", host)

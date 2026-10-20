@@ -8,6 +8,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/filepath"
 	"github.com/GreengageDB/gpbackup/history"
+	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/pkg/errors"
 
@@ -302,6 +303,22 @@ var _ = Describe("restore internal tests", func() {
 			Expect(err).To(MatchError("out of memory"))
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
+		It("leaves gp_enable_segment_copy_checking off for a table distributed by an enum with --resize-cluster", func() {
+			// The session of a resize restore has it off, which a RESET would turn back on for the tables after
+			_ = cmdFlags.Set(options.RESIZE_CLUSTER, "true")
+			DeferCleanup(func() {
+				_ = cmdFlags.Set(options.RESIZE_CLUSTER, "false")
+				cmdFlags.Lookup(options.RESIZE_CLUSTER).Changed = false
+			})
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", DistByEnum: true, RowsCopied: 10}
+			localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 10))
+			localMock.ExpectExec(`ALTER TABLE public.foo SET WITH \(REORGANIZE=true\)`).WillReturnResult(sqlmock.NewResult(0, 0))
+
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
 	})
 	Describe("beginTableTransaction", func() {
 		It("begins the transaction of a table at the default isolation level", func() {
@@ -319,6 +336,38 @@ var _ = Describe("restore internal tests", func() {
 			_, err := connectionPool.Exec("TRUNCATE ONLY public.foo", 1)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(connectionPool.Commit(1)).To(Succeed())
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+	})
+	Describe("entriesOfHelper", func() {
+		// The entries a connection restores, all at once
+		entriesOf := func(helper int, numHelpers int, numEntries int) []int {
+			entries := make([]int, 0)
+			nextEntryIdx := entriesOfHelper(helper, numHelpers, numEntries)
+			for entryIdx, ok := nextEntryIdx(); ok; entryIdx, ok = nextEntryIdx() {
+				entries = append(entries, entryIdx)
+			}
+			return entries
+		}
+		It("gives a connection the entries of its own gpbackup_helper, whenever it asks", func() {
+			Expect(entriesOf(0, 3, 7)).To(Equal([]int{0, 3, 6}))
+			Expect(entriesOf(1, 3, 7)).To(Equal([]int{1, 4}))
+			Expect(entriesOf(2, 3, 7)).To(Equal([]int{2, 5}))
+		})
+		It("gives no entries to a connection without a gpbackup_helper", func() {
+			// With more connections than tables, there is a helper for each table only
+			Expect(entriesOf(3, 3, 3)).To(BeEmpty())
+		})
+	})
+	Describe("lockAncestors", func() {
+		It("locks only the ancestors of a partition, not their other partitions", func() {
+			localConn, localMock := testhelper.CreateAndConnectMockDB(1)
+			oldConn := connectionPool
+			connectionPool = localConn
+			DeferCleanup(func() { connectionPool = oldConn })
+			localMock.ExpectExec(`LOCK TABLE ONLY public.sales_1_prt_2, ONLY public.sales IN ACCESS SHARE MODE`).WillReturnResult(sqlmock.NewResult(0, 0))
+
+			Expect(lockAncestors([]string{"public.sales_1_prt_2", "public.sales"}, 0)).To(Succeed())
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
 	})
