@@ -163,12 +163,36 @@ var _ = Describe("restore/data tests", func() {
 			Expect(entriesOfConns(groups, 2)).To(Equal([][]int{{1, 2, 0}, {4, 5, 3}}))
 		})
 		It("lets a connection of a group go on to the next data file of its group", func() {
-			// Data file 1 has a single entry, which connection 0 restores while connection 1 goes on
+			// Data file 1 has a single entry, which connection 0 restores while connection 1 takes data file 0
 			fewEntries := []toc.CoordinatorDataEntry{
 				{Oid: 1, DataFileIdx: 0, RowsCopied: 10}, {Oid: 2, DataFileIdx: 1, RowsCopied: 50}, {Oid: 3, DataFileIdx: 0, RowsCopied: 10},
 			}
 			groups := restore.NewDataFileGroups(fewEntries, 2, 2, 2)
-			Expect(entriesOfConns(groups, 2)).To(Equal([][]int{{1, 0}, {2}}))
+			Expect(entriesOfConns(groups, 2)).To(Equal([][]int{{1, 2}, {0}}))
+		})
+		It("takes the next data file of a group only for a connection that restores its first entry", func() {
+			// Three data files of one table each, restored by one group of two connections
+			singleEntryFiles := []toc.CoordinatorDataEntry{
+				{Oid: 1, DataFileIdx: 0, RowsCopied: 30}, {Oid: 2, DataFileIdx: 1, RowsCopied: 20}, {Oid: 3, DataFileIdx: 2, RowsCopied: 10},
+			}
+			groups := restore.NewDataFileGroups(singleEntryFiles, 3, 2, 2)
+			started := make([]int, 0)
+			groups.StartDataFile = func(file int) { started = append(started, file) }
+			nextOfConn0, nextOfConn1 := groups.EntriesOfConn(0), groups.EntriesOfConn(1)
+			nextEntry := func(nextEntryIdx func() (int, bool)) int {
+				entryIdx, ok := nextEntryIdx()
+				Expect(ok).To(BeTrue())
+				return entryIdx
+			}
+			Expect(nextEntry(nextOfConn0)).To(Equal(0))
+			// Connection 1 has no entry in data file 0, so it takes data file 1 for the group and restores it
+			Expect(nextEntry(nextOfConn1)).To(Equal(1))
+			Expect(started).To(Equal([]int{0, 1}))
+			// Data file 2 is not taken until a connection is free to restore it
+			Expect(nextEntry(nextOfConn0)).To(Equal(2))
+			Expect(started).To(Equal([]int{0, 1, 2}))
+			_, ok := nextOfConn1()
+			Expect(ok).To(BeFalse())
 		})
 		It("gives no entries to the connections beyond the last full group", func() {
 			groups := restore.NewDataFileGroups(entries, 3, 3, 2)

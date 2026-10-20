@@ -584,18 +584,20 @@ func HelperIdx(whichConn int) []int {
  *
  * The gpbackup_helper of a data file reads its tables one after another, so the
  * connections are split into groups of connsPerDataFile, and each data file is
- * restored by one group, which takes its tables in the order of the file,
- * round-robin.  A group that has finished its data file takes the largest data file
- * left, by rows, so that the groups finish at about the same time.  All
- * connections of a group restore the same data files, in the same order.  With a
- * single data file, or without --single-data-file, all connections are one group.
+ * restored by one group.  A connection takes the next table of the data file of its
+ * group, in the order of the file.  Once all tables of that data file are taken, it
+ * takes for its group the largest data file left, by rows, and its first table, so
+ * that a group takes a data file only for a connection that is free to restore it,
+ * and the groups finish at about the same time.  With a single data file, or
+ * without --single-data-file, all connections are one group.
  *
  * A connection never waits for a table further ahead than the pipes its helper has
- * created, as its previous table in the same data file is connsPerDataFile tables
- * earlier.  The earliest table of a data file that is not restored yet belongs to a
- * connection that has not left the data file, so it can always proceed.
- * Connections beyond the last full group restore nothing, as the tables of their
- * part of a group would be left to no one.
+ * created: when it takes a table, at most connsPerDataFile - 1 tables before it in
+ * the data file are still being restored, by the other connections of its group,
+ * and the helper creates the pipes of connsPerDataFile tables ahead of the one it
+ * restores.  The earliest table of a data file that is not restored yet is being
+ * restored by a connection, so it can always proceed.  Connections beyond the last
+ * full group restore nothing.
  *
  * With OrderTruncates, the tables of each data file are truncated in the order of
  * the file, each one once the tables before it are truncated or skipped.  The
@@ -614,7 +616,9 @@ type DataFileGroups struct {
 	numGroups        int
 	entriesOfFile    [][]int
 	filesLeft        []int
-	filesOfGroup     [][]int
+	// The data file of each group, -1 before its first one, and its next entry
+	fileOfGroup []int
+	nextOfGroup []int
 	// Called once for each data file, before its first entry is given
 	StartDataFile func(file int)
 	started       []sync.Once
@@ -639,7 +643,11 @@ func NewDataFileGroups(dataEntries []toc.CoordinatorDataEntry, numDataFiles int,
 		nextToTruncate:   make([]int, numDataFiles),
 	}
 	groups.truncateTurn = sync.NewCond(&groups.mutex)
-	groups.filesOfGroup = make([][]int, groups.numGroups)
+	groups.fileOfGroup = make([]int, groups.numGroups)
+	groups.nextOfGroup = make([]int, groups.numGroups)
+	for group := range groups.fileOfGroup {
+		groups.fileOfGroup[group] = -1
+	}
 	rowsOfFile := make([]int64, numDataFiles)
 	for entryIdx, entry := range dataEntries {
 		groups.fileOfEntry[entryIdx] = entry.DataFileIdx
@@ -714,48 +722,38 @@ func (groups *DataFileGroups) OidsOfDataFile(dataEntries []toc.CoordinatorDataEn
 	return oids
 }
 
-// The data file a group restores after the given number of others, if one is left
-func (groups *DataFileGroups) fileOfGroup(group int, fileNum int) (int, bool) {
+// The next data entry of a group and its data file, which the group takes once all
+// entries of its data file are taken, if one is left
+func (groups *DataFileGroups) nextEntryOfGroup(group int) (int, int, bool) {
 	groups.mutex.Lock()
 	defer groups.mutex.Unlock()
-	if fileNum == len(groups.filesOfGroup[group]) {
+	file := groups.fileOfGroup[group]
+	if file < 0 || groups.nextOfGroup[group] == len(groups.entriesOfFile[file]) {
 		if len(groups.filesLeft) == 0 {
-			return 0, false
+			return 0, 0, false
 		}
-		groups.filesOfGroup[group] = append(groups.filesOfGroup[group], groups.filesLeft[0])
+		file = groups.filesLeft[0]
 		groups.filesLeft = groups.filesLeft[1:]
+		groups.fileOfGroup[group] = file
+		groups.nextOfGroup[group] = 0
 	}
-	return groups.filesOfGroup[group][fileNum], true
+	entryIdx := groups.entriesOfFile[file][groups.nextOfGroup[group]]
+	groups.nextOfGroup[group]++
+	return entryIdx, file, true
 }
 
 // EntriesOfConn returns a function that gives the next data entry of a connection
 func (groups *DataFileGroups) EntriesOfConn(whichConn int) func() (int, bool) {
 	group := whichConn / groups.connsPerDataFile
-	fileNum := 0
-	var entries []int
-	next := len(entries)
-	done := group >= groups.numGroups
 	return func() (int, bool) {
-		if done {
+		if group >= groups.numGroups {
 			return 0, false
 		}
-		for next >= len(entries) {
-			if entries != nil {
-				fileNum++
-			}
-			file, ok := groups.fileOfGroup(group, fileNum)
-			if !ok {
-				done = true
-				return 0, false
-			}
-			if groups.StartDataFile != nil {
-				groups.started[file].Do(func() { groups.StartDataFile(file) })
-			}
-			entries = groups.entriesOfFile[file]
-			next = whichConn % groups.connsPerDataFile
+		entryIdx, file, ok := groups.nextEntryOfGroup(group)
+		if ok && groups.StartDataFile != nil {
+			// Outside of the mutex, as starting a helper takes commands on the segments
+			groups.started[file].Do(func() { groups.StartDataFile(file) })
 		}
-		entryIdx := entries[next]
-		next += groups.connsPerDataFile
-		return entryIdx, true
+		return entryIdx, ok
 	}
 }
