@@ -536,6 +536,30 @@ var _ = Describe("helper tests", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(helper.restoreData.discardedBytes).To(Equal(int64(18)))
 		})
+		It("discards the data of a skipped replicated table from its first batch only with single datafile and resize restore", func() {
+			// Two batches, from contents 1 and 4, of which a replicated table is restored from the first only
+			*singleDataFile = true
+			*tocFile = testTocFile
+
+			writeTestTOC(testTocFile)
+			defer func() {
+				_ = os.Remove(*tocFile)
+			}()
+
+			oidBatch := []oidWithBatch{
+				{1 /* A replicated table, the first oid from TOC */, 0},
+			}
+
+			expectedScenario := []helperTestStep{
+				{"mock_1_0", false, 1, true, "Can not open pipe for table 1, check_skip_file shall called, skip file exists"},
+			}
+
+			helper := newHelperTest(oidBatch, expectedScenario)
+			err := doRestoreAgentInternal(helper)
+			Expect(err).ToNot(HaveOccurred())
+			// The subset of the second batch has no data of the table, and the next table would be read from its data
+			Expect(helper.restoreData.discardedBytes).To(Equal(int64(18)))
+		})
 		It("discard error data if skip file is discovered with single datafile", func() {
 			*singleDataFile = true
 			*isResizeRestore = false

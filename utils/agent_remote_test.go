@@ -209,7 +209,7 @@ var _ = Describe("agent remote", func() {
 		}
 		wakeCommand := func(nextSlot string, tocFile string) string {
 			return fmt.Sprintf(`(while [[ -p "%[1]s" ]]; do timeout 10 bash -c '[[ ! -p "%[1]s" ]] || : > "%[1]s"' && break; `+
-				`%[2]s || exit 1; sleep 1; done)`, nextSlot, helperRunning(tocFile))
+				`[[ -p "%[1]s" ]] || break; %[2]s || exit 1; sleep 1; done)`, nextSlot, helperRunning(tocFile))
 		}
 		waitCommand := func(tocFile string, errorFile string) string {
 			return fmt.Sprintf(`(while [[ ! -f "%[1]s" && ! -f "%[2]s" ]]; do `+

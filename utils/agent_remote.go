@@ -274,8 +274,10 @@ func FinishSlotBackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, n
  */
 func FinishSlotBackupHelperCommands(nextSlot string, tocFile string, errorFile string) (string, string) {
 	helperRunning := backupHelperRunningCommand(tocFile)
-	// Once the pipe of the slot is gone, the helper has read it
-	wake := fmt.Sprintf(`(while [[ -p "%[1]s" ]]; do timeout 10 bash -c '[[ ! -p "%[1]s" ]] || : > "%[1]s"' && break; %[2]s || exit 1; sleep 1; done)`, nextSlot, helperRunning)
+	// Once the pipe of the slot is gone, the helper has read it.  It is checked again
+	// after a timeout, which may have come just as the helper read the slot, so that a
+	// helper that has then ended its data file and exited does not fail the backup.
+	wake := fmt.Sprintf(`(while [[ -p "%[1]s" ]]; do timeout 10 bash -c '[[ ! -p "%[1]s" ]] || : > "%[1]s"' && break; [[ -p "%[1]s" ]] || break; %[2]s || exit 1; sleep 1; done)`, nextSlot, helperRunning)
 	wait := fmt.Sprintf(`(while [[ ! -f "%[1]s" && ! -f "%[2]s" ]]; do %[3]s || break; sleep 1; done; ls "%[1]s")`, tocFile, errorFile, helperRunning)
 	return wake, wait
 }
