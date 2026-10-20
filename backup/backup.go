@@ -164,6 +164,10 @@ func DoBackup() {
 		}
 
 		backupReport.RestorePlan = PopulateRestorePlan(backupSetTables, targetBackupRestorePlan, dataTables)
+		// Known before the data is backed up, so that the history database records it below
+		if numDataFiles := getNumDataFiles(len(backupSetTables)); numDataFiles > 1 {
+			backupReport.BackupConfig.SingleDataFileCount = numDataFiles
+		}
 	}
 
 	// As soon as all necessary data is available, capture the backup into history database
@@ -393,14 +397,9 @@ func backupData(tables []Table) {
 			compressStr = " --compression-level 0"
 		}
 
-		// With --jobs, each job writes its own data file, so that the tables are backed up in parallel
-		numDataFiles = MustGetFlagInt(options.JOBS)
-		if numDataFiles > len(tables) {
-			numDataFiles = len(tables)
-		}
+		numDataFiles = getNumDataFiles(len(tables))
 		if numDataFiles > 1 {
 			gplog.Verbose("Writing data to %d data files per segment", numDataFiles)
-			backupReport.BackupConfig.SingleDataFileCount = numDataFiles
 		}
 		startDataFileHelpers(numDataFiles, compressStr)
 	}
@@ -414,6 +413,23 @@ func backupData(tables []Table) {
 		pluginConfig.BackupSegmentTOCs(globalCluster, globalFPInfo, numDataFiles)
 	}
 	logCompletionMessage("Data backup")
+}
+
+/*
+ * getNumDataFiles returns the number of data files per segment for the given
+ * number of tables: with --single-data-file, each job writes its own data file, so
+ * that the tables are backed up in parallel, and no data file is left without a
+ * table; 1 without --single-data-file.
+ */
+func getNumDataFiles(numTables int) int {
+	if !MustGetFlagBool(options.SINGLE_DATA_FILE) {
+		return 1
+	}
+	numDataFiles := MustGetFlagInt(options.JOBS)
+	if numDataFiles > numTables {
+		numDataFiles = numTables
+	}
+	return numDataFiles
 }
 
 /*

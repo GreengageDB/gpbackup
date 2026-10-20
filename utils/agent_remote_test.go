@@ -203,13 +203,17 @@ var _ = Describe("agent remote", func() {
 	})
 	Describe("FinishSlotBackupHelpers()", func() {
 		// The commands for the next slot and for the segment TOC of one data file
+		helperRunning := func(tocFile string) string {
+			// Looked up by the arguments in /proc, which are not escaped for the locale as ps prints them
+			return fmt.Sprintf(`grep -slzxFZ -- "%s" /proc/[0-9]*/cmdline | xargs -0r grep -slzxF -- --backup-agent | grep -q .`, tocFile)
+		}
 		wakeCommand := func(nextSlot string, tocFile string) string {
 			return fmt.Sprintf(`(while [[ -p "%[1]s" ]]; do timeout 10 bash -c '[[ ! -p "%[1]s" ]] || : > "%[1]s"' && break; `+
-				`ps ux | grep -F -- "--toc-file %[2]s " | grep -- "[g]pbackup_helper" | grep -q -- "--backup-agent" || exit 1; sleep 1; done)`, nextSlot, tocFile)
+				`%[2]s || exit 1; sleep 1; done)`, nextSlot, helperRunning(tocFile))
 		}
 		waitCommand := func(tocFile string, errorFile string) string {
 			return fmt.Sprintf(`(while [[ ! -f "%[1]s" && ! -f "%[2]s" ]]; do `+
-				`ps ux | grep -F -- "--toc-file %[1]s " | grep -- "[g]pbackup_helper" | grep -q -- "--backup-agent" || break; sleep 1; done; ls "%[1]s")`, tocFile, errorFile)
+				`%[3]s || break; sleep 1; done; ls "%[1]s")`, tocFile, errorFile, helperRunning(tocFile))
 		}
 		It("ends the next slot of a single data file, whose files have no index, and waits for its segment TOC", func() {
 			utils.FinishSlotBackupHelpers(testCluster, fpInfo, []int{3})

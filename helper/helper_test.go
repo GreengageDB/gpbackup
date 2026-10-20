@@ -299,6 +299,24 @@ var _ = Describe("helper tests", func() {
 			Expect(err).To(HaveOccurred())
 		})
 	})
+	Describe("DoCleanup", func() {
+		It("removes the skip files of its helper only, not those of a helper with a longer index", func() {
+			oldPipeFile := *pipeFile
+			DeferCleanup(func() { *pipeFile = oldPipeFile })
+			*pipeFile = fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_pipe1", testDir)
+			ownSkipFile := fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_skip1_100", testDir)
+			otherSkipFile := fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_skip10_200", testDir)
+			DeferCleanup(func() { _ = os.Remove(otherSkipFile) })
+			Expect(os.WriteFile(ownSkipFile, nil, 0644)).To(Succeed())
+			Expect(os.WriteFile(otherSkipFile, nil, 0644)).To(Succeed())
+
+			CleanupGroup.Add(1)
+			DoCleanup()
+			Expect(utils.FileExists(ownSkipFile)).To(BeFalse())
+			// Helper 10 may still be restoring the table its skip file is for
+			Expect(utils.FileExists(otherSkipFile)).To(BeTrue())
+		})
+	})
 	Describe("Check subset flag", func() {
 		It("when restore_subset is off, --on-error-continue is false, compression is not used", func() {
 			pluginConfig.Options["restore_subset"] = "off"

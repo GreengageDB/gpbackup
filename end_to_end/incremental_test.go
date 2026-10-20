@@ -450,6 +450,16 @@ var _ = Describe("End to End incremental tests", func() {
 				assertArtifactsCleaned(fullBackupTimestamp)
 				assertArtifactsCleaned(incremental1Timestamp)
 				assertArtifactsCleaned(incremental2Timestamp)
+
+				// The history database records the number of data files of each backup, 0 for a single one
+				historyDB, err := history.InitializeHistoryDatabase(historyFilePath)
+				Expect(err).ToNot(HaveOccurred())
+				defer historyDB.Close()
+				for timestamp, numDataFiles := range map[string]int{fullBackupTimestamp: 3, incremental1Timestamp: 2, incremental2Timestamp: 0} {
+					backupConfig, err := history.GetBackupConfig(timestamp, historyDB)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(backupConfig.SingleDataFileCount).To(Equal(numDataFiles), timestamp)
+				}
 			})
 			It("Restores from an incremental backup based on a from-timestamp incremental with --copy-queue-size", func() {
 				output := gpbackup(gpbackupPath, backupHelperPath,

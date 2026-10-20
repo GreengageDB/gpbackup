@@ -252,7 +252,8 @@ func DoCleanup() {
 		}
 	}
 
-	skipFiles, _ := filepath.Glob(utils.GetSkipFilename(*pipeFile) + "*")
+	// The skip files of this helper only: those of helper 1 are not those of helper 10
+	skipFiles, _ := filepath.Glob(utils.GetSkipFilename(*pipeFile) + "_*")
 	for _, skipFile := range skipFiles {
 		err := utils.RemoveFileIfExists(skipFile)
 		if err != nil {

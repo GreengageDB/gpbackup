@@ -6,6 +6,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
+	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/GreengageDB/gpbackup/utils"
 
@@ -26,6 +27,31 @@ var _ = Describe("backup internal tests", func() {
 
 			backupData(emptyTableSlice)
 			Expect(string(log.Contents())).To(ContainSubstring("Data backup complete"))
+		})
+	})
+
+	Describe("getNumDataFiles", func() {
+		BeforeEach(func() {
+			DeferCleanup(func() {
+				_ = cmdFlags.Set(options.SINGLE_DATA_FILE, "false")
+				_ = cmdFlags.Set(options.JOBS, "1")
+				cmdFlags.Lookup(options.SINGLE_DATA_FILE).Changed = false
+				cmdFlags.Lookup(options.JOBS).Changed = false
+			})
+		})
+		It("gives a single data file without --single-data-file", func() {
+			_ = cmdFlags.Set(options.JOBS, "4")
+			Expect(getNumDataFiles(10)).To(Equal(1))
+		})
+		It("gives a data file per job with --single-data-file", func() {
+			_ = cmdFlags.Set(options.SINGLE_DATA_FILE, "true")
+			_ = cmdFlags.Set(options.JOBS, "4")
+			Expect(getNumDataFiles(10)).To(Equal(4))
+		})
+		It("gives no more data files than tables", func() {
+			_ = cmdFlags.Set(options.SINGLE_DATA_FILE, "true")
+			_ = cmdFlags.Set(options.JOBS, "4")
+			Expect(getNumDataFiles(3)).To(Equal(3))
 		})
 	})
 

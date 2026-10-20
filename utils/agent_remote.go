@@ -282,10 +282,18 @@ func FinishSlotBackupHelperCommands(nextSlot string, tocFile string, errorFile s
 
 /*
  * A command that succeeds while the gpbackup_helper backing up to the data file of
- * the given segment TOC runs.  The path is matched as a fixed string, and the
- * bracket keeps the pattern of the helper from matching the command itself.
+ * the given segment TOC runs.  On Linux, it looks for a process with both the path
+ * and --backup-agent among its arguments in /proc, as ps prints the bytes of a
+ * path that are not ASCII as ? in the C locale of a command over ssh.  The command
+ * itself has the path in an argument of its own only in its first grep, which does
+ * not have --backup-agent.  Elsewhere the path is matched in the output of ps as a
+ * fixed string, and the bracket keeps the pattern of the helper from matching the
+ * command itself.
  */
 func backupHelperRunningCommand(tocFile string) string {
+	if runtime.GOOS == "linux" {
+		return fmt.Sprintf(`grep -slzxFZ -- "%s" /proc/[0-9]*/cmdline | xargs -0r grep -slzxF -- --backup-agent | grep -q .`, tocFile)
+	}
 	return fmt.Sprintf(`ps ux | grep -F -- "--toc-file %s " | grep -- "[g]pbackup_helper" | grep -q -- "--backup-agent"`, tocFile)
 }
 
