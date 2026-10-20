@@ -15,4 +15,6 @@ WHERE (i.indisunique OR i.indisprimary)
   AND p.nspname NOT LIKE 'pg_temp_%'
   AND p.nspname NOT LIKE 'pg_toast%'
   AND p.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')
+  AND p.nspname::pg_catalog.text <> ALL($1::pg_catalog.text[])
+  AND p.oid NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e')
 ORDER BY schema_name, table_name, index_name;

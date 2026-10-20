@@ -1,5 +1,5 @@
 CREATE OR REPLACE FUNCTION pg_temp.data_type_checks(base_oids regtype[])
-RETURNS TABLE (nspname name, relname name, attname name)
+RETURNS TABLE (nspname name, relname name, attname name, root_nspname name)
 AS $function$
 DECLARE
     result_oids regtype[];
@@ -43,15 +43,25 @@ BEGIN
     END LOOP;
 
     RETURN QUERY
-    SELECT n.nspname, c.relname, a.attname
+    SELECT n.nspname, c.relname, a.attname, COALESCE(root_namespace.nspname, n.nspname)
     FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
     JOIN pg_catalog.pg_attribute a ON c.oid = a.attrelid
+    LEFT JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid
+    LEFT JOIN pg_catalog.pg_partition_rule child_rule
+      ON child_rule.parchildrelid = COALESCE(i.indrelid, c.oid)
+    LEFT JOIN pg_catalog.pg_partition root_partition
+      ON root_partition.oid = child_rule.paroid
+    LEFT JOIN pg_catalog.pg_class root_relation
+      ON root_relation.oid = root_partition.parrelid
+    LEFT JOIN pg_catalog.pg_namespace root_namespace
+      ON root_namespace.oid = root_relation.relnamespace
     WHERE NOT a.attisdropped
       AND a.atttypid = ANY(result_oids)
       AND c.relkind IN ('r', 'm', 'i')
       AND n.nspname NOT LIKE 'pg_temp_%'
       AND n.nspname NOT LIKE 'pg_toast%'
-      AND n.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog');
+      AND n.nspname NOT IN ('gp_toolkit', 'information_schema', 'pg_aoseg', 'pg_bitmapindex', 'pg_catalog')
+      AND COALESCE(root_relation.oid, i.indrelid, c.oid) NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e');
 END;
 $function$ LANGUAGE plpgsql;

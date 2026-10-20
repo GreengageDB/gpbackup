@@ -53,6 +53,7 @@ var _ = Describe("checkmigrate/validate tests", func() {
 			Entry("zero target port", "--target-host localhost --target-port 0", false),
 			Entry("negative target port", "--target-host localhost --target-port -1", false),
 			Entry("target port above maximum", "--target-host localhost --target-port 65536", false),
+			Entry("repeated exclude schema flags", "--exclude-schema madlib -N arenadata_toolkit", true),
 			Entry("debug flag", "--debug", true),
 			Entry("quiet flag", "--quiet", true),
 			Entry("verbose flag", "--verbose", true),

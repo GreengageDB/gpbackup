@@ -7,4 +7,5 @@ FROM pg_temp.data_type_checks(
         'pg_catalog.tinterval'::regtype
     ]
 )
+WHERE root_nspname::pg_catalog.text <> ALL($1::pg_catalog.text[])
 ORDER BY nspname, relname, attname;

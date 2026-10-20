@@ -350,6 +350,43 @@ func TestSourceChecksIgnoreEmptyResults(t *testing.T) {
 	}
 }
 
+func TestSourceChecksBindExcludedSchemas(t *testing.T) {
+	excludedSchemaCases := []struct {
+		name                string
+		excludedSchemaNames []string
+		expectedArgument    string
+	}{
+		{name: "listed schemas", excludedSchemaNames: []string{"madlib", "arenadata_toolkit"}, expectedArgument: "{madlib,arenadata_toolkit}"},
+		{name: "no schemas", excludedSchemaNames: nil, expectedArgument: "{}"},
+	}
+	requiredLibraryCase := sourceCheckTestCase{
+		name:  "required libraries",
+		query: requiredLibraryQuery,
+		check: func(connection *dbconn.DBConn) (int, error) {
+			return checkRequiredLibraries(connection, nil, make(map[string]bool))
+		},
+		columns: []string{"library_name"},
+	}
+	for _, excludedSchemaCase := range excludedSchemaCases {
+		for _, testCase := range append(append([]sourceCheckTestCase(nil), sourceCheckTestCases...), requiredLibraryCase) {
+			t.Run(excludedSchemaCase.name+"/"+testCase.name, func(t *testing.T) {
+				connection, mock, _ := setupCheckTest(t)
+				excludedSchemaNames = excludedSchemaCase.excludedSchemaNames
+				t.Cleanup(func() {
+					excludedSchemaNames = nil
+				})
+				mock.ExpectQuery(regexp.QuoteMeta(testCase.query)).
+					WithArgs(excludedSchemaCase.expectedArgument).
+					WillReturnRows(rowsForCheck(testCase, false))
+
+				if _, err := testCase.check(connection); err != nil {
+					t.Fatalf("The check returned an error with %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestRequiredLibrariesReportsEveryFailedLoad(t *testing.T) {
 	sourceConnection, sourceMock, _ := setupCheckTest(t)
 	targetConnection, targetMock, _, stderr, _ := testhelper.SetupTestEnvironment()
@@ -642,6 +679,55 @@ func TestSourceChecksUseNamespaceFilters(t *testing.T) {
 			!strings.Contains(query, "child_namespace.nspname NOT IN") {
 			t.Fatalf("The partition check does not filter the child namespace in %q", query)
 		}
+		if strings.Contains(query, "child_namespace.nspname::pg_catalog.text <> ALL($1::pg_catalog.text[])") {
+			t.Fatalf("The partition check skips a partition that gpbackup backs up with its root in %q", query)
+		}
+	}
+	if !strings.Contains(missingAOOptionQuery, "root_namespace.nspname::pg_catalog.text <> ALL($1::pg_catalog.text[])") {
+		t.Fatal("The AO option check does not filter excluded schemas by the root table")
+	}
+}
+
+func TestSourceChecksUseExcludedSchemaFilter(t *testing.T) {
+	queries := []string{
+		multiColumnListPartitionQuery,
+		plpython2DependentFunctionQuery,
+		removedOperatorViewQuery,
+		removedFunctionViewQuery,
+		removedTypeViewQuery,
+		removedDataTypeQuery,
+		missingAOOptionQuery,
+		restrictedExecuteOnFunctionQuery,
+		incompletePartitionIndexQuery,
+		incompatibleRangePartitionQuery,
+		statementTriggerQuery,
+		requiredLibraryQuery,
+	}
+	for _, query := range queries {
+		if !strings.Contains(query, "nspname::pg_catalog.text <> ALL($1::pg_catalog.text[])") {
+			t.Fatalf("The source check does not filter excluded schemas in %q", query)
+		}
+	}
+}
+
+func TestSourceChecksSkipExtensionMembers(t *testing.T) {
+	queries := []string{
+		multiColumnListPartitionQuery,
+		plpython2DependentFunctionQuery,
+		removedOperatorViewQuery,
+		removedFunctionViewQuery,
+		removedTypeViewQuery,
+		migrationCheckSetupTypesQuery,
+		missingAOOptionQuery,
+		restrictedExecuteOnFunctionQuery,
+		incompletePartitionIndexQuery,
+		incompatibleRangePartitionQuery,
+		statementTriggerQuery,
+	}
+	for _, query := range queries {
+		if !strings.Contains(query, "NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e')") {
+			t.Fatalf("The source check does not skip extension members in %q", query)
+		}
 	}
 }
 
@@ -652,8 +738,11 @@ func TestRequiredLibrariesIncludePersistentExtensionOwnedFunctions(t *testing.T)
 	if !strings.Contains(requiredLibraryQuery, "p.oid >= 16384") {
 		t.Fatal("The required library check does not select user-defined functions")
 	}
-	if strings.Contains(requiredLibraryQuery, "dependency.deptype = 'e'") {
+	if strings.Contains(requiredLibraryQuery, "p.oid NOT IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e')") {
 		t.Fatal("The required library check excludes extension-owned functions")
+	}
+	if !strings.Contains(requiredLibraryQuery, "OR p.oid IN (SELECT objid FROM pg_catalog.pg_depend WHERE deptype = 'e')") {
+		t.Fatal("The required library check skips extension-owned functions in excluded schemas")
 	}
 	for _, schemaPattern := range []string{"pg_temp_%", "pg_toast%"} {
 		if !strings.Contains(requiredLibraryQuery, schemaPattern) {
@@ -881,6 +970,7 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 	bootstrapSourceConnection = connection
 	targetConnection = nil
 	shouldScrapeDatabaseNames = true
+	excludedSchemaNames = []string{"madlib", "arenadata_toolkit"}
 	originalCreateDBConn := createDBConn
 	createDBConn = func(dbName, username, host string, port int) *dbconn.DBConn {
 		applicationConnection.DBName = dbName
@@ -893,6 +983,7 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 	t.Cleanup(func() {
 		bootstrapSourceConnection = nil
 		shouldScrapeDatabaseNames = false
+		excludedSchemaNames = nil
 		createDBConn = originalCreateDBConn
 	})
 
@@ -942,7 +1033,8 @@ func TestDoCheckMigrateChecksEverySourceDatabase(t *testing.T) {
 		"  completed database checks:        22\n" +
 		"  failed database checks:            0\n" +
 		"  unavailable database checks:       0\n" +
-		"  findings:                          2"
+		"  findings:                          2\n" +
+		"  excluded schemas:              \"madlib\", \"arenadata_toolkit\""
 	if !strings.Contains(output, expectedSummary) {
 		t.Fatalf("The multi-database run printed an unexpected summary in %q", output)
 	}
@@ -1053,6 +1145,9 @@ func TestDoCheckMigrateContinuesAfterFinding(t *testing.T) {
 	}
 	if !strings.Contains(string(stderr.Contents()), firstCheck.expectedObjects[0]) {
 		t.Fatalf("The finding run did not print the affected object in %q", stderr.Contents())
+	}
+	if !strings.Contains(string(stderr.Contents()), "\n  excluded schemas:              -") {
+		t.Fatalf("The finding run did not print an empty excluded schema list in %q", stderr.Contents())
 	}
 }
 
