@@ -11,7 +11,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gpbackup/utils"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 	"gopkg.in/yaml.v2"
 )
 
@@ -145,15 +145,6 @@ func InitializeHistoryDatabase(historyDBPath string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	// A database created by an earlier version has no column for the number of data
-	// files, which another gpbackup may be adding at the same time
-	_, err = tx.Exec("ALTER TABLE backups ADD COLUMN single_data_file_count INT;")
-	if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-		tx.Rollback()
-		db.Close()
-		return nil, err
-	}
-
 	createAuxTableQuery := `
 		CREATE TABLE IF NOT EXISTS %s (
 			timestamp TEXT NOT NULL,
@@ -206,7 +197,44 @@ func InitializeHistoryDatabase(historyDBPath string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+
+	err = addSingleDataFileCountColumn(db)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+/*
+ * addSingleDataFileCountColumn adds the column for the number of data files to the
+ * backups table of a database created by an earlier version, which another
+ * gpbackup or gprestore may be adding at the same time.  A database that has the
+ * column is not written to.  The column is added on its own, outside of the
+ * transaction above: in a transaction that has read the database, SQLite fails a
+ * write at once with "database is locked" while another connection writes,
+ * instead of waiting for it.  A database that cannot be written to is used without
+ * the column, as by an earlier version.
+ */
+func addSingleDataFileCountColumn(db *sql.DB) error {
+	hasColumn, err := hasSingleDataFileCountColumn(db)
+	if err != nil || hasColumn {
+		return err
+	}
+	_, err = db.Exec("ALTER TABLE backups ADD COLUMN single_data_file_count INT;")
+	// The column may have been added in the meantime, or the database may be read-only
+	var sqliteErr sqlite3.Error
+	if err == nil || strings.Contains(err.Error(), "duplicate column name") ||
+		(errors.As(err, &sqliteErr) && sqliteErr.Code == sqlite3.ErrReadonly) {
+		return nil
+	}
+	return err
+}
+
+func hasSingleDataFileCountColumn(db *sql.DB) (bool, error) {
+	var numColumns int
+	err := db.QueryRow("SELECT count(*) FROM pragma_table_info('backups') WHERE name = 'single_data_file_count';").Scan(&numColumns)
+	return numColumns > 0, err
 }
 
 func CurrentTimestamp() string {
@@ -306,14 +334,22 @@ func GetMainBackupInfo(timestamp string, historyDB *sql.DB) (BackupConfig, error
 	// TODO -- consider passing in a tx instead so that aux tables are coherent with main backups
 	// table. Need to confirm this is possible with sqlite. Unclear if we ever pull in and use aux
 	// table info, so it may not be needed.
+	// A read-only database of an earlier version has no column for the number of data files
+	singleDataFileCountColumn := "single_data_file_count"
+	hasColumn, err := hasSingleDataFileCountColumn(historyDB)
+	if err != nil {
+		return BackupConfig{}, err
+	} else if !hasColumn {
+		singleDataFileCountColumn = "NULL"
+	}
 	backupQuery := fmt.Sprintf(`
 		SELECT timestamp, backup_dir, backup_version, compressed, compression_type, database_name,
 			database_version, segment_count, data_only, date_deleted, exclude_schema_filtered,
 			exclude_table_filtered, include_schema_filtered, include_table_filtered, incremental,
 			leaf_partition_data, metadata_only, plugin, plugin_version, single_data_file, end_time,
-			without_globals, with_statistics, status, single_data_file_count
+			without_globals, with_statistics, status, %s
 		FROM backups WHERE timestamp = '%s'`,
-		timestamp)
+		singleDataFileCountColumn, timestamp)
 	backupRow := historyDB.QueryRow(backupQuery)
 
 	var backupConfig BackupConfig
@@ -331,7 +367,7 @@ func GetMainBackupInfo(timestamp string, historyDB *sql.DB) (BackupConfig, error
 	var isWithStatistics int
 	// Backups recorded by an earlier version have no number of data files
 	var singleDataFileCount sql.NullInt64
-	err := backupRow.Scan(
+	err = backupRow.Scan(
 		&backupConfig.Timestamp, &backupConfig.BackupDir, &backupConfig.BackupVersion,
 		&isCompressed, &backupConfig.CompressionType, &backupConfig.DatabaseName,
 		&backupConfig.DatabaseVersion, &backupConfig.SegmentCount, &isDataOnly,
