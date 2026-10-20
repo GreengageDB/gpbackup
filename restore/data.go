@@ -296,10 +296,11 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	 * holding these locks for the whole COPY in several connections at once could
 	 * fill the lock table.
 	 *
-	 * With --single-data-file, each table is restored in a transaction, which takes
-	 * its locks in the order of the data file, as described at DataFileGroups.  On
-	 * GPDB 7, the COPY into a partition locks all its ancestors until the end of
-	 * its transaction, so the transaction locks them in its turn as well.
+	 * With --single-data-file, each table is restored in a transaction, which begins
+	 * and truncates its table in the order of the data file, as described at
+	 * DataFileGroups.  On GPDB 7, the COPY into a partition locks all its ancestors
+	 * until the end of its transaction, so the transaction locks them in its turn as
+	 * well.
 	 */
 	truncateTable := MustGetFlagBool(options.INCREMENTAL) || MustGetFlagBool(options.TRUNCATE_TABLE)
 	groups.OrderTransactions = backupConfig.SingleDataFile
@@ -650,19 +651,28 @@ func HelperIdx(whichConn int) []int {
  * full group restore nothing.
  *
  * With OrderTransactions, the transactions that restore the tables of each data
- * file take their turns in the order of the file: each one begins, takes its locks
- * and truncates its table once the transactions of the tables before it have done
- * so, or the tables are skipped.  The transaction of a table holds its locks until
- * its data is restored, while its COPY waits for the helper to restore the tables
- * before it.  A connection that locked its table ahead of them could so hold its
- * lock while another session that has read one of the tables before it waits for
- * this lock, and the TRUNCATE of that table for the session: the database cannot
- * see the wait through the helper, so the restore and the session would wait for
- * good.  Taking the locks in the order of the file, the order in which the helper
- * restores the tables, leaves no such cycle.  Neither do resource groups, as a
- * transaction waits for a slot of its resource group as it begins, after the
- * transactions of the tables before it have theirs, so that the helper never waits
- * for a table whose transaction waits for a slot.
+ * file take their turns in the order of the file: each one begins, locks the
+ * ancestors of a partition on GPDB 7, and truncates its table once the
+ * transactions of the tables before it have done so, or the tables are skipped.
+ * The transaction of a table holds its locks until its data is restored, while
+ * its COPY waits for the helper to restore the tables before it.  A connection
+ * that truncated its table ahead of them could so hold its lock while another
+ * session that has read one of the tables before it waits for this lock, and the
+ * TRUNCATE of that table for the session: the database cannot see the wait
+ * through the helper, so the restore and the session would wait for good.  Taking
+ * these locks in the order of the file, the order in which the helper restores the
+ * tables, leaves no such cycle.  Neither do resource groups, as a transaction
+ * waits for a slot of its resource group as it begins, after the transactions of
+ * the tables before it have theirs, so that the helper never waits for a table
+ * whose transaction waits for a slot.
+ *
+ * A table that is not truncated takes its own lock with its COPY, after its turn,
+ * as before.  A session that locks a table of a data file in SHARE mode and then
+ * waits for a later one, whose COPY holds its lock and waits for the helper, can so
+ * still wait in a cycle through the helper.  Taking that lock in the turn would
+ * close it, but a LOCK is dispatched to the segments and would wait there for any
+ * lock of the table on a single segment, which the COPY does not reach while it
+ * fails on another segment.
  */
 type DataFileGroups struct {
 	mutex            sync.Mutex

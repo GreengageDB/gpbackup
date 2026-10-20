@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	path "path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -186,6 +187,7 @@ func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, 
 	termConn := dbconn.NewDBConnFromEnvironment("postgres")
 	termConn.MustConnect(1)
 	defer termConn.Close()
+	BypassResourceGroup(termConn)
 
 	if termConn.Version.Before("6") {
 		pidCol = "procpid"
@@ -224,9 +226,78 @@ func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, 
 		case <-tickerTerminate.C:
 			termConn.MustExec(termQuery)
 		case <-timeoutReached:
-			gplog.Warn("Timeout of %ds reached while waiting for %s COPY command(s) to complete.", timeout, count)
+			gplog.Warn("Timeout of %ds reached while waiting for %s COPY command(s) to complete.", int(timeout.Seconds()), count)
 			return
 		}
+	}
+}
+
+/*
+ * BypassResourceGroup lets the queries of a connection that cleans up after
+ * gpbackup or gprestore run without a slot of its resource group, whose slots
+ * the sessions it cleans up may hold.  The setting is not known to earlier
+ * versions, which have no resource groups to bypass.
+ */
+func BypassResourceGroup(conn *dbconn.DBConn) {
+	_, _ = conn.Exec("SET gp_resource_group_bypass = on")
+}
+
+/*
+ * TerminateSessions terminates the sessions whose application name starts with
+ * appName, such as those of a failed restore that wait for a lock, which the
+ * cleanup of its COPY commands does not find.
+ */
+func TerminateSessions(appName string) {
+	termConn := dbconn.NewDBConnFromEnvironment("postgres")
+	err := termConn.Connect(1)
+	if err != nil {
+		gplog.Warn("Could not connect to terminate the sessions %s: %v", appName, err)
+		return
+	}
+	defer termConn.Close()
+	BypassResourceGroup(termConn)
+	pidCol := "pid"
+	if termConn.Version.Before("6") {
+		pidCol = "procpid"
+	}
+	_, err = termConn.Exec(fmt.Sprintf(`SELECT pg_terminate_backend(%[1]s) FROM pg_stat_activity
+	WHERE application_name LIKE '%[2]s%%' AND %[1]s <> pg_backend_pid()`, pidCol, appName))
+	if err != nil {
+		gplog.Warn("Could not terminate the sessions %s: %v", appName, err)
+	}
+}
+
+/*
+ * ValidateResourceGroupConcurrency fails if, with resource groups, the resource
+ * group of the role of the connections allows fewer transactions at once than the
+ * numTransactions that the program holds open at once.  Each transaction holds a
+ * slot of the group until it ends, so the transaction beyond the concurrency of
+ * the group would wait for a slot for good.  The flags that give the number of
+ * transactions are named in the error.
+ */
+func ValidateResourceGroupConcurrency(connectionPool *dbconn.DBConn, numTransactions int, program string, flags string) {
+	resourceManager, err := dbconn.SelectString(connectionPool, "SELECT current_setting('gp_resource_manager') AS string")
+	if err != nil || !strings.HasPrefix(resourceManager, "group") {
+		return
+	}
+	group := struct {
+		Name        string
+		Concurrency string
+	}{}
+	err = connectionPool.Get(&group, `SELECT g.rsgname AS name, c.value AS concurrency
+	FROM pg_catalog.pg_roles r
+		JOIN pg_catalog.pg_resgroup g ON g.oid = r.rolresgroup
+		JOIN pg_catalog.pg_resgroupcapability c ON c.resgroupid = g.oid AND c.reslimittype = 1
+	WHERE r.rolname = current_user`)
+	if err != nil {
+		gplog.Verbose("Could not find the concurrency of the resource group of the role: %v", err)
+		return
+	}
+	concurrency, err := strconv.Atoi(strings.TrimSpace(group.Concurrency))
+	if err == nil && numTransactions > concurrency {
+		gplog.Fatal(errors.Errorf("%s holds %d transactions open at once, but resource group %s allows %d (its CONCURRENCY), "+
+			"so it would wait for a slot of the group for good. Lower %s, or raise the CONCURRENCY of the resource group.",
+			program, numTransactions, group.Name, concurrency, flags), "")
 	}
 }
 

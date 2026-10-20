@@ -1,6 +1,7 @@
 package utils_test
 
 import (
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/utils"
 
@@ -92,6 +93,32 @@ var _ = Describe("utils/util tests", func() {
 		It("does not panic if GPDB version is at least 6.0.0", func() {
 			testhelper.SetDBVersion(connectionPool, "6.0.0")
 			utils.ValidateGPDBVersionCompatibility(connectionPool)
+		})
+	})
+	Describe("ValidateResourceGroupConcurrency", func() {
+		expectResourceManager := func(resourceManager string) {
+			mock.ExpectQuery(`SELECT current_setting\('gp_resource_manager'\)`).WillReturnRows(sqlmock.NewRows([]string{"string"}).AddRow(resourceManager))
+		}
+		expectGroup := func(name string, concurrency string) {
+			mock.ExpectQuery(`FROM pg_catalog.pg_roles r`).WillReturnRows(sqlmock.NewRows([]string{"name", "concurrency"}).AddRow(name, concurrency))
+		}
+		It("fails if the resource group of the role allows fewer transactions at once", func() {
+			expectResourceManager("group")
+			expectGroup("admin_group", "10")
+			defer testhelper.ShouldPanicWithMessage("gpbackup holds 17 transactions open at once, but resource group admin_group allows 10 (its CONCURRENCY), " +
+				"so it would wait for a slot of the group for good. Lower --jobs or --copy-queue-size, or raise the CONCURRENCY of the resource group.")
+			utils.ValidateResourceGroupConcurrency(connectionPool, 17, "gpbackup", "--jobs or --copy-queue-size")
+		})
+		It("passes if the resource group of the role allows as many transactions at once", func() {
+			expectResourceManager("group-v2")
+			expectGroup("admin_group", "10")
+			utils.ValidateResourceGroupConcurrency(connectionPool, 10, "gpbackup", "--jobs or --copy-queue-size")
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+		It("does not check without resource groups", func() {
+			expectResourceManager("queue")
+			utils.ValidateResourceGroupConcurrency(connectionPool, 100, "gprestore", "--jobs")
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
 		})
 	})
 	Describe("ValidateCompressionTypeAndLevel", func() {

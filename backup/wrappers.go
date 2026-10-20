@@ -70,6 +70,8 @@ func initializeConnectionPool(timestamp string) {
 	connectionPool.MustConnect(numConns)
 
 	utils.ValidateGPDBVersionCompatibility(connectionPool)
+	// Each connection holds its transaction until the backup is done
+	utils.ValidateResourceGroupConcurrency(connectionPool, numConns, "gpbackup", "--jobs or --copy-queue-size")
 	InitializeMetadataParams(connectionPool)
 	// Begin transactions, initialize the synchronized snapshot, and set session GUCs
 	for connNum := 0; connNum < connectionPool.NumConns; connNum++ {

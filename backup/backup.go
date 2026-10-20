@@ -639,7 +639,9 @@ func DoCleanup(backupFailed bool) {
 	// failure; in either case, update the end time to the actual value. Between our signal handler and recovering
 	// panics, there should be no way for gpbackup to exit that leaves the entry in the initial status.
 
-	if !MustGetFlagBool(options.NO_HISTORY) {
+	// Before the backup report and the paths of the backup exist, as when the setup fails, there is no
+	// entry to update, and the history database would be looked for in the current directory
+	if !MustGetFlagBool(options.NO_HISTORY) && backupReport != nil && globalFPInfo.Timestamp != "" {
 		var statusString string
 		if backupFailed {
 			statusString = history.BackupStatusFailed
@@ -670,6 +672,7 @@ func cancelBlockedQueries(timestamp string) {
 	conn := dbconn.NewDBConnFromEnvironment(MustGetFlagString(options.DBNAME))
 	conn.MustConnect(1)
 	defer conn.Close()
+	utils.BypassResourceGroup(conn)
 
 	// Query for all blocked queries
 	pids := make([]int64, 0)

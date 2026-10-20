@@ -326,8 +326,12 @@ func restorePredata(metadataFilename string) (int, map[string][]toc.CoordinatorD
 	progressBar := utils.NewProgressBar(len(schemaStatements)+len(statements), "Pre-data objects restored: ", utils.PB_VERBOSE)
 	progressBar.Start()
 
-	RestoreSchemas(schemaStatements, progressBar)
 	executeInParallel := GetNumMetadataConns() > 1 && !MustGetFlagBool(options.ON_ERROR_CONTINUE)
+	if executeInParallel {
+		// Each tier below holds a transaction on each connection but the first until its statements are done
+		utils.ValidateResourceGroupConcurrency(connectionPool, GetNumMetadataConns()-1, "gprestore", "--jobs")
+	}
+	RestoreSchemas(schemaStatements, progressBar)
 	if executeInParallel {
 		// Batch statements by tier to allow more aggressive parallelization by cohort downstream.
 		first, tiered, last := BatchPredataStatements(statements)
@@ -348,7 +352,7 @@ func restorePredata(metadataFilename string) (int, map[string][]toc.CoordinatorD
 			txMutex.Lock()
 			for connNum := 1; connNum < GetNumMetadataConns(); connNum++ {
 				// The name of the restore, which DoCleanup looks for, with the number of the connection
-				connectionPool.MustExec(fmt.Sprintf("SET application_name TO 'gprestore_%s_%s_%d'", MustGetFlagString(options.TIMESTAMP), restoreStartTime, connNum), connNum)
+				connectionPool.MustExec(fmt.Sprintf("SET application_name TO 'gprestore_%s_%s_%d'", globalFPInfo.Timestamp, restoreStartTime, connNum), connNum)
 				connectionPool.MustBegin(connNum)
 			}
 			txMutex.Unlock()
@@ -890,6 +894,10 @@ func DoCleanup(restoreFailed bool) {
 	}()
 
 	gplog.Info("Beginning cleanup")
+	if restoreFailed && connectionPool != nil && globalFPInfo.Timestamp != "" {
+		// Sessions of the restore that wait for a lock, such as a TRUNCATE, would stay in its queue
+		utils.TerminateSessions(fmt.Sprintf("gprestore_%s_%s", globalFPInfo.Timestamp, restoreStartTime))
+	}
 	if backupConfig != nil && (backupConfig.SingleDataFile || MustGetFlagBool(options.RESIZE_CLUSTER)) {
 		fpInfoList := GetBackupFPInfoListFromRestorePlan()
 		for _, fpInfo := range fpInfoList {
@@ -899,8 +907,8 @@ func DoCleanup(restoreFailed bool) {
 
 			// All COPY commands should end on their own for a successful restore, however we cleanup any hanging COPY sessions here as a precaution
 			// The connections are named after the restored backup, also for the COPY commands of the
-			// earlier backups of an incremental chain
-			utils.TerminateHangingCopySessions(fpInfo, fmt.Sprintf("gprestore_%s_%s", MustGetFlagString(options.TIMESTAMP), restoreStartTime), cleanupTimeout, 5*time.Second)
+			// earlier backups of an incremental chain, and its timestamp may come from --backup-dir
+			utils.TerminateHangingCopySessions(fpInfo, fmt.Sprintf("gprestore_%s_%s", globalFPInfo.Timestamp, restoreStartTime), cleanupTimeout, 5*time.Second)
 
 			// Ensure we don't leave anything behind on the segments
 			utils.CleanUpSegmentHelperProcesses(globalCluster, fpInfo, "restore", cleanupTimeout)
