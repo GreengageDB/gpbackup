@@ -2150,6 +2150,29 @@ var _ = Describe("backup and restore end to end tests", func() {
 		})
 	})
 	Describe("Restore of a single data file while a table waits for a lock", func() {
+		BeforeEach(func() {
+			// gprestore runs here without the wrapper that installs the gpbackup_helper of its version
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
+			// Nor are skip files created, or tables distributed by an enum found, before GPDB 6
+			testutils.SkipIfBefore6(backupConn)
+		})
+		// Whether the log of the gprestore of the given process has a line of the given pattern after its prefix
+		restoreLogMatches := func(pid int, pattern string) bool {
+			restoreLogs, _ := path.Glob(path.Join(os.Getenv("HOME"), "gpAdminLogs/gprestore_*"))
+			Expect(restoreLogs).ToNot(BeEmpty())
+			restoreLog, err := os.ReadFile(restoreLogs[len(restoreLogs)-1])
+			Expect(err).ToNot(HaveOccurred())
+			return regexp.MustCompile(fmt.Sprintf(`:0*%d-%s`, pid, pattern)).Match(restoreLog)
+		}
+		// Interrupts a restore that a failure leaves running, so that its cleanup runs
+		interruptIfRunning := func(restoreCmd *exec.Cmd) {
+			if restoreCmd.ProcessState == nil {
+				_ = restoreCmd.Process.Signal(os.Interrupt)
+				_ = restoreCmd.Wait()
+			}
+		}
 		// The number of the given sessions of gprestore that run or wait as given
 		countRestoreSessions := func(condition string) int {
 			var count int
@@ -2175,9 +2198,6 @@ var _ = Describe("backup and restore end to end tests", func() {
 			}
 		}
 		It("does not take the tables beyond the pipes of the helper after tables that fail at once with --on-error-continue", func() {
-			if backupConn.Version.Before("6") {
-				Skip("Skip files are created on GPDB 6 and later only")
-			}
 			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA run_ahead")
 			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA run_ahead CASCADE")
 			// In the data file in this order, the largest table first
@@ -2211,15 +2231,18 @@ var _ = Describe("backup and restore end to end tests", func() {
 			var restoreOutput strings.Builder
 			restoreCmd.Stdout, restoreCmd.Stderr = &restoreOutput, &restoreOutput
 			Expect(restoreCmd.Start()).To(Succeed())
-			defer func() { _ = restoreCmd.Process.Kill() }()
+			defer interruptIfRunning(restoreCmd)
 			Eventually(lockWaits("run_ahead", "t1", "RowExclusiveLock"), "30s", "100ms").Should(BeNumerically(">", 0))
 
 			// The helper has created the pipes of two tables ahead of the first one, which waits; the
 			// other connection fails the second table, and does not take the fourth before the first
 			// is restored. Its COPY would wait for its pipe, and fail once the wait timed out
+			Eventually(func() bool {
+				return restoreLogMatches(restoreCmd.Process.Pid, `\[ERROR\]:-Error loading data into table run_ahead\.t2`)
+			}, "30s", "100ms").Should(BeTrue())
 			Consistently(func() int {
 				return countRestoreSessions(`state = 'active' AND query ~ '^COPY run_ahead\.t[45]'`)
-			}, "3s", "100ms").Should(Equal(0))
+			}, "10s", "100ms").Should(Equal(0))
 			lockConn.MustExec("COMMIT")
 
 			Expect(restoreCmd.Wait()).To(HaveOccurred())
@@ -2262,7 +2285,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 			var restoreOutput strings.Builder
 			restoreCmd.Stdout, restoreCmd.Stderr = &restoreOutput, &restoreOutput
 			Expect(restoreCmd.Start()).To(Succeed())
-			defer func() { _ = restoreCmd.Process.Kill() }()
+			defer interruptIfRunning(restoreCmd)
 			Eventually(lockWaits("reorganize_wait", "t0", "AccessExclusiveLock"), "30s", "100ms").Should(BeNumerically(">", 0))
 
 			// The helper is done with the first table once its COPY ends, so the other connection
@@ -2297,7 +2320,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 			var restoreOutput strings.Builder
 			restoreCmd.Stdout, restoreCmd.Stderr = &restoreOutput, &restoreOutput
 			Expect(restoreCmd.Start()).To(Succeed())
-			defer func() { _ = restoreCmd.Process.Kill() }()
+			defer interruptIfRunning(restoreCmd)
 			Eventually(lockWaits("waiting_session", "t", "AccessExclusiveLock"), "30s", "100ms").Should(BeNumerically(">", 0))
 
 			Expect(restoreCmd.Process.Signal(os.Interrupt)).To(Succeed())
@@ -2306,11 +2329,8 @@ var _ = Describe("backup and restore end to end tests", func() {
 			// The session still holds its lock, and no session of the restore waits behind it
 			Eventually(func() int { return countRestoreSessions("true") }, "10s", "100ms").Should(Equal(0))
 			// Nor is the error of the terminated session reported
-			restoreLogs, _ := path.Glob(path.Join(os.Getenv("HOME"), "gpAdminLogs/gprestore_*"))
-			Expect(restoreLogs).ToNot(BeEmpty())
-			restoreLog, err := os.ReadFile(restoreLogs[len(restoreLogs)-1])
-			Expect(err).ToNot(HaveOccurred())
-			Expect(string(restoreLog)).ToNot(MatchRegexp(fmt.Sprintf(`:0*%d-\[CRITICAL\]`, restoreCmd.Process.Pid)))
+			Expect(restoreLogMatches(restoreCmd.Process.Pid, `\[INFO\]:-Cleanup complete`)).To(BeTrue())
+			Expect(restoreLogMatches(restoreCmd.Process.Pid, `\[CRITICAL\]`)).To(BeFalse())
 			lockConn.MustExec("COMMIT")
 
 			Expect(countRows("waiting_session.t")()).To(Equal("1000"))
