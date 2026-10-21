@@ -2,6 +2,7 @@ package restore
 
 import (
 	"fmt"
+	"os"
 	path "path/filepath"
 	"strconv"
 	"strings"
@@ -98,10 +99,20 @@ func GetNumMetadataConns() int {
 	return connectionPool.NumConns
 }
 
+/*
+ * SessionName is the application name of the sessions of the restore of the given
+ * backup that started at the given time, which DoCleanup looks for.  The PID tells
+ * apart the restores of the same backup that start in the same second, so that the
+ * cleanup of one does not terminate the sessions of another.
+ */
+func SessionName(backupTimestamp string, restoreTimestamp string) string {
+	return fmt.Sprintf("gprestore_%s_%s_%d", backupTimestamp, restoreTimestamp, os.Getpid())
+}
+
 func InitializeConnectionPool(backupTimestamp string, restoreTimestamp string, unquotedDBName string) {
 	CreateConnectionPool(unquotedDBName)
 	resizeRestore := MustGetFlagBool(options.RESIZE_CLUSTER)
-	setupQuery := fmt.Sprintf("SET application_name TO 'gprestore_%s_%s';", backupTimestamp, restoreTimestamp)
+	setupQuery := fmt.Sprintf("SET application_name TO '%s';", SessionName(backupTimestamp, restoreTimestamp))
 	setupQuery += `
 SET search_path TO pg_catalog;
 SET gp_default_storage_options='';

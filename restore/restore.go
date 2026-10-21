@@ -314,8 +314,12 @@ func beginTierTransactions() bool {
 	txMutex.Lock()
 	defer txMutex.Unlock()
 	for connNum := 1; connNum < GetNumMetadataConns(); connNum++ {
+		// The cleanup may have terminated the waiting sessions already, so no transaction begins to wait
+		if wasTerminated.Load() {
+			return false
+		}
 		// The name of the restore, which DoCleanup looks for, with the number of the connection
-		_, err := connectionPool.Exec(fmt.Sprintf("SET application_name TO 'gprestore_%s_%s_%d'", globalFPInfo.Timestamp, restoreStartTime, connNum), connNum)
+		_, err := connectionPool.Exec(fmt.Sprintf("SET application_name TO '%s_%d'", SessionName(globalFPInfo.Timestamp, restoreStartTime), connNum), connNum)
 		if err == nil {
 			err = connectionPool.Begin(connNum)
 		}
@@ -914,9 +918,10 @@ func DoCleanup(restoreFailed bool) {
 	}()
 
 	gplog.Info("Beginning cleanup")
-	if restoreFailed && connectionPool != nil && globalFPInfo.Timestamp != "" {
-		// Sessions of the restore that wait for a lock, such as a TRUNCATE, would stay in its queue
-		utils.TerminateWaitingSessions(fmt.Sprintf("gprestore_%s_%s", globalFPInfo.Timestamp, restoreStartTime))
+	// Sessions of the restore that wait for a lock, such as a TRUNCATE, would stay in its queue
+	terminateWaitingSessions := restoreFailed && connectionPool != nil && globalFPInfo.Timestamp != ""
+	if terminateWaitingSessions {
+		utils.TerminateWaitingSessions(SessionName(globalFPInfo.Timestamp, restoreStartTime))
 	}
 	if backupConfig != nil && (backupConfig.SingleDataFile || MustGetFlagBool(options.RESIZE_CLUSTER)) {
 		fpInfoList := GetBackupFPInfoListFromRestorePlan()
@@ -928,7 +933,7 @@ func DoCleanup(restoreFailed bool) {
 			// All COPY commands should end on their own for a successful restore, however we cleanup any hanging COPY sessions here as a precaution
 			// The connections are named after the restored backup, also for the COPY commands of the
 			// earlier backups of an incremental chain, and its timestamp may come from --backup-dir
-			utils.TerminateHangingCopySessions(fpInfo, fmt.Sprintf("gprestore_%s_%s", globalFPInfo.Timestamp, restoreStartTime), cleanupTimeout, 5*time.Second)
+			utils.TerminateHangingCopySessions(fpInfo, SessionName(globalFPInfo.Timestamp, restoreStartTime), cleanupTimeout, 5*time.Second)
 
 			// Ensure we don't leave anything behind on the segments
 			utils.CleanUpSegmentHelperProcesses(globalCluster, fpInfo, "restore", cleanupTimeout)
@@ -940,6 +945,10 @@ func DoCleanup(restoreFailed bool) {
 				gplog.Error(err.Error())
 			}
 		}
+	}
+	if terminateWaitingSessions {
+		// Again for a session that began to wait as the cleanup began, before its connection saw the signal
+		utils.TerminateWaitingSessions(SessionName(globalFPInfo.Timestamp, restoreStartTime))
 	}
 
 	if connectionPool != nil {

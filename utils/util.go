@@ -179,8 +179,8 @@ func InitializeSignalHandler(cleanupFunc func(bool), procDesc string, termFlag *
 
 // TODO: Uniquely identify COPY commands in the multiple data file case to allow terminating sessions
 //
-// The sessions are those whose application name starts with appName, which a
-// connection may follow with a number of its own.
+// The sessions are those whose application name is appName, which a connection
+// may follow with a number of its own.
 func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, timeout time.Duration, interval time.Duration) {
 	gplog.Verbose("Checking for leftover COPY sessions")
 	var pidCol, queryCol string
@@ -199,9 +199,9 @@ func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, 
 
 	copyFileName := fpInfo.GetSegmentPipePathForCopyCommand()
 	fromClause := fmt.Sprintf(`FROM pg_stat_activity
-	WHERE application_name LIKE '%s%%'
+	WHERE %s
 	AND %s LIKE '%%%s%%'
-	AND %s <> pg_backend_pid()`, appName, queryCol, copyFileName, pidCol)
+	AND %s <> pg_backend_pid()`, sessionNameCondition(appName), queryCol, copyFileName, pidCol)
 
 	tickerTerminate := time.NewTicker(interval)
 	tickerCount := time.NewTicker(interval / 5)
@@ -261,12 +261,22 @@ func NewResourceGroupBypassConn(dbname string) *dbconn.DBConn {
 }
 
 /*
- * TerminateWaitingSessions terminates the sessions whose application name starts
- * with appName and that wait for a lock or a slot of their resource group, such
- * as those of a failed restore, which the cleanup of its COPY commands does not
- * find.  Such a session would stay in its queue after the program exits, as it
- * does not see its client go while it waits.  The other sessions end with the
- * program.
+ * The condition that the application name of a session is appName, or appName
+ * followed by "_" and a suffix of its connection, such as its number.  A plain
+ * prefix would also match the sessions of a program whose name only starts with
+ * appName, as with a PID that starts with the PID in appName.
+ */
+func sessionNameCondition(appName string) string {
+	return fmt.Sprintf("(application_name = '%[1]s' OR position('%[1]s_' in application_name) = 1)", appName)
+}
+
+/*
+ * TerminateWaitingSessions terminates the sessions whose application name is
+ * appName, with the suffix of a connection or not, and that wait for a lock or a
+ * slot of their resource group, such as those of a failed restore, which the
+ * cleanup of its COPY commands does not find.  Such a session would stay in its
+ * queue after the program exits, as it does not see its client go while it
+ * waits.  The other sessions end with the program.
  */
 func TerminateWaitingSessions(appName string) {
 	termConn := NewResourceGroupBypassConn("postgres")
@@ -277,14 +287,15 @@ func TerminateWaitingSessions(appName string) {
 	}
 	defer termConn.Close()
 	pidCol := "pid"
-	waiting := "waiting"
+	// Not a session that waits for its synchronous replication, whose transaction is committed already
+	waiting := "waiting AND waiting_reason IN ('lock', 'resgroup')"
 	if termConn.Version.Before("6") {
 		pidCol = "procpid"
 	} else if termConn.Version.AtLeast("7") {
 		waiting = "wait_event_type IN ('Lock', 'ResourceGroup')"
 	}
 	_, err = termConn.Exec(fmt.Sprintf(`SELECT pg_terminate_backend(%[1]s) FROM pg_stat_activity
-	WHERE application_name LIKE '%[2]s%%' AND %[3]s AND %[1]s <> pg_backend_pid()`, pidCol, appName, waiting))
+	WHERE %[2]s AND %[3]s AND %[1]s <> pg_backend_pid()`, pidCol, sessionNameCondition(appName), waiting))
 	if err != nil {
 		gplog.Warn("Could not terminate the waiting sessions %s: %v", appName, err)
 	}
@@ -310,12 +321,19 @@ func ValidateResourceGroupConcurrency(connectionPool *dbconn.DBConn, numSlots in
 /*
  * ResourceGroupConcurrency returns the name and the CONCURRENCY of the resource
  * group of the role of the connections, the number of transactions that the
- * group allows at once.  It returns false without resource groups, or if the
- * group is not found.
+ * group allows at once.  It returns false without resource groups, if the
+ * sessions bypass the group, as with gp_resource_group_bypass set for the database
+ * or the role, so that their transactions take no slots of it, or if the group is
+ * not found.
  */
 func ResourceGroupConcurrency(connectionPool *dbconn.DBConn) (string, int, bool) {
 	resourceManager, err := dbconn.SelectString(connectionPool, "SELECT current_setting('gp_resource_manager') AS string")
 	if err != nil || !strings.HasPrefix(resourceManager, "group") {
+		return "", 0, false
+	}
+	// From pg_settings, as current_setting would fail in a transaction if the setting did not exist
+	bypass, err := dbconn.SelectString(connectionPool, "SELECT setting AS string FROM pg_catalog.pg_settings WHERE name = 'gp_resource_group_bypass'")
+	if err == nil && bypass == "on" {
 		return "", 0, false
 	}
 	group := struct {

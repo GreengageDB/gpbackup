@@ -297,7 +297,11 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	 * A partitioned table, a root or an intermediate level, is truncated on its own
 	 * and with its partitions, as before: its TRUNCATE locks all its partitions, and
 	 * holding these locks for the whole COPY in several connections at once could
-	 * fill the lock table.
+	 * fill the lock table.  As this TRUNCATE is not rolled back, the helper of the
+	 * table is checked for errors first, which the other tables of a stopped helper
+	 * may not have found yet, as when they wait for their turns or locks.  A helper
+	 * that stops after the check, during the COPY of the partitioned table, still
+	 * leaves the table empty.
 	 *
 	 * With --single-data-file, each table is restored in a transaction, which begins
 	 * and truncates its table in the order of the data file, as described at
@@ -397,7 +401,17 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				if !groups.WaitForTurn(ctx, entryIdx) {
 					return // Error somewhere, terminate
 				}
-				if truncateTable && partitioned {
+				if wasTerminated.Load() {
+					// The cleanup may have terminated the waiting sessions already, so the table does not begin to wait
+					dataProgressBar.(*pb.ProgressBar).NotPrint = true
+					cancel()
+					return
+				}
+				if truncateTable && partitioned && (backupConfig.SingleDataFile || resizeCluster) {
+					// The TRUNCATE of a partitioned table is not rolled back, so it is not run once the helper has stopped
+					err = checkAgentErrors(fpInfo, helperIdx)
+				}
+				if err == nil && truncateTable && partitioned {
 					gplog.Verbose("Truncating table %s prior to restoring data", tableName)
 					_, err = connectionPool.Exec(`TRUNCATE `+tableName, whichConn)
 				}
@@ -413,14 +427,17 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				}
 				groups.TurnDone(entryIdx)
 				if err != nil && wasTerminated.Load() {
-					// The cleanup of the terminated restore terminates a session that waits, as for a lock of its table
+					// The cleanup of the terminated restore terminates a session that waits, as for a lock of its table,
+					// and the other connections do not take their next tables either
 					dataProgressBar.(*pb.ProgressBar).NotPrint = true
+					cancel()
 					return
 				}
 				if err != nil {
 					gplog.Error(err.Error())
-					// The COPY of the table is not run, so its helpers are told to skip it
-					if onErrorContinue && connectionPool.Version.AtLeast("6") && (backupConfig.SingleDataFile || resizeCluster) {
+					// The COPY of the table is not run, so its helpers are told to skip it, unless they have stopped
+					if onErrorContinue && connectionPool.Version.AtLeast("6") && (backupConfig.SingleDataFile || resizeCluster) &&
+						!errors.Is(err, utils.AgentErr) {
 						utils.CreateSkipFileOnSegments(entry.Oid, tableName, globalCluster, fpInfo, helperIdx...)
 					}
 				}

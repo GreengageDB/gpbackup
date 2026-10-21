@@ -2,7 +2,9 @@ package end_to_end_test
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -549,17 +551,41 @@ var _ = Describe("Deadlock handling", func() {
 
 		// Block gpbackup while it locks the tables, then in its metadata dump
 		backupConn.MustExec("BEGIN; LOCK TABLE pipe_test.t1 IN ACCESS EXCLUSIVE MODE")
+		// On a failure, the shared connection does not keep its transaction for the next tests,
+		// nor the DROP of the schema above in it
+		committed := false
+		defer func() {
+			if !committed {
+				_, _ = backupConn.Exec("COMMIT")
+			}
+		}()
 		cmd := exec.Command(gpbackupPath, "--dbname", "testdb", "--backup-dir", backupDir,
 			"--single-data-file", "--include-schema", "pipe_test", "--verbose")
-		output := make(chan string)
+		var combinedOutput strings.Builder
+		cmd.Stdout, cmd.Stderr = &combinedOutput, &combinedOutput
+		// Buffered, so that the goroutine ends also if the test fails before it reads the output
+		output := make(chan string, 1)
+		Expect(cmd.Start()).To(Succeed())
 		go func() {
 			defer GinkgoRecover()
-			stdout, _ := cmd.CombinedOutput()
-			output <- string(stdout)
+			_ = cmd.Wait()
+			output <- combinedOutput.String()
+		}()
+		// A gpbackup that a failure leaves waiting for a lock is interrupted, so that its cleanup runs
+		outputRead := false
+		defer func() {
+			if !outputRead {
+				_ = cmd.Process.Signal(os.Interrupt)
+				select {
+				case <-output:
+				case <-time.After(2 * time.Minute):
+				}
+			}
 		}()
 		waitForCount(ungrantedLocks("t1", "AccessShareLock"), 1)
 		anotherConn.MustExec("BEGIN; LOCK TABLE pg_catalog.pg_trigger IN ACCESS EXCLUSIVE MODE")
 		backupConn.MustExec("COMMIT")
+		committed = true
 		waitForCount(ungrantedLocks("pg_trigger", "AccessShareLock"), 1)
 
 		// Queue ACCESS EXCLUSIVE lock requests on the first 3 tables, behind the locks of
@@ -576,6 +602,7 @@ var _ = Describe("Deadlock handling", func() {
 		anotherConn.MustExec("COMMIT")
 
 		stdout := <-output
+		outputRead = true
 		for i := 1; i <= 3; i++ {
 			Expect(stdout).To(ContainSubstring(fmt.Sprintf("[WARNING]:-Worker 1 could not acquire AccessShareLock for table pipe_test.t%d.", i)))
 		}

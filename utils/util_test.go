@@ -99,11 +99,15 @@ var _ = Describe("utils/util tests", func() {
 		expectResourceManager := func(resourceManager string) {
 			mock.ExpectQuery(`SELECT current_setting\('gp_resource_manager'\)`).WillReturnRows(sqlmock.NewRows([]string{"string"}).AddRow(resourceManager))
 		}
+		expectBypass := func(bypass string) {
+			mock.ExpectQuery(`FROM pg_catalog.pg_settings WHERE name = 'gp_resource_group_bypass'`).WillReturnRows(sqlmock.NewRows([]string{"string"}).AddRow(bypass))
+		}
 		expectGroup := func(name string, concurrency string) {
 			mock.ExpectQuery(`FROM pg_catalog.pg_roles r`).WillReturnRows(sqlmock.NewRows([]string{"name", "concurrency"}).AddRow(name, concurrency))
 		}
 		It("fails if the resource group of the role allows fewer transactions at once", func() {
 			expectResourceManager("group")
+			expectBypass("off")
 			expectGroup("admin_group", "10")
 			defer testhelper.ShouldPanicWithMessage("gpbackup needs 11 slots of resource group admin_group at once, but the group has 10 (its CONCURRENCY), " +
 				"so it would wait for a slot of the group for good. Lower --jobs or --copy-queue-size, or raise the CONCURRENCY of the resource group.")
@@ -111,9 +115,23 @@ var _ = Describe("utils/util tests", func() {
 		})
 		It("passes if the resource group of the role allows as many transactions at once", func() {
 			expectResourceManager("group-v2")
+			expectBypass("off")
 			expectGroup("admin_group", "10")
 			utils.ValidateResourceGroupConcurrency(connectionPool, 10, "gpbackup", "--jobs or --copy-queue-size")
 			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+		It("does not check if the sessions bypass the resource group", func() {
+			expectResourceManager("group")
+			expectBypass("on")
+			utils.ValidateResourceGroupConcurrency(connectionPool, 11, "gpbackup", "--jobs or --copy-queue-size")
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+		It("checks if the server has no setting to bypass resource groups", func() {
+			expectResourceManager("group")
+			mock.ExpectQuery(`FROM pg_catalog.pg_settings WHERE name = 'gp_resource_group_bypass'`).WillReturnRows(sqlmock.NewRows([]string{"string"}))
+			expectGroup("admin_group", "10")
+			defer testhelper.ShouldPanicWithMessage("gpbackup needs 11 slots of resource group admin_group at once")
+			utils.ValidateResourceGroupConcurrency(connectionPool, 11, "gpbackup", "--jobs or --copy-queue-size")
 		})
 		It("does not check without resource groups", func() {
 			expectResourceManager("queue")
