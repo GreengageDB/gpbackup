@@ -28,7 +28,6 @@ const (
 	Deferred
 	Complete
 	PG_LOCK_NOT_AVAILABLE = "55P03"
-	ENUM_TYPE_OID         = 3500
 )
 
 /*

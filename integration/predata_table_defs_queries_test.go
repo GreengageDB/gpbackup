@@ -377,6 +377,42 @@ CREATE TABLE public.test_tsvector (
 			Expect(distPolicies[enumLast].DistByEnum).To(BeTrue())
 			Expect(distPolicies[noEnum].DistByEnum).To(BeFalse())
 		})
+		It("returns that a table is distributed by an enum if a column of its distribution key is a domain, an array or a range of an enum", func() {
+			testutils.SkipIfBefore6(connectionPool)
+			// Their hashes are those of the enum labels as well
+			testhelper.AssertQueryRuns(connectionPool, `
+				CREATE TYPE public.dist_enum AS ENUM ('a', 'b');
+				CREATE TYPE public.dist_enum_range AS RANGE (subtype = public.dist_enum);
+				CREATE DOMAIN public.dist_enum_domain AS public.dist_enum;
+				CREATE DOMAIN public.dist_enum_array_domain AS public.dist_enum[];
+				CREATE TABLE public.dist_enum_array (i int, e public.dist_enum[]) DISTRIBUTED BY (i, e);
+				CREATE TABLE public.dist_enum_range_key (r public.dist_enum_range) DISTRIBUTED BY (r);
+				CREATE TABLE public.dist_enum_domain_key (d public.dist_enum_domain) DISTRIBUTED BY (d);
+				CREATE TABLE public.dist_enum_array_domain_key (d public.dist_enum_array_domain) DISTRIBUTED BY (d);
+				CREATE TABLE public.dist_int_array (i int[], e public.dist_enum[]) DISTRIBUTED BY (i)`)
+			defer testhelper.AssertQueryRuns(connectionPool, `
+				DROP TABLE public.dist_enum_array, public.dist_enum_range_key, public.dist_enum_domain_key,
+					public.dist_enum_array_domain_key, public.dist_int_array;
+				DROP DOMAIN public.dist_enum_array_domain;
+				DROP DOMAIN public.dist_enum_domain;
+				DROP TYPE public.dist_enum_range;
+				DROP TYPE public.dist_enum`)
+			enumArray := testutils.OidFromObjectName(connectionPool, "public", "dist_enum_array", backup.TYPE_RELATION)
+			enumRange := testutils.OidFromObjectName(connectionPool, "public", "dist_enum_range_key", backup.TYPE_RELATION)
+			enumDomain := testutils.OidFromObjectName(connectionPool, "public", "dist_enum_domain_key", backup.TYPE_RELATION)
+			enumArrayDomain := testutils.OidFromObjectName(connectionPool, "public", "dist_enum_array_domain_key", backup.TYPE_RELATION)
+			intArray := testutils.OidFromObjectName(connectionPool, "public", "dist_int_array", backup.TYPE_RELATION)
+
+			distPolicies := backup.GetDistributionPolicies(connectionPool, []backup.Relation{
+				{Oid: enumArray}, {Oid: enumRange}, {Oid: enumDomain}, {Oid: enumArrayDomain}, {Oid: intArray}})
+
+			Expect(distPolicies[enumArray].DistByEnum).To(BeTrue())
+			Expect(distPolicies[enumRange].DistByEnum).To(BeTrue())
+			Expect(distPolicies[enumDomain].DistByEnum).To(BeTrue())
+			Expect(distPolicies[enumArrayDomain].DistByEnum).To(BeTrue())
+			Expect(distPolicies[intArray].Policy).To(Equal("DISTRIBUTED BY (i)"))
+			Expect(distPolicies[intArray].DistByEnum).To(BeFalse())
+		})
 	})
 	Describe("GetPartitionDefinitions", func() {
 		var partitionPartFalseExpectation = "false "

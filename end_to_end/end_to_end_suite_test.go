@@ -3301,6 +3301,31 @@ LANGUAGE plpgsql NO SQL;`)
 			assertDataRestored(restoreConn, map[string]int{
 				"table_with_multi_enum_distkey": 16})
 		})
+		It("Restores table data distributed by an array, a range and a domain of an enum", func() {
+			// Their hashes are those of the enum labels, so their rows are redistributed as well
+			testhelper.AssertQueryRuns(backupConn, `CREATE TYPE color_range AS RANGE (subtype = colors);
+				CREATE DOMAIN color_array AS colors[];
+				CREATE TABLE table_with_enum_array_distkey (key colors[]) DISTRIBUTED BY (key);
+				CREATE TABLE table_with_enum_range_distkey (key color_range) DISTRIBUTED BY (key);
+				CREATE TABLE table_with_enum_array_domain_distkey (key color_array) DISTRIBUTED BY (key);
+				INSERT INTO table_with_enum_array_distkey SELECT ARRAY[c] FROM unnest(enum_range(NULL::colors)) c;
+				INSERT INTO table_with_enum_range_distkey SELECT color_range(c, c, '[]') FROM unnest(enum_range(NULL::colors)) c;
+				INSERT INTO table_with_enum_array_domain_distkey SELECT ARRAY[c, c] FROM unnest(enum_range(NULL::colors)) c;`)
+
+			defer testhelper.AssertQueryRuns(backupConn, `DROP TABLE table_with_enum_array_distkey, table_with_enum_range_distkey,
+				table_with_enum_array_domain_distkey; DROP DOMAIN color_array; DROP TYPE color_range`)
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--backup-dir", backupDir)
+			assertDataRestored(restoreConn, map[string]int{
+				"table_with_enum_array_distkey":        4,
+				"table_with_enum_range_distkey":        4,
+				"table_with_enum_array_domain_distkey": 4})
+		})
 		It("Restores table data distributed by altered enum type", func() {
 			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE table_with_altered_enum_distkey (key colors) DISTRIBUTED BY (key)`)
 			testhelper.AssertQueryRuns(backupConn, `INSERT INTO table_with_altered_enum_distkey VALUES ('red'), ('blue'), ('green'), ('yellow'),
