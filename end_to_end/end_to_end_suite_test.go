@@ -2149,6 +2149,173 @@ var _ = Describe("backup and restore end to end tests", func() {
 			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM truncate_reader.second")).To(Equal("1000"))
 		})
 	})
+	Describe("Restore of a single data file while a table waits for a lock", func() {
+		// The number of the given sessions of gprestore that run or wait as given
+		countRestoreSessions := func(condition string) int {
+			var count int
+			Expect(backupConn.Get(&count, fmt.Sprintf(`SELECT count(*) FROM pg_stat_activity
+				WHERE application_name LIKE 'gprestore\_%%' AND %s`, condition))).To(Succeed())
+			return count
+		}
+		// Whether a lock of the given mode on the given table waits
+		lockWaits := func(schema string, table string, mode string) func() int {
+			return func() int {
+				var count int
+				_ = backupConn.Get(&count, fmt.Sprintf(`SELECT count(*) FROM pg_locks l
+					JOIN pg_class c ON c.oid = l.relation
+					JOIN pg_namespace n ON n.oid = c.relnamespace
+					WHERE n.nspname = '%s' AND c.relname = '%s' AND l.mode = '%s' AND NOT l.granted`, schema, table, mode))
+				return count
+			}
+		}
+		countRows := func(table string) func() string {
+			return func() string {
+				count, _ := dbconn.SelectString(backupConn, fmt.Sprintf("SELECT count(*) AS string FROM %s", table))
+				return count
+			}
+		}
+		It("does not take the tables beyond the pipes of the helper after tables that fail at once with --on-error-continue", func() {
+			if backupConn.Version.Before("6") {
+				Skip("Skip files are created on GPDB 6 and later only")
+			}
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA run_ahead")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA run_ahead CASCADE")
+			// In the data file in this order, the largest table first
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE run_ahead.t1 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE run_ahead.t2 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE run_ahead.t3 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE run_ahead.t4 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE run_ahead.t5 (i int) DISTRIBUTED BY (i);
+				INSERT INTO run_ahead.t1 SELECT generate_series(1, 100000);
+				INSERT INTO run_ahead.t2 SELECT generate_series(1, 1000);
+				INSERT INTO run_ahead.t3 SELECT generate_series(1, 1000);
+				INSERT INTO run_ahead.t4 SELECT generate_series(1, 1000);
+				INSERT INTO run_ahead.t5 SELECT generate_series(1, 1000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "run_ahead",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+			// The COPY of the second and third tables fails at once, before it reads its pipe
+			testhelper.AssertQueryRuns(backupConn, `DROP TABLE run_ahead.t2; DROP TABLE run_ahead.t3;
+				TRUNCATE run_ahead.t1, run_ahead.t4, run_ahead.t5`)
+
+			lockConn := testutils.SetupTestDbConn("testdb")
+			defer lockConn.Close()
+			lockConn.MustExec("BEGIN; LOCK TABLE run_ahead.t1 IN ACCESS EXCLUSIVE MODE")
+			restoreCmd := exec.Command(gprestorePath,
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--data-only", "--on-error-continue",
+				"--jobs", "2")
+			var restoreOutput strings.Builder
+			restoreCmd.Stdout, restoreCmd.Stderr = &restoreOutput, &restoreOutput
+			Expect(restoreCmd.Start()).To(Succeed())
+			defer func() { _ = restoreCmd.Process.Kill() }()
+			Eventually(lockWaits("run_ahead", "t1", "RowExclusiveLock"), "30s", "100ms").Should(BeNumerically(">", 0))
+
+			// The helper has created the pipes of two tables ahead of the first one, which waits; the
+			// other connection fails the second table, and does not take the fourth before the first
+			// is restored. Its COPY would wait for its pipe, and fail once the wait timed out
+			Consistently(func() int {
+				return countRestoreSessions(`state = 'active' AND query ~ '^COPY run_ahead\.t[45]'`)
+			}, "3s", "100ms").Should(Equal(0))
+			lockConn.MustExec("COMMIT")
+
+			Expect(restoreCmd.Wait()).To(HaveOccurred())
+			Expect(restoreOutput.String()).To(ContainSubstring(`relation "run_ahead.t2" does not exist`))
+			Expect(restoreOutput.String()).To(ContainSubstring(`relation "run_ahead.t3" does not exist`))
+			Expect(restoreOutput.String()).To(ContainSubstring("Encountered 2 error(s) during table data restore"))
+			Expect(countRows("run_ahead.t1")()).To(Equal("100000"))
+			Expect(countRows("run_ahead.t4")()).To(Equal("1000"))
+			Expect(countRows("run_ahead.t5")()).To(Equal("1000"))
+		})
+		It("restores the next tables of a data file while an earlier table waits to be redistributed", func() {
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA reorganize_wait")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA reorganize_wait CASCADE")
+			// A table distributed by an enum is redistributed after its COPY; it is the largest, so the first
+			testhelper.AssertQueryRuns(backupConn, `CREATE TYPE reorganize_wait.e AS ENUM ('a', 'b', 'c');
+				CREATE TABLE reorganize_wait.t0 (k reorganize_wait.e, i int) DISTRIBUTED BY (k);
+				CREATE TABLE reorganize_wait.t1 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE reorganize_wait.t2 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE reorganize_wait.t3 (i int) DISTRIBUTED BY (i);
+				INSERT INTO reorganize_wait.t0 SELECT (ARRAY['a', 'b', 'c'])[1 + i % 3]::reorganize_wait.e, i FROM generate_series(1, 30000) i;
+				INSERT INTO reorganize_wait.t1 SELECT generate_series(1, 1000);
+				INSERT INTO reorganize_wait.t2 SELECT generate_series(1, 1000);
+				INSERT INTO reorganize_wait.t3 SELECT generate_series(1, 1000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "reorganize_wait",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+			testhelper.AssertQueryRuns(backupConn, "TRUNCATE reorganize_wait.t0, reorganize_wait.t1, reorganize_wait.t2, reorganize_wait.t3")
+
+			// The lock lets the COPY of the first table go on, but not its redistribution
+			lockConn := testutils.SetupTestDbConn("testdb")
+			defer lockConn.Close()
+			lockConn.MustExec("BEGIN; LOCK TABLE reorganize_wait.t0 IN ACCESS SHARE MODE")
+			restoreCmd := exec.Command(gprestorePath,
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--data-only",
+				"--jobs", "2")
+			var restoreOutput strings.Builder
+			restoreCmd.Stdout, restoreCmd.Stderr = &restoreOutput, &restoreOutput
+			Expect(restoreCmd.Start()).To(Succeed())
+			defer func() { _ = restoreCmd.Process.Kill() }()
+			Eventually(lockWaits("reorganize_wait", "t0", "AccessExclusiveLock"), "30s", "100ms").Should(BeNumerically(">", 0))
+
+			// The helper is done with the first table once its COPY ends, so the other connection
+			// restores the tables after it while it waits
+			Eventually(countRows("reorganize_wait.t3"), "30s", "100ms").Should(Equal("1000"))
+			Expect(countRows("reorganize_wait.t1")()).To(Equal("1000"))
+			Expect(countRows("reorganize_wait.t2")()).To(Equal("1000"))
+			lockConn.MustExec("COMMIT")
+
+			Expect(restoreCmd.Wait()).To(Succeed(), restoreOutput.String())
+			Expect(countRows("reorganize_wait.t0")()).To(Equal("30000"))
+		})
+		It("terminates the sessions of an interrupted restore that wait for a lock", func() {
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA waiting_session")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA waiting_session CASCADE")
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE waiting_session.t (i int) DISTRIBUTED BY (i);
+				INSERT INTO waiting_session.t SELECT generate_series(1, 1000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "waiting_session",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+
+			// The TRUNCATE of the restore waits for the lock of the session
+			lockConn := testutils.SetupTestDbConn("testdb")
+			defer lockConn.Close()
+			lockConn.MustExec("BEGIN; LOCK TABLE waiting_session.t IN ACCESS SHARE MODE")
+			restoreCmd := exec.Command(gprestorePath,
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--truncate-table", "--data-only")
+			var restoreOutput strings.Builder
+			restoreCmd.Stdout, restoreCmd.Stderr = &restoreOutput, &restoreOutput
+			Expect(restoreCmd.Start()).To(Succeed())
+			defer func() { _ = restoreCmd.Process.Kill() }()
+			Eventually(lockWaits("waiting_session", "t", "AccessExclusiveLock"), "30s", "100ms").Should(BeNumerically(">", 0))
+
+			Expect(restoreCmd.Process.Signal(os.Interrupt)).To(Succeed())
+			Expect(restoreCmd.Wait()).To(HaveOccurred())
+			Expect(restoreOutput.String()).To(ContainSubstring("Received an interrupt signal, aborting restore process"))
+			// The session still holds its lock, and no session of the restore waits behind it
+			Eventually(func() int { return countRestoreSessions("true") }, "10s", "100ms").Should(Equal(0))
+			// Nor is the error of the terminated session reported
+			restoreLogs, _ := path.Glob(path.Join(os.Getenv("HOME"), "gpAdminLogs/gprestore_*"))
+			Expect(restoreLogs).ToNot(BeEmpty())
+			restoreLog, err := os.ReadFile(restoreLogs[len(restoreLogs)-1])
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(restoreLog)).ToNot(MatchRegexp(fmt.Sprintf(`:0*%d-\[CRITICAL\]`, restoreCmd.Process.Pid)))
+			lockConn.MustExec("COMMIT")
+
+			Expect(countRows("waiting_session.t")()).To(Equal("1000"))
+		})
+	})
 	Describe("Restore with --run-analyze", func() {
 		It("runs gprestore without --run-analyze", func() {
 			output := gpbackup(gpbackupPath, backupHelperPath,
