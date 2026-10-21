@@ -239,6 +239,23 @@ var _ = Describe("agent remote", func() {
 			Expect(tocFile(0)).To(HaveSuffix("_toc.yaml"))
 			Expect(tocFile(1)).To(HaveSuffix("_toc1.yaml"))
 		})
+		It("ends sixteen data files at a time on each segment, so that the command stays short with many data files", func() {
+			nextSlots := make([]int, 40)
+			utils.FinishSlotBackupHelpers(testCluster, fpInfo, nextSlots)
+
+			Expect(testExecutor.NumExecutions).To(Equal(3))
+			pipeFile := func(dataFile int) string { return fpInfo.GetSegmentPipeFilePath(0, dataFile) }
+			for execution, dataFiles := range [][]int{{0, 15}, {16, 31}, {32, 39}} {
+				finishCommand := testExecutor.ClusterCommands[execution][0].CommandString
+				Expect(strings.Count(finishCommand, "ls ")).To(Equal(dataFiles[1] - dataFiles[0] + 1))
+				Expect(finishCommand).To(ContainSubstring(pipeFile(dataFiles[0]) + "_0"))
+				Expect(finishCommand).To(ContainSubstring(pipeFile(dataFiles[1]) + "_0"))
+				if dataFiles[1] < 39 {
+					Expect(finishCommand).NotTo(ContainSubstring(pipeFile(dataFiles[1]+1) + "_0"))
+				}
+				Expect(len(finishCommand)).To(BeNumerically("<", 64*1024))
+			}
+		})
 	})
 	Describe("CreateSkipFilesOnSegments()", func() {
 		It("creates the skip files of the entries a thousand at a time on each segment", func() {

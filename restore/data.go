@@ -304,6 +304,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	 */
 	truncateTable := MustGetFlagBool(options.INCREMENTAL) || MustGetFlagBool(options.TRUNCATE_TABLE)
 	groups.OrderTransactions = backupConfig.SingleDataFile
+	groups.LimitAhead = backupConfig.SingleDataFile
 	partitionedTables := make(map[string]bool)
 	if truncateTable {
 		partitionedTableFQNs, err := GetPartitionedTableFQNs()
@@ -346,7 +347,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 			}()
 
 			setGUCsForConnection(gucStatements, whichConn)
-			nextEntryIdx := groups.EntriesOfConn(whichConn)
+			nextEntryIdx := groups.EntriesOfConn(ctx, whichConn)
 			if resizeCluster && !backupConfig.SingleDataFile {
 				// The gpbackup_helper of the connection has the pipes of these entries only
 				nextEntryIdx = entriesOfHelper(whichConn, maxHelpers, totalTables)
@@ -383,6 +384,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					mutex.Lock()
 					errorTablesData[tableName] = Empty{}
 					mutex.Unlock()
+					groups.EntryDone(entryIdx)
 					dataProgressBar.Increment()
 					continue
 				}
@@ -456,6 +458,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					utils.LogProgress("Restored data to table %s from file (table %d of %d)", tableName, atomic.AddInt64(&tableNum, 1), totalTables)
 				}
 
+				groups.EntryDone(entryIdx)
 				dataProgressBar.Increment()
 			}
 		}(i)
@@ -648,12 +651,18 @@ func HelperIdx(whichConn int) []int {
  * without --single-data-file, all connections are one group.
  *
  * A connection never waits for a table further ahead than the pipes its helper has
- * created: when it takes a table, at most connsPerDataFile - 1 tables before it in
- * the data file are still being restored, by the other connections of its group,
- * and the helper creates the pipes of connsPerDataFile tables ahead of the one it
- * restores.  The earliest table of a data file that is not restored yet is being
- * restored by a connection, so it can always proceed.  Connections beyond the last
- * full group restore nothing.
+ * created.  The helper creates the pipes of connsPerDataFile tables ahead of the
+ * one it restores, so with LimitAhead, as with a single data file, a connection
+ * waits before it takes a table until the table is fewer than connsPerDataFile
+ * tables after the first one of its data file whose restore has not ended.
+ * Otherwise a table whose COPY fails before it reads its pipe, as with
+ * --on-error-continue for a table missing from the database, would let its
+ * connection go on to tables further on while the helper still restores a table
+ * before them, and fail them too once the wait for their pipes timed out.  The
+ * helper passes such a table as soon as it reaches it, as its skip file is created
+ * before its restore ends.  The first table of a data file whose restore has not
+ * ended is being restored by a connection, so it can always proceed.  Connections
+ * beyond the last full group restore nothing.
  *
  * With OrderTransactions, the transactions that restore the tables of each data
  * file take their turns in the order of the file: each one begins, locks the
@@ -697,7 +706,13 @@ type DataFileGroups struct {
 	positionOfEntry   []int
 	turnTaken         [][]bool
 	nextTurn          []int
-	turnPassed        *sync.Cond
+	// Whether a table is given only fewer than connsPerDataFile tables after the first
+	// one of its data file whose restore has not ended, and the tables whose restore has
+	LimitAhead   bool
+	entryDone    [][]bool
+	firstNotDone []int
+	// Broadcast as a turn is taken, the restore of a table ends, or the context is done
+	progressed *sync.Cond
 }
 
 func NewDataFileGroups(dataEntries []toc.CoordinatorDataEntry, numDataFiles int, numConns int, connsPerDataFile int) *DataFileGroups {
@@ -710,8 +725,10 @@ func NewDataFileGroups(dataEntries []toc.CoordinatorDataEntry, numDataFiles int,
 		positionOfEntry:  make([]int, len(dataEntries)),
 		turnTaken:        make([][]bool, numDataFiles),
 		nextTurn:         make([]int, numDataFiles),
+		entryDone:        make([][]bool, numDataFiles),
+		firstNotDone:     make([]int, numDataFiles),
 	}
-	groups.turnPassed = sync.NewCond(&groups.mutex)
+	groups.progressed = sync.NewCond(&groups.mutex)
 	groups.fileOfGroup = make([]int, groups.numGroups)
 	groups.nextOfGroup = make([]int, groups.numGroups)
 	for group := range groups.fileOfGroup {
@@ -723,6 +740,7 @@ func NewDataFileGroups(dataEntries []toc.CoordinatorDataEntry, numDataFiles int,
 		groups.positionOfEntry[entryIdx] = len(groups.entriesOfFile[entry.DataFileIdx])
 		groups.entriesOfFile[entry.DataFileIdx] = append(groups.entriesOfFile[entry.DataFileIdx], entryIdx)
 		groups.turnTaken[entry.DataFileIdx] = append(groups.turnTaken[entry.DataFileIdx], false)
+		groups.entryDone[entry.DataFileIdx] = append(groups.entryDone[entry.DataFileIdx], false)
 		rowsOfFile[entry.DataFileIdx] += entry.RowsCopied
 	}
 	for file, entries := range groups.entriesOfFile {
@@ -749,7 +767,7 @@ func (groups *DataFileGroups) WaitForTurn(ctx context.Context, entryIdx int) boo
 	groups.mutex.Lock()
 	defer groups.mutex.Unlock()
 	for groups.nextTurn[file] < position && ctx.Err() == nil {
-		groups.turnPassed.Wait()
+		groups.progressed.Wait()
 	}
 	return ctx.Err() == nil
 }
@@ -766,19 +784,34 @@ func (groups *DataFileGroups) TurnDone(entryIdx int) {
 	for groups.nextTurn[file] < len(groups.turnTaken[file]) && groups.turnTaken[file][groups.nextTurn[file]] {
 		groups.nextTurn[file]++
 	}
-	groups.turnPassed.Broadcast()
+	groups.progressed.Broadcast()
 }
 
-// WakeWhenDone wakes the connections waiting for their turns once the context is done
+// EntryDone records that the restore of the table of a data entry has ended, whether its data are restored or not
+func (groups *DataFileGroups) EntryDone(entryIdx int) {
+	if !groups.LimitAhead {
+		return
+	}
+	file := groups.fileOfEntry[entryIdx]
+	groups.mutex.Lock()
+	defer groups.mutex.Unlock()
+	groups.entryDone[file][groups.positionOfEntry[entryIdx]] = true
+	for groups.firstNotDone[file] < len(groups.entryDone[file]) && groups.entryDone[file][groups.firstNotDone[file]] {
+		groups.firstNotDone[file]++
+	}
+	groups.progressed.Broadcast()
+}
+
+// WakeWhenDone wakes the connections waiting for their turns or tables once the context is done
 func (groups *DataFileGroups) WakeWhenDone(ctx context.Context) {
-	if !groups.OrderTransactions {
+	if !groups.OrderTransactions && !groups.LimitAhead {
 		return
 	}
 	go func() {
 		<-ctx.Done()
 		groups.mutex.Lock()
 		defer groups.mutex.Unlock()
-		groups.turnPassed.Broadcast()
+		groups.progressed.Broadcast()
 	}()
 }
 
@@ -792,8 +825,8 @@ func (groups *DataFileGroups) OidsOfDataFile(dataEntries []toc.CoordinatorDataEn
 }
 
 // The next data entry of a group and its data file, which the group takes once all
-// entries of its data file are taken, if one is left
-func (groups *DataFileGroups) nextEntryOfGroup(group int) (int, int, bool) {
+// entries of its data file are taken, if one is left and the context is not done
+func (groups *DataFileGroups) nextEntryOfGroup(ctx context.Context, group int) (int, int, bool) {
 	groups.mutex.Lock()
 	defer groups.mutex.Unlock()
 	file := groups.fileOfGroup[group]
@@ -808,17 +841,20 @@ func (groups *DataFileGroups) nextEntryOfGroup(group int) (int, int, bool) {
 	}
 	entryIdx := groups.entriesOfFile[file][groups.nextOfGroup[group]]
 	groups.nextOfGroup[group]++
-	return entryIdx, file, true
+	for groups.LimitAhead && groups.positionOfEntry[entryIdx]-groups.firstNotDone[file] >= groups.connsPerDataFile && ctx.Err() == nil {
+		groups.progressed.Wait()
+	}
+	return entryIdx, file, ctx.Err() == nil
 }
 
 // EntriesOfConn returns a function that gives the next data entry of a connection
-func (groups *DataFileGroups) EntriesOfConn(whichConn int) func() (int, bool) {
+func (groups *DataFileGroups) EntriesOfConn(ctx context.Context, whichConn int) func() (int, bool) {
 	group := whichConn / groups.connsPerDataFile
 	return func() (int, bool) {
 		if group >= groups.numGroups {
 			return 0, false
 		}
-		entryIdx, file, ok := groups.nextEntryOfGroup(group)
+		entryIdx, file, ok := groups.nextEntryOfGroup(ctx, group)
 		if ok && groups.StartDataFile != nil {
 			// Outside of the mutex, as starting a helper takes commands on the segments
 			groups.started[file].Do(func() { groups.StartDataFile(file) })

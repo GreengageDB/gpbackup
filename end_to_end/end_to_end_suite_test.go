@@ -25,7 +25,6 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/structmatcher"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/backup"
-	"github.com/GreengageDB/gpbackup/filepath"
 	"github.com/GreengageDB/gpbackup/testutils"
 	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/GreengageDB/gpbackup/utils"
@@ -325,19 +324,16 @@ func assertRelationsExistForIncremental(conn *dbconn.DBConn, expectedNumTables i
 
 func assertArtifactsCleaned(timestamp string) {
 	cmdStr := fmt.Sprintf("ps -ef | grep -v grep | grep -E gpbackup_helper.*%s || true", timestamp)
-	output := mustRunCommand(exec.Command("bash", "-c", cmdStr))
-	Eventually(func() string { return strings.TrimSpace(string(output)) }, 30*time.Second, 100*time.Millisecond).Should(Equal(""))
+	Eventually(func() string {
+		return strings.TrimSpace(string(mustRunCommand(exec.Command("bash", "-c", cmdStr))))
+	}, 30*time.Second, 100*time.Millisecond).Should(Equal(""))
 
-	fpInfo := filepath.NewFilePathInfo(backupCluster, "", timestamp, "", false)
 	description := "Checking if helper files are cleaned up properly"
 	cleanupFunc := func(contentID int) string {
-		oidFile := fpInfo.GetSegmentHelperFilePath(contentID, "oid")
-		scriptFile := fpInfo.GetSegmentHelperFilePath(contentID, "script")
-		pipeFile := fpInfo.GetSegmentPipeFilePath(contentID)
-		errorFile := utils.GetErrorFilename(pipeFile)
-		skipFile := utils.GetSkipFilename(pipeFile)
-
-		return fmt.Sprintf("! ls %s* && ! ls %s* && ! ls %s* && ! ls %s* && ! ls %s*", errorFile, skipFile, oidFile, scriptFile, pipeFile)
+		// The files are named after the process of gpbackup or gprestore, not that of the test,
+		// and those of the helper of a data file other than the first have its index
+		files := path.Join(backupCluster.GetDirForContent(contentID), fmt.Sprintf("gpbackup_%d_%s_*_", contentID, timestamp))
+		return fmt.Sprintf("! ls -d %[1]soid* %[1]sscript* %[1]spipe* %[1]serror* %[1]sskip* 2>/dev/null | grep -q .", files)
 	}
 	remoteOutput := backupCluster.GenerateAndExecuteCommand(description, cluster.ON_SEGMENTS|cluster.INCLUDE_COORDINATOR, cleanupFunc)
 	if remoteOutput.NumErrors != 0 {
@@ -3634,9 +3630,11 @@ LANGUAGE plpgsql NO SQL;`)
 			Expect(string(output)).To(MatchRegexp(`Error loading data into table public.a: COPY a, line 1: "\d,a": ERROR: null value in column "c" violates not-null constraint`))
 			Expect(string(output)).To(MatchRegexp(`Error loading data into table public.b: COPY b, line 1: "\d,b": ERROR: null value in column "c" violates not-null constraint`))
 			Expect(string(output)).To(MatchRegexp(`Error loading data into table public.c: COPY c, line 1: "\d,c": ERROR: null value in column "c" violates not-null constraint`))
-			Expect(string(output)).To(Not(ContainSubstring(fmt.Sprintf(`"<SEG_DATA_DIR>/gpbackup_<SEGID>_20240730085053_pipe_%d_16411_1"`, gprestoreCmd.Process.Pid))))
-			Expect(string(output)).To(Not(ContainSubstring(fmt.Sprintf(`"<SEG_DATA_DIR>/gpbackup_<SEGID>_20240730085053_pipe_%d_16417_1"`, gprestoreCmd.Process.Pid))))
-			Expect(string(output)).To(Not(ContainSubstring(fmt.Sprintf(`"<SEG_DATA_DIR>/gpbackup_<SEGID>_20240730085053_pipe_%d_16423_1"`, gprestoreCmd.Process.Pid))))
+			// The COPY of the first batch of each table runs and fails, and that of its next batch does not run
+			for _, oid := range []int{16411, 16417, 16423} {
+				Expect(string(output)).To(ContainSubstring(fmt.Sprintf(`"<SEG_DATA_DIR>/gpbackup_<SEGID>_20240730085053_%d_pipe_%d_0"`, gprestoreCmd.Process.Pid, oid)))
+				Expect(string(output)).To(Not(ContainSubstring(fmt.Sprintf(`"<SEG_DATA_DIR>/gpbackup_<SEGID>_20240730085053_%d_pipe_%d_1"`, gprestoreCmd.Process.Pid, oid))))
+			}
 			Expect(string(output)).To(ContainSubstring(`Encountered 3 error(s) during table data restore`))
 			assertArtifactsCleaned("20240730085053")
 			testhelper.AssertQueryRuns(restoreConn, "DROP TABLE a; DROP TABLE b; DROP TABLE c; DROP TABLE d;")

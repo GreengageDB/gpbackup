@@ -127,7 +127,7 @@ var _ = Describe("restore/data tests", func() {
 			nextEntryIdx := make([]func() (int, bool), numConns)
 			entries := make([][]int, numConns)
 			for conn := range nextEntryIdx {
-				nextEntryIdx[conn] = groups.EntriesOfConn(conn)
+				nextEntryIdx[conn] = groups.EntriesOfConn(context.Background(), conn)
 				entries[conn] = []int{}
 			}
 			for done := 0; done < numConns; {
@@ -178,7 +178,7 @@ var _ = Describe("restore/data tests", func() {
 			groups := restore.NewDataFileGroups(singleEntryFiles, 3, 2, 2)
 			started := make([]int, 0)
 			groups.StartDataFile = func(file int) { started = append(started, file) }
-			nextOfConn0, nextOfConn1 := groups.EntriesOfConn(0), groups.EntriesOfConn(1)
+			nextOfConn0, nextOfConn1 := groups.EntriesOfConn(context.Background(), 0), groups.EntriesOfConn(context.Background(), 1)
 			nextEntry := func(nextEntryIdx func() (int, bool)) int {
 				entryIdx, ok := nextEntryIdx()
 				Expect(ok).To(BeTrue())
@@ -202,7 +202,7 @@ var _ = Describe("restore/data tests", func() {
 			groups := restore.NewDataFileGroups(entries, 3, 2, 1)
 			started := make([]int, 0)
 			groups.StartDataFile = func(file int) { started = append(started, file) }
-			nextEntryIdx := groups.EntriesOfConn(0)
+			nextEntryIdx := groups.EntriesOfConn(context.Background(), 0)
 			entryIdx, _ := nextEntryIdx()
 			// Connection 0 takes data file 1, the largest
 			Expect(entryIdx).To(Equal(1))
@@ -264,6 +264,54 @@ var _ = Describe("restore/data tests", func() {
 			It("does not wait without OrderTransactions", func() {
 				groups := restore.NewDataFileGroups(entries, 3, 4, 2)
 				Expect(groups.WaitForTurn(context.Background(), 3)).To(BeTrue())
+			})
+		})
+		Describe("the tables ahead of the first one whose restore has not ended", func() {
+			// The next entry of a connection, given in the background, or -1 if there is none
+			nextEntry := func(nextEntryIdx func() (int, bool)) chan int {
+				given := make(chan int, 1)
+				go func() {
+					entryIdx, ok := nextEntryIdx()
+					if !ok {
+						entryIdx = -1
+					}
+					given <- entryIdx
+				}()
+				return given
+			}
+			singleFileEntries := []toc.CoordinatorDataEntry{{Oid: 1}, {Oid: 2}, {Oid: 3}, {Oid: 4}}
+			It("gives a table only fewer than connsPerDataFile tables after the first one whose restore has not ended", func() {
+				groups := restore.NewDataFileGroups(singleFileEntries, 1, 2, 2)
+				groups.LimitAhead = true
+				nextOfConn0, nextOfConn1 := groups.EntriesOfConn(context.Background(), 0), groups.EntriesOfConn(context.Background(), 1)
+				Eventually(nextEntry(nextOfConn0)).Should(Receive(Equal(0)))
+				Eventually(nextEntry(nextOfConn1)).Should(Receive(Equal(1)))
+				// The restore of entry 1 ends at once, as its COPY fails, while entry 0 is restored
+				groups.EntryDone(1)
+				given := nextEntry(nextOfConn1)
+				Consistently(given, "200ms").ShouldNot(Receive())
+				groups.EntryDone(0)
+				Eventually(given).Should(Receive(Equal(2)))
+				Eventually(nextEntry(nextOfConn0)).Should(Receive(Equal(3)))
+			})
+			It("stops waiting once the context is done", func() {
+				groups := restore.NewDataFileGroups(singleFileEntries, 1, 2, 2)
+				groups.LimitAhead = true
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				groups.WakeWhenDone(ctx)
+				nextOfConn0, nextOfConn1 := groups.EntriesOfConn(ctx, 0), groups.EntriesOfConn(ctx, 1)
+				Eventually(nextEntry(nextOfConn0)).Should(Receive(Equal(0)))
+				Eventually(nextEntry(nextOfConn1)).Should(Receive(Equal(1)))
+				groups.EntryDone(1)
+				given := nextEntry(nextOfConn1)
+				Consistently(given, "200ms").ShouldNot(Receive())
+				cancel()
+				Eventually(given).Should(Receive(Equal(-1)))
+			})
+			It("does not wait without LimitAhead", func() {
+				groups := restore.NewDataFileGroups(singleFileEntries, 1, 2, 2)
+				Expect(entriesOfConns(groups, 2)).To(Equal([][]int{{0, 2}, {1, 3}}))
 			})
 		})
 	})

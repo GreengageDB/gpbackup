@@ -351,8 +351,9 @@ func restorePredata(metadataFilename string) (int, map[string][]toc.CoordinatorD
 
 	executeInParallel := GetNumMetadataConns() > 1 && !MustGetFlagBool(options.ON_ERROR_CONTINUE)
 	if executeInParallel {
-		// Each tier below holds a transaction on each connection but the first until its statements are done
-		utils.ValidateResourceGroupConcurrency(connectionPool, GetNumMetadataConns()-1, "gprestore", "--jobs")
+		// Each tier below holds a transaction on each connection but the first until its statements are done,
+		// --copy-queue-size of them without --jobs
+		utils.ValidateResourceGroupConcurrency(connectionPool, GetNumMetadataConns()-1, "gprestore", "--jobs or --copy-queue-size")
 	}
 	RestoreSchemas(schemaStatements, progressBar)
 	if executeInParallel {
