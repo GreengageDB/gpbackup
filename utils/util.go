@@ -299,9 +299,24 @@ func TerminateWaitingSessions(appName string) {
  * flags that give the number of slots are named in the error.
  */
 func ValidateResourceGroupConcurrency(connectionPool *dbconn.DBConn, numSlots int, program string, flags string) {
+	name, concurrency, ok := ResourceGroupConcurrency(connectionPool)
+	if ok && numSlots > concurrency {
+		gplog.Fatal(errors.Errorf("%s needs %d slots of resource group %s at once, but the group has %d (its CONCURRENCY), "+
+			"so it would wait for a slot of the group for good. Lower %s, or raise the CONCURRENCY of the resource group.",
+			program, numSlots, name, concurrency, flags), "")
+	}
+}
+
+/*
+ * ResourceGroupConcurrency returns the name and the CONCURRENCY of the resource
+ * group of the role of the connections, the number of transactions that the
+ * group allows at once.  It returns false without resource groups, or if the
+ * group is not found.
+ */
+func ResourceGroupConcurrency(connectionPool *dbconn.DBConn) (string, int, bool) {
 	resourceManager, err := dbconn.SelectString(connectionPool, "SELECT current_setting('gp_resource_manager') AS string")
 	if err != nil || !strings.HasPrefix(resourceManager, "group") {
-		return
+		return "", 0, false
 	}
 	group := struct {
 		Name        string
@@ -314,14 +329,13 @@ func ValidateResourceGroupConcurrency(connectionPool *dbconn.DBConn, numSlots in
 	WHERE r.rolname = current_user`)
 	if err != nil {
 		gplog.Verbose("Could not find the concurrency of the resource group of the role: %v", err)
-		return
+		return "", 0, false
 	}
 	concurrency, err := strconv.Atoi(strings.TrimSpace(group.Concurrency))
-	if err == nil && numSlots > concurrency {
-		gplog.Fatal(errors.Errorf("%s needs %d slots of resource group %s at once, but the group has %d (its CONCURRENCY), "+
-			"so it would wait for a slot of the group for good. Lower %s, or raise the CONCURRENCY of the resource group.",
-			program, numSlots, group.Name, concurrency, flags), "")
+	if err != nil {
+		return "", 0, false
 	}
+	return group.Name, concurrency, true
 }
 
 func ValidateGPDBVersionCompatibility(connectionPool *dbconn.DBConn) {
