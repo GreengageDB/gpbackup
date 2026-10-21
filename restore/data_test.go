@@ -266,7 +266,7 @@ var _ = Describe("restore/data tests", func() {
 				Expect(groups.WaitForTurn(context.Background(), 3)).To(BeTrue())
 			})
 		})
-		Describe("the tables ahead of the first one whose restore has not ended", func() {
+		Describe("the tables ahead of the first one whose COPY has not ended", func() {
 			// The next entry of a connection, given in the background, or -1 if there is none
 			nextEntry := func(nextEntryIdx func() (int, bool)) chan int {
 				given := make(chan int, 1)
@@ -280,17 +280,17 @@ var _ = Describe("restore/data tests", func() {
 				return given
 			}
 			singleFileEntries := []toc.CoordinatorDataEntry{{Oid: 1}, {Oid: 2}, {Oid: 3}, {Oid: 4}}
-			It("gives a table only fewer than connsPerDataFile tables after the first one whose restore has not ended", func() {
+			It("gives a table only fewer than connsPerDataFile tables after the first one whose COPY has not ended", func() {
 				groups := restore.NewDataFileGroups(singleFileEntries, 1, 2, 2)
 				groups.LimitAhead = true
 				nextOfConn0, nextOfConn1 := groups.EntriesOfConn(context.Background(), 0), groups.EntriesOfConn(context.Background(), 1)
 				Eventually(nextEntry(nextOfConn0)).Should(Receive(Equal(0)))
 				Eventually(nextEntry(nextOfConn1)).Should(Receive(Equal(1)))
-				// The restore of entry 1 ends at once, as its COPY fails, while entry 0 is restored
-				groups.EntryDone(1)
+				// The COPY of entry 1 ends at once, as it fails, while entry 0 is restored
+				groups.CopyDone(1)
 				given := nextEntry(nextOfConn1)
 				Consistently(given, "200ms").ShouldNot(Receive())
-				groups.EntryDone(0)
+				groups.CopyDone(0)
 				Eventually(given).Should(Receive(Equal(2)))
 				Eventually(nextEntry(nextOfConn0)).Should(Receive(Equal(3)))
 			})
@@ -303,7 +303,7 @@ var _ = Describe("restore/data tests", func() {
 				nextOfConn0, nextOfConn1 := groups.EntriesOfConn(ctx, 0), groups.EntriesOfConn(ctx, 1)
 				Eventually(nextEntry(nextOfConn0)).Should(Receive(Equal(0)))
 				Eventually(nextEntry(nextOfConn1)).Should(Receive(Equal(1)))
-				groups.EntryDone(1)
+				groups.CopyDone(1)
 				given := nextEntry(nextOfConn1)
 				Consistently(given, "200ms").ShouldNot(Receive())
 				cancel()

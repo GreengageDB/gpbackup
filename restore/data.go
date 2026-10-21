@@ -83,7 +83,9 @@ func CopyTableIn(queryContext context.Context, connectionPool *dbconn.DBConn, ta
 	return rowsLoaded, nil
 }
 
-func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FilePathInfo, entry toc.CoordinatorDataEntry, tableName string, whichConn int, helperIdx []int) error {
+// copyDone is called once the COPY of every batch of the table has succeeded, before its rows are checked and
+// redistributed
+func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FilePathInfo, entry toc.CoordinatorDataEntry, tableName string, whichConn int, helperIdx []int, copyDone func()) error {
 	origSize, destSize, resizeCluster, batches := GetResizeClusterInfo()
 
 	var numRowsRestored int64
@@ -139,6 +141,7 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 		}
 		numRowsRestored += partialRowsRestored
 	}
+	copyDone()
 
 	numRowsBackedUp := entry.RowsCopied
 
@@ -384,7 +387,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					mutex.Lock()
 					errorTablesData[tableName] = Empty{}
 					mutex.Unlock()
-					groups.EntryDone(entryIdx)
+					groups.CopyDone(entryIdx)
 					dataProgressBar.Increment()
 					continue
 				}
@@ -422,7 +425,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					}
 				}
 				if err == nil {
-					err = restoreSingleTableData(ctx, &fpInfo, entry, tableName, whichConn, helperIdx)
+					err = restoreSingleTableData(ctx, &fpInfo, entry, tableName, whichConn, helperIdx, func() { groups.CopyDone(entryIdx) })
 				}
 				if inTransaction && connectionPool.Tx[whichConn] != nil {
 					if err == nil {
@@ -458,7 +461,8 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					utils.LogProgress("Restored data to table %s from file (table %d of %d)", tableName, atomic.AddInt64(&tableNum, 1), totalTables)
 				}
 
-				groups.EntryDone(entryIdx)
+				// Also for a table whose COPY has failed or has not run, after its skip file is created
+				groups.CopyDone(entryIdx)
 				dataProgressBar.Increment()
 			}
 		}(i)
@@ -654,15 +658,17 @@ func HelperIdx(whichConn int) []int {
  * created.  The helper creates the pipes of connsPerDataFile tables ahead of the
  * one it restores, so with LimitAhead, as with a single data file, a connection
  * waits before it takes a table until the table is fewer than connsPerDataFile
- * tables after the first one of its data file whose restore has not ended.
- * Otherwise a table whose COPY fails before it reads its pipe, as with
- * --on-error-continue for a table missing from the database, would let its
- * connection go on to tables further on while the helper still restores a table
- * before them, and fail them too once the wait for their pipes timed out.  The
- * helper passes such a table as soon as it reaches it, as its skip file is created
- * before its restore ends.  The first table of a data file whose restore has not
- * ended is being restored by a connection, so it can always proceed.  Connections
- * beyond the last full group restore nothing.
+ * tables after the first one of its data file whose COPY has not ended.  Otherwise
+ * a table whose COPY fails before it reads its pipe, as with --on-error-continue
+ * for a table missing from the database, would let its connection go on to tables
+ * further on while the helper still restores a table before them, and fail them
+ * too once the wait for their pipes timed out.  The helper passes such a table as
+ * soon as it reaches it, as its skip file is created before its COPY is recorded
+ * as ended.  A table counts until its COPY ends, not until its transaction does,
+ * as the helper has passed it by then, and the redistribution of a table with
+ * --resize-cluster may take long.  The first table of a data file whose COPY has
+ * not ended is being restored by a connection, so it can always proceed.
+ * Connections beyond the last full group restore nothing.
  *
  * With OrderTransactions, the transactions that restore the tables of each data
  * file take their turns in the order of the file: each one begins, locks the
@@ -707,11 +713,11 @@ type DataFileGroups struct {
 	turnTaken         [][]bool
 	nextTurn          []int
 	// Whether a table is given only fewer than connsPerDataFile tables after the first
-	// one of its data file whose restore has not ended, and the tables whose restore has
-	LimitAhead   bool
-	entryDone    [][]bool
-	firstNotDone []int
-	// Broadcast as a turn is taken, the restore of a table ends, or the context is done
+	// one of its data file whose COPY has not ended, and the tables whose COPY has
+	LimitAhead     bool
+	copyDone       [][]bool
+	firstNotCopied []int
+	// Broadcast as a turn is taken, the COPY of a table ends, or the context is done
 	progressed *sync.Cond
 }
 
@@ -725,8 +731,8 @@ func NewDataFileGroups(dataEntries []toc.CoordinatorDataEntry, numDataFiles int,
 		positionOfEntry:  make([]int, len(dataEntries)),
 		turnTaken:        make([][]bool, numDataFiles),
 		nextTurn:         make([]int, numDataFiles),
-		entryDone:        make([][]bool, numDataFiles),
-		firstNotDone:     make([]int, numDataFiles),
+		copyDone:         make([][]bool, numDataFiles),
+		firstNotCopied:   make([]int, numDataFiles),
 	}
 	groups.progressed = sync.NewCond(&groups.mutex)
 	groups.fileOfGroup = make([]int, groups.numGroups)
@@ -740,7 +746,7 @@ func NewDataFileGroups(dataEntries []toc.CoordinatorDataEntry, numDataFiles int,
 		groups.positionOfEntry[entryIdx] = len(groups.entriesOfFile[entry.DataFileIdx])
 		groups.entriesOfFile[entry.DataFileIdx] = append(groups.entriesOfFile[entry.DataFileIdx], entryIdx)
 		groups.turnTaken[entry.DataFileIdx] = append(groups.turnTaken[entry.DataFileIdx], false)
-		groups.entryDone[entry.DataFileIdx] = append(groups.entryDone[entry.DataFileIdx], false)
+		groups.copyDone[entry.DataFileIdx] = append(groups.copyDone[entry.DataFileIdx], false)
 		rowsOfFile[entry.DataFileIdx] += entry.RowsCopied
 	}
 	for file, entries := range groups.entriesOfFile {
@@ -787,17 +793,18 @@ func (groups *DataFileGroups) TurnDone(entryIdx int) {
 	groups.progressed.Broadcast()
 }
 
-// EntryDone records that the restore of the table of a data entry has ended, whether its data are restored or not
-func (groups *DataFileGroups) EntryDone(entryIdx int) {
+// CopyDone records that the COPY of the table of a data entry has ended, or does not run, so that the helper of its
+// data file has passed the table or skips it; it may be recorded more than once
+func (groups *DataFileGroups) CopyDone(entryIdx int) {
 	if !groups.LimitAhead {
 		return
 	}
 	file := groups.fileOfEntry[entryIdx]
 	groups.mutex.Lock()
 	defer groups.mutex.Unlock()
-	groups.entryDone[file][groups.positionOfEntry[entryIdx]] = true
-	for groups.firstNotDone[file] < len(groups.entryDone[file]) && groups.entryDone[file][groups.firstNotDone[file]] {
-		groups.firstNotDone[file]++
+	groups.copyDone[file][groups.positionOfEntry[entryIdx]] = true
+	for groups.firstNotCopied[file] < len(groups.copyDone[file]) && groups.copyDone[file][groups.firstNotCopied[file]] {
+		groups.firstNotCopied[file]++
 	}
 	groups.progressed.Broadcast()
 }
@@ -841,7 +848,7 @@ func (groups *DataFileGroups) nextEntryOfGroup(ctx context.Context, group int) (
 	}
 	entryIdx := groups.entriesOfFile[file][groups.nextOfGroup[group]]
 	groups.nextOfGroup[group]++
-	for groups.LimitAhead && groups.positionOfEntry[entryIdx]-groups.firstNotDone[file] >= groups.connsPerDataFile && ctx.Err() == nil {
+	for groups.LimitAhead && groups.positionOfEntry[entryIdx]-groups.firstNotCopied[file] >= groups.connsPerDataFile && ctx.Err() == nil {
 		groups.progressed.Wait()
 	}
 	return entryIdx, file, ctx.Err() == nil

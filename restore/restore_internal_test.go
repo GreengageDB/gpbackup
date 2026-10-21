@@ -285,10 +285,13 @@ var _ = Describe("restore internal tests", func() {
 			localMock.ExpectExec("RESET gp_enable_segment_copy_checking").WillReturnError(errors.New("current transaction is aborted"))
 
 			var err error
+			copyDone := false
 			Expect(func() {
-				err = restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{})
+				err = restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() { copyDone = true })
 			}).ToNot(Panic())
 			Expect(err).To(MatchError(ContainSubstring("invalid input value for enum")))
+			// The caller records the end of a failed COPY once its skip file is created
+			Expect(copyDone).To(BeFalse())
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
 		It("returns the error of a failed redistribution of a table distributed by an enum", func() {
@@ -299,8 +302,11 @@ var _ = Describe("restore internal tests", func() {
 			localMock.ExpectExec(`ALTER TABLE public.foo SET WITH \(REORGANIZE=true\)`).WillReturnError(errors.New("out of memory"))
 			localMock.ExpectExec("RESET gp_enable_segment_copy_checking").WillReturnResult(sqlmock.NewResult(0, 0))
 
-			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{})
+			copyDone := false
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() { copyDone = true })
 			Expect(err).To(MatchError("out of memory"))
+			// The end of the COPY is recorded before the redistribution, which may take long
+			Expect(copyDone).To(BeTrue())
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
 		It("leaves gp_enable_segment_copy_checking off for a table distributed by an enum with --resize-cluster", func() {
@@ -315,7 +321,7 @@ var _ = Describe("restore internal tests", func() {
 			localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 10))
 			localMock.ExpectExec(`ALTER TABLE public.foo SET WITH \(REORGANIZE=true\)`).WillReturnResult(sqlmock.NewResult(0, 0))
 
-			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{})
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() {})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
