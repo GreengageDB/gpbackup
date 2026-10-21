@@ -22,6 +22,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gpbackup/filepath"
+	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
 )
@@ -184,10 +185,9 @@ func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, 
 	gplog.Verbose("Checking for leftover COPY sessions")
 	var pidCol, queryCol string
 
-	termConn := dbconn.NewDBConnFromEnvironment("postgres")
+	termConn := NewResourceGroupBypassConn("postgres")
 	termConn.MustConnect(1)
 	defer termConn.Close()
-	BypassResourceGroup(termConn)
 
 	if termConn.Version.Before("6") {
 		pidCol = "procpid"
@@ -233,49 +233,72 @@ func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, 
 }
 
 /*
- * BypassResourceGroup lets the queries of a connection that cleans up after
- * gpbackup or gprestore run without a slot of its resource group, whose slots
- * the sessions it cleans up may hold.  The setting is not known to earlier
- * versions, which have no resource groups to bypass.
+ * resourceGroupBypassDriver connects with gp_resource_group_bypass set from the
+ * start of the session: a SET would come too late, as the first query of a
+ * connection, which finds the version of the database, already waits for a slot
+ * of its resource group.  Versions that do not know the setting are connected to
+ * without it.
  */
-func BypassResourceGroup(conn *dbconn.DBConn) {
-	_, _ = conn.Exec("SET gp_resource_group_bypass = on")
+type resourceGroupBypassDriver struct{}
+
+func (driver *resourceGroupBypassDriver) Connect(driverName string, dataSourceName string) (*sqlx.DB, error) {
+	conn, err := sqlx.Connect(driverName, dataSourceName+" gp_resource_group_bypass=on")
+	if err != nil && strings.Contains(err.Error(), `unrecognized configuration parameter "gp_resource_group_bypass"`) {
+		return sqlx.Connect(driverName, dataSourceName)
+	}
+	return conn, err
 }
 
 /*
- * TerminateSessions terminates the sessions whose application name starts with
- * appName, such as those of a failed restore that wait for a lock, which the
- * cleanup of its COPY commands does not find.
+ * NewResourceGroupBypassConn returns a connection to dbname for the cleanup after
+ * gpbackup or gprestore, whose queries run without a slot of the resource group
+ * of the role, whose slots the sessions it cleans up may hold.
  */
-func TerminateSessions(appName string) {
-	termConn := dbconn.NewDBConnFromEnvironment("postgres")
+func NewResourceGroupBypassConn(dbname string) *dbconn.DBConn {
+	conn := dbconn.NewDBConnFromEnvironment(dbname)
+	conn.Driver = &resourceGroupBypassDriver{}
+	return conn
+}
+
+/*
+ * TerminateWaitingSessions terminates the sessions whose application name starts
+ * with appName and that wait for a lock or a slot of their resource group, such
+ * as those of a failed restore, which the cleanup of its COPY commands does not
+ * find.  Such a session would stay in its queue after the program exits, as it
+ * does not see its client go while it waits.  The other sessions end with the
+ * program.
+ */
+func TerminateWaitingSessions(appName string) {
+	termConn := NewResourceGroupBypassConn("postgres")
 	err := termConn.Connect(1)
 	if err != nil {
-		gplog.Warn("Could not connect to terminate the sessions %s: %v", appName, err)
+		gplog.Warn("Could not connect to terminate the waiting sessions %s: %v", appName, err)
 		return
 	}
 	defer termConn.Close()
-	BypassResourceGroup(termConn)
 	pidCol := "pid"
+	waiting := "waiting"
 	if termConn.Version.Before("6") {
 		pidCol = "procpid"
+	} else if termConn.Version.AtLeast("7") {
+		waiting = "wait_event_type IN ('Lock', 'ResourceGroup')"
 	}
 	_, err = termConn.Exec(fmt.Sprintf(`SELECT pg_terminate_backend(%[1]s) FROM pg_stat_activity
-	WHERE application_name LIKE '%[2]s%%' AND %[1]s <> pg_backend_pid()`, pidCol, appName))
+	WHERE application_name LIKE '%[2]s%%' AND %[3]s AND %[1]s <> pg_backend_pid()`, pidCol, appName, waiting))
 	if err != nil {
-		gplog.Warn("Could not terminate the sessions %s: %v", appName, err)
+		gplog.Warn("Could not terminate the waiting sessions %s: %v", appName, err)
 	}
 }
 
 /*
  * ValidateResourceGroupConcurrency fails if, with resource groups, the resource
  * group of the role of the connections allows fewer transactions at once than the
- * numTransactions that the program holds open at once.  Each transaction holds a
- * slot of the group until it ends, so the transaction beyond the concurrency of
- * the group would wait for a slot for good.  The flags that give the number of
- * transactions are named in the error.
+ * numSlots that the program needs at once.  Each transaction holds a slot of the
+ * group until it ends, also the transaction of a single query, so that the
+ * program would wait for good for a slot that its own transactions hold.  The
+ * flags that give the number of slots are named in the error.
  */
-func ValidateResourceGroupConcurrency(connectionPool *dbconn.DBConn, numTransactions int, program string, flags string) {
+func ValidateResourceGroupConcurrency(connectionPool *dbconn.DBConn, numSlots int, program string, flags string) {
 	resourceManager, err := dbconn.SelectString(connectionPool, "SELECT current_setting('gp_resource_manager') AS string")
 	if err != nil || !strings.HasPrefix(resourceManager, "group") {
 		return
@@ -294,10 +317,10 @@ func ValidateResourceGroupConcurrency(connectionPool *dbconn.DBConn, numTransact
 		return
 	}
 	concurrency, err := strconv.Atoi(strings.TrimSpace(group.Concurrency))
-	if err == nil && numTransactions > concurrency {
-		gplog.Fatal(errors.Errorf("%s holds %d transactions open at once, but resource group %s allows %d (its CONCURRENCY), "+
+	if err == nil && numSlots > concurrency {
+		gplog.Fatal(errors.Errorf("%s needs %d slots of resource group %s at once, but the group has %d (its CONCURRENCY), "+
 			"so it would wait for a slot of the group for good. Lower %s, or raise the CONCURRENCY of the resource group.",
-			program, numTransactions, group.Name, concurrency, flags), "")
+			program, numSlots, group.Name, concurrency, flags), "")
 	}
 }
 

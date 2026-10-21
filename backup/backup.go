@@ -669,10 +669,9 @@ func DoCleanup(backupFailed bool) {
 
 // Cancel blocked gpbackup queries waiting for locks.
 func cancelBlockedQueries(timestamp string) {
-	conn := dbconn.NewDBConnFromEnvironment(MustGetFlagString(options.DBNAME))
+	conn := utils.NewResourceGroupBypassConn(MustGetFlagString(options.DBNAME))
 	conn.MustConnect(1)
 	defer conn.Close()
-	utils.BypassResourceGroup(conn)
 
 	// Query for all blocked queries
 	pids := make([]int64, 0)

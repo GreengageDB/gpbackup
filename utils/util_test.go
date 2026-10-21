@@ -105,9 +105,9 @@ var _ = Describe("utils/util tests", func() {
 		It("fails if the resource group of the role allows fewer transactions at once", func() {
 			expectResourceManager("group")
 			expectGroup("admin_group", "10")
-			defer testhelper.ShouldPanicWithMessage("gpbackup holds 17 transactions open at once, but resource group admin_group allows 10 (its CONCURRENCY), " +
+			defer testhelper.ShouldPanicWithMessage("gpbackup needs 11 slots of resource group admin_group at once, but the group has 10 (its CONCURRENCY), " +
 				"so it would wait for a slot of the group for good. Lower --jobs or --copy-queue-size, or raise the CONCURRENCY of the resource group.")
-			utils.ValidateResourceGroupConcurrency(connectionPool, 17, "gpbackup", "--jobs or --copy-queue-size")
+			utils.ValidateResourceGroupConcurrency(connectionPool, 11, "gpbackup", "--jobs or --copy-queue-size")
 		})
 		It("passes if the resource group of the role allows as many transactions at once", func() {
 			expectResourceManager("group-v2")

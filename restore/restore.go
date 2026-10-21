@@ -304,6 +304,29 @@ func verifyIncrementalState() {
 	}
 }
 
+/*
+ * beginTierTransactions begins the transactions of a tier of the pre-data on each
+ * connection but the first, and returns false if the restore is being terminated,
+ * whose cleanup terminates a session that waits, as for a slot of its resource
+ * group as its transaction begins.
+ */
+func beginTierTransactions() bool {
+	txMutex.Lock()
+	defer txMutex.Unlock()
+	for connNum := 1; connNum < GetNumMetadataConns(); connNum++ {
+		// The name of the restore, which DoCleanup looks for, with the number of the connection
+		_, err := connectionPool.Exec(fmt.Sprintf("SET application_name TO 'gprestore_%s_%s_%d'", globalFPInfo.Timestamp, restoreStartTime, connNum), connNum)
+		if err == nil {
+			err = connectionPool.Begin(connNum)
+		}
+		if err != nil && wasTerminated.Load() {
+			return false
+		}
+		gplog.FatalOnError(err)
+	}
+	return true
+}
+
 func restorePredata(metadataFilename string) (int, map[string][]toc.CoordinatorDataEntry) {
 	if wasTerminated.Load() {
 		return 0, nil
@@ -349,13 +372,9 @@ func restorePredata(metadataFilename string) (int, map[string][]toc.CoordinatorD
 			gplog.Debug("Restoring predata metadata tier: %d", t)
 
 			// Begin transactions for each connec worker connection.  In parallel restores we reserve conn 0 for administration and monitoring.
-			txMutex.Lock()
-			for connNum := 1; connNum < GetNumMetadataConns(); connNum++ {
-				// The name of the restore, which DoCleanup looks for, with the number of the connection
-				connectionPool.MustExec(fmt.Sprintf("SET application_name TO 'gprestore_%s_%s_%d'", globalFPInfo.Timestamp, restoreStartTime, connNum), connNum)
-				connectionPool.MustBegin(connNum)
+			if !beginTierTransactions() {
+				break
 			}
-			txMutex.Unlock()
 
 			numErrors += ExecuteRestoreMetadataStatements("predata", tiered[t], "Pre-data objects", progressBar, utils.PB_VERBOSE, true)
 			t++
@@ -896,7 +915,7 @@ func DoCleanup(restoreFailed bool) {
 	gplog.Info("Beginning cleanup")
 	if restoreFailed && connectionPool != nil && globalFPInfo.Timestamp != "" {
 		// Sessions of the restore that wait for a lock, such as a TRUNCATE, would stay in its queue
-		utils.TerminateSessions(fmt.Sprintf("gprestore_%s_%s", globalFPInfo.Timestamp, restoreStartTime))
+		utils.TerminateWaitingSessions(fmt.Sprintf("gprestore_%s_%s", globalFPInfo.Timestamp, restoreStartTime))
 	}
 	if backupConfig != nil && (backupConfig.SingleDataFile || MustGetFlagBool(options.RESIZE_CLUSTER)) {
 		fpInfoList := GetBackupFPInfoListFromRestorePlan()

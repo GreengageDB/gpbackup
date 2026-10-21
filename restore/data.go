@@ -407,6 +407,11 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					_, err = connectionPool.Exec(`TRUNCATE ONLY `+tableName, whichConn)
 				}
 				groups.TurnDone(entryIdx)
+				if err != nil && wasTerminated.Load() {
+					// The cleanup of the terminated restore terminates a session that waits, as for a lock of its table
+					dataProgressBar.(*pb.ProgressBar).NotPrint = true
+					return
+				}
 				if err != nil {
 					gplog.Error(err.Error())
 					// The COPY of the table is not run, so its helpers are told to skip it
