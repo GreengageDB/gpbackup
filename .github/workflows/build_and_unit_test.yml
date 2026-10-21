@@ -4,7 +4,6 @@ on:
   push:
     branches: [ master ]
   pull_request:
-    branches: [ master ]
 
 # Concurrency control to cancel previous runs on new push to same PR/branch
 concurrency:
@@ -105,3 +104,61 @@ jobs:
           --sysctl 'kernel.sem=500 1024000 200 4096'
           gpbackup:test
           bash /home/gpadmin/go/src/github.com/GreengageDB/gpbackup/ci/scripts/run_gpbackup_tests.bash
+
+  checkmigrate_integration:
+    name: Check migration between Greengage 6 and Greengage 7
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clean Up Disk Space
+        run: |
+          sudo rm -rf /usr/lib/jvm
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/share/swift
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: tree:0
+          submodules: 'recursive'
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          version: latest
+
+      - name: Build the Greengage 6 source image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: gpbackup:checkmigrate-source
+          build-args: |
+            GGDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb6_ubuntu:latest
+
+      - name: Build the Greengage 7 target image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: gpbackup:checkmigrate-target
+          build-args: |
+            GGDB_IMAGE=ghcr.io/greengagedb/greengage/ggdb7_ubuntu:latest
+
+      - name: Run the migration checks
+        run: bash ci/scripts/run_ggcheckmigrate_tests.bash

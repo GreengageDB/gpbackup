@@ -1,3 +1,4 @@
 @GPBACKUP_HOME_REL@/bin/gpbackup
 @GPBACKUP_HOME_REL@/bin/gprestore
 @GPBACKUP_HOME_REL@/bin/gpbackup_helper
+@GPBACKUP_HOME_REL@/bin/ggcheckmigrate
