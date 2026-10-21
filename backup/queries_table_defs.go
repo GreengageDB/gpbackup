@@ -470,25 +470,28 @@ func GetDistributionPolicies(connectionPool *dbconn.DBConn, relations interface{
 			gplog.Fatal(fmt.Errorf("Unable to parse distribution policies"), "")
 		}
 
+		// A table is distributed by an enum if any column of its distribution key is,
+		// so the columns of the key are aggregated into a single row of the table
 		query = fmt.Sprintf(`WITH distpol AS (
 			SELECT
 				localoid AS oid,
 				d.distclass,
-				pg_catalog.pg_get_table_distributedby(localoid) AS value 
-			FROM unnest('%s'::pg_catalog.oid[]) AS src(tbloid) 
+				pg_catalog.pg_get_table_distributedby(localoid) AS value
+			FROM unnest('%s'::pg_catalog.oid[]) AS src(tbloid)
 			JOIN gp_distribution_policy d ON d.localoid=src.tbloid
 			)
-			SELECT 
+			SELECT
 			distpol.oid,
 			distpol.value,
-				CASE WHEN opcintype=%d THEN true ELSE false END AS distbyenum
-			FROM distpol 
+				coalesce(bool_or(opcintype=%d), false) AS distbyenum
+			FROM distpol
 			LEFT JOIN (
-				SELECT localoid, unnest(distclass) AS distclass 
+				SELECT localoid, unnest(distclass) AS distclass
 				FROM gp_distribution_policy
-				) t 
+				) t
 			ON t.localoid=distpol.oid
-			LEFT JOIN pg_opclass opc ON opc.oid=t.distclass;`, tbloids, ENUM_TYPE_OID);
+			LEFT JOIN pg_opclass opc ON opc.oid=t.distclass
+			GROUP BY distpol.oid, distpol.value;`, tbloids, ENUM_TYPE_OID);
 	}
 
 	results := make([]DistPolicy, 0)
