@@ -2079,6 +2079,12 @@ var _ = Describe("backup and restore end to end tests", func() {
 			Entry("with a single data file restored by two connections", []string{"--single-data-file"}, []string{"--copy-queue-size", "2"}),
 		)
 		It("restores the other tables of a data file whose TRUNCATE of a table fails with --on-error-continue", func() {
+			// gprestore runs here without the wrapper that installs the gpbackup_helper of its version
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
+			// Nor are skip files created before GPDB 6
+			testutils.SkipIfBefore6(backupConn)
 			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA truncate_missing")
 			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA truncate_missing CASCADE")
 			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE truncate_missing.first (i int) DISTRIBUTED BY (i);
@@ -2104,6 +2110,10 @@ var _ = Describe("backup and restore end to end tests", func() {
 			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM truncate_missing.second")).To(Equal("1000"))
 		})
 		It("restores the tables of a data file while a session that has read the first of them reads the next", func() {
+			// gprestore runs here without the wrapper that installs the gpbackup_helper of its version
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
 			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA truncate_reader")
 			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA truncate_reader CASCADE")
 			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE truncate_reader.first (i int) DISTRIBUTED BY (i);

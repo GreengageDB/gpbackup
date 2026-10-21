@@ -50,6 +50,13 @@ var _ = Describe("Deadlock handling", func() {
 		go func() {
 			defer GinkgoRecover()
 			defer lockers.Done()
+			// gpbackup waits for its lock on public.foo until the session commits, also if the lock below fails
+			committed := false
+			defer func() {
+				if !committed {
+					_, _ = backupConn.Exec("COMMIT")
+				}
+			}()
 			// Query to see if gpbackup's AccessShareLock request on public.foo is blocked
 			checkLockQuery := `SELECT count(*) FROM pg_locks l, pg_class c, pg_namespace n WHERE l.relation = c.oid AND n.oid = c.relnamespace AND n.nspname = 'public' AND c.relname = 'foo' AND l.granted = 'f' AND l.mode = 'AccessShareLock'`
 
@@ -72,6 +79,7 @@ var _ = Describe("Deadlock handling", func() {
 			// AccessExclusiveLock on public.foo to let gpbackup go to the trigger metadata dump.
 			anotherConn.MustExec(`BEGIN; LOCK TABLE pg_catalog.pg_trigger IN ACCESS EXCLUSIVE MODE`)
 			backupConn.MustExec("COMMIT")
+			committed = true
 		}()
 
 		// Concurrently wait for gpbackup to block on the trigger metadata dump section. Once we
@@ -138,6 +146,8 @@ var _ = Describe("Deadlock handling", func() {
 
 		// gpbackup has finished
 		output, _ := cmd.CombinedOutput()
+		// The goroutines are done with the count of the locks too
+		lockers.Wait()
 		stdout := string(output)
 
 		// Check that 10 deadlock traps were placed during the test
@@ -192,6 +202,13 @@ var _ = Describe("Deadlock handling", func() {
 		go func() {
 			defer GinkgoRecover()
 			defer lockers.Done()
+			// gpbackup waits for its lock on public.foo until the session commits, also if the lock below fails
+			committed := false
+			defer func() {
+				if !committed {
+					_, _ = backupConn.Exec("COMMIT")
+				}
+			}()
 			// Query to see if gpbackup's AccessShareLock request on public.foo is blocked
 			checkLockQuery := `SELECT count(*) FROM pg_locks l, pg_class c, pg_namespace n WHERE l.relation = c.oid AND n.oid = c.relnamespace AND n.nspname = 'public' AND c.relname = 'foo' AND l.granted = 'f' AND l.mode = 'AccessShareLock'`
 
@@ -214,6 +231,7 @@ var _ = Describe("Deadlock handling", func() {
 			// AccessExclusiveLock on public.foo to let gpbackup go to the trigger metadata dump.
 			anotherConn.MustExec(`BEGIN; LOCK TABLE pg_catalog.pg_trigger IN ACCESS EXCLUSIVE MODE`)
 			backupConn.MustExec("COMMIT")
+			committed = true
 		}()
 
 		// Concurrently wait for gpbackup to block on the trigger metadata dump section. Once we
@@ -280,6 +298,8 @@ var _ = Describe("Deadlock handling", func() {
 
 		// gpbackup has finished
 		output, _ := cmd.CombinedOutput()
+		// The goroutines are done with the count of the locks too
+		lockers.Wait()
 		stdout := string(output)
 
 		// Check that 10 deadlock traps were placed during the test
@@ -339,6 +359,13 @@ var _ = Describe("Deadlock handling", func() {
 		go func() {
 			defer GinkgoRecover()
 			defer lockers.Done()
+			// gpbackup waits for its lock on public.foo until the session commits, also if the lock below fails
+			committed := false
+			defer func() {
+				if !committed {
+					_, _ = backupConn.Exec("COMMIT")
+				}
+			}()
 			// Query to see if gpbackup's AccessShareLock request on public.foo is blocked
 			checkLockQuery := `SELECT count(*) FROM pg_locks l, pg_class c, pg_namespace n WHERE l.relation = c.oid AND n.oid = c.relnamespace AND n.nspname = 'public' AND c.relname = 'foo' AND l.granted = 'f' AND l.mode = 'AccessShareLock'`
 
@@ -361,6 +388,7 @@ var _ = Describe("Deadlock handling", func() {
 			// AccessExclusiveLock on public.foo to let gpbackup go to the trigger metadata dump.
 			anotherConn.MustExec(`BEGIN; LOCK TABLE pg_catalog.pg_trigger IN ACCESS EXCLUSIVE MODE`)
 			backupConn.MustExec("COMMIT")
+			committed = true
 		}()
 
 		// Concurrently wait for gpbackup to block on the trigger metadata dump section. Once we
@@ -427,6 +455,8 @@ var _ = Describe("Deadlock handling", func() {
 
 		// gpbackup has finished
 		output, _ := cmd.CombinedOutput()
+		// The goroutines are done with the count of the locks too
+		lockers.Wait()
 		stdout := string(output)
 
 		// Check that 2 deadlock traps were placed during the test
