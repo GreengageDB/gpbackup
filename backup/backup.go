@@ -440,6 +440,7 @@ func getNumDataFiles(numTables int) int {
  * main worker, which backs up the tables deferred because of lock conflicts.
  */
 func startDataFileHelpers(numDataFiles int, compressStr string) {
+	startHelperHeartbeat()
 	numPipes := (connectionPool.NumConns-1)/numDataFiles + 1
 	dataFiles = NewDataFileSlots(numDataFiles, numPipes)
 	slotNames := make([]string, numPipes)
@@ -449,6 +450,13 @@ func startDataFileHelpers(numDataFiles int, compressStr string) {
 	for file := 0; file < numDataFiles; file++ {
 		startDataFileHelper(file, numDataFiles, slotNames, compressStr)
 	}
+}
+
+// The helpers end once gpbackup stops touching their heartbeat files, as when it dies without its cleanup
+func startHelperHeartbeat() {
+	unlock := utils.LockHelperStart(&wasTerminated)
+	defer unlock()
+	utils.StartHelperHeartbeat(globalCluster, globalFPInfo)
 }
 
 func startDataFileHelper(file int, numDataFiles int, slotNames []string, compressStr string) {
@@ -615,6 +623,8 @@ func DoCleanup(backupFailed bool) {
 		cancelBlockedQueries(globalFPInfo.Timestamp)
 	}
 	if globalFPInfo.Timestamp != "" && MustGetFlagBool(options.SINGLE_DATA_FILE) {
+		// Before the files of the helpers are removed, as it would create their heartbeat files again
+		utils.StopHelperHeartbeat()
 		// Copy sessions must be terminated before cleaning up gpbackup_helper processes to avoid a potential deadlock
 		// If the terminate query is sent via a connection with an active COPY command, and the COPY's pipe is cleaned up, the COPY query will hang.
 		// This results in the DoCleanup function passed to the signal handler to never return, blocking the os.Exit call

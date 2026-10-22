@@ -24,6 +24,18 @@ var helperMutex sync.Mutex
 var AgentErr = errors.New("agent error")
 
 /*
+ * gpbackup touches the heartbeat files of its gpbackup_helpers every
+ * HelperHeartbeatInterval, and a helper ends once its heartbeat file is older than
+ * HelperHeartbeatTimeout.  Variables, so that tests can shorten them.
+ */
+var (
+	HelperHeartbeatInterval = time.Minute
+	HelperHeartbeatTimeout  = 10 * time.Minute
+	// Stops the heartbeat of the helpers; guarded by helperMutex
+	stopHelperHeartbeat func()
+)
+
+/*
  * Functions to run commands on entire cluster during both backup and restore
  */
 
@@ -209,8 +221,13 @@ func StartGpbackupHelpers(c *cluster.Cluster, fpInfo filepath.FilePathInfo, oper
 		if operation != "--backup-agent" {
 			oidFileStr = fmt.Sprintf(" --oid-file %s", oidFile)
 		}
-		helperCmdStr := fmt.Sprintf(`gpbackup_helper %s --toc-file %s%s --pipe-file %s --data-file "%s" --content %d%s%s%s%s%s%s --copy-queue-size %d --verbosity %d`,
-			operation, tocFile, oidFileStr, pipeFile, backupFile, contentID, pluginStr, compressStr, onErrorContinueStr, filterStr, singleDataFileStr, resizeStr, copyQueue, verbosity)
+		// A helper that backs up ends once gpbackup stops touching its heartbeat file, see StartHelperHeartbeat
+		heartbeatStr := ""
+		if operation == "--backup-agent" {
+			heartbeatStr = fmt.Sprintf(" --heartbeat-timeout %d", int(HelperHeartbeatTimeout.Seconds()))
+		}
+		helperCmdStr := fmt.Sprintf(`gpbackup_helper %s --toc-file %s%s --pipe-file %s --data-file "%s" --content %d%s%s%s%s%s%s%s --copy-queue-size %d --verbosity %d`,
+			operation, tocFile, oidFileStr, pipeFile, backupFile, contentID, pluginStr, compressStr, onErrorContinueStr, filterStr, singleDataFileStr, resizeStr, heartbeatStr, copyQueue, verbosity)
 		// we run these commands in sequence to ensure that any failure is critical; the last command ensures the agent process was successfully started
 		return fmt.Sprintf(`cat << HEREDOC > %[1]s && chmod +x %[1]s && ( nohup %[1]s &> /dev/null &)
 #!/bin/bash
@@ -223,6 +240,71 @@ HEREDOC
 	})
 	c.CheckClusterError(remoteOutput, "Error starting gpbackup_helper agent", func(contentID int) string {
 		return "Error starting gpbackup_helper agent"
+	})
+}
+
+/*
+ * StartHelperHeartbeat touches the heartbeat files of the gpbackup_helpers of a
+ * backup on all segments, then again every HelperHeartbeatInterval until
+ * StopHelperHeartbeat.  A helper ends once its heartbeat file is older than
+ * HelperHeartbeatTimeout, as when gpbackup has died without its cleanup, as with
+ * SIGKILL: it would otherwise wait for good for the COPY of its next slot, which
+ * no one runs.  The caller holds LockHelperStart, so that the cleanup, which stops
+ * the heartbeat before it removes the files of the helpers, finds it.
+ */
+func StartHelperHeartbeat(c *cluster.Cluster, fpInfo filepath.FilePathInfo) {
+	remoteOutput := touchHeartbeatFiles(c, fpInfo)
+	c.CheckClusterError(remoteOutput, "Unable to create the heartbeat files of gpbackup_helper agents", func(host string) string {
+		return "Unable to create the heartbeat files of gpbackup_helper agents"
+	})
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(HelperHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				// A failure is not fatal, as the next touch may succeed long before the helpers end
+				remoteOutput := touchHeartbeatFiles(c, fpInfo)
+				if remoteOutput.NumErrors > 0 {
+					gplog.Warn("Unable to touch the heartbeat files of gpbackup_helper agents on %d host(s)", remoteOutput.NumErrors)
+				}
+			}
+		}
+	}()
+	stopHelperHeartbeat = func() {
+		close(done)
+		<-stopped
+	}
+}
+
+// StopHelperHeartbeat stops the heartbeat of the helpers, if it runs, once the last touch has ended
+func StopHelperHeartbeat() {
+	helperMutex.Lock()
+	defer helperMutex.Unlock()
+	if stopHelperHeartbeat != nil {
+		stopHelperHeartbeat()
+		stopHelperHeartbeat = nil
+	}
+}
+
+// Touches the heartbeat files of the segments of each host with a single command
+func touchHeartbeatFiles(c *cluster.Cluster, fpInfo filepath.FilePathInfo) *cluster.RemoteOutput {
+	return c.GenerateAndExecuteCommand("Touching the heartbeat files of gpbackup_helper agents", cluster.ON_HOSTS, func(host string) string {
+		heartbeatFiles := make([]string, 0)
+		for _, contentID := range c.GetContentsForHost(host) {
+			if contentID != -1 {
+				heartbeatFiles = append(heartbeatFiles, GetHeartbeatFilename(fpInfo.GetSegmentPipeFilePath(contentID)))
+			}
+		}
+		if len(heartbeatFiles) == 0 {
+			return "true"
+		}
+		return fmt.Sprintf("touch %s", strings.Join(heartbeatFiles, " "))
 	})
 }
 
@@ -316,10 +398,10 @@ func backupHelperRunningCommand(tocFile string) string {
 func findCommandStr(c *cluster.Cluster, fpInfo filepath.FilePathInfo, contentID int) string {
 	var cmdString string
 	if runtime.GOOS == "linux" {
-		cmdString = fmt.Sprintf(`find %s -regextype posix-extended -regex ".*gpbackup_%d_%s_%d_(oid|script|pipe|skip).*"`,
+		cmdString = fmt.Sprintf(`find %s -regextype posix-extended -regex ".*gpbackup_%d_%s_%d_(oid|script|pipe|skip|heartbeat).*"`,
 			c.GetDirForContent(contentID), contentID, fpInfo.Timestamp, fpInfo.PID)
 	} else if runtime.GOOS == "darwin" {
-		cmdString = fmt.Sprintf(`find -E %s -regex ".*gpbackup_%d_%s_%d_(oid|script|pipe|skip).*"`,
+		cmdString = fmt.Sprintf(`find -E %s -regex ".*gpbackup_%d_%s_%d_(oid|script|pipe|skip|heartbeat).*"`,
 			c.GetDirForContent(contentID), contentID, fpInfo.Timestamp, fpInfo.PID)
 	}
 	return cmdString
@@ -541,6 +623,11 @@ func CreateSkipFilesOnSegments(oids []uint32, c *cluster.Cluster, fpInfo filepat
 
 func GetErrorFilename(pipeFile string) string {
 	return regexp.MustCompile(`_pipe(\d*)$`).ReplaceAllString(pipeFile, "_error$1")
+}
+
+// The heartbeat file of the gpbackup_helpers of a backup on a segment, which the helpers of all its data files share
+func GetHeartbeatFilename(pipeFile string) string {
+	return regexp.MustCompile(`_pipe\d*$`).ReplaceAllString(pipeFile, "_heartbeat")
 }
 
 // The file of a slot pipe, named by its position in its data file, that gives the

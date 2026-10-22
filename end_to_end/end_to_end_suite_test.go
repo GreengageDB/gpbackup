@@ -333,7 +333,7 @@ func assertArtifactsCleaned(timestamp string) {
 		// The files are named after the process of gpbackup or gprestore, not that of the test,
 		// and those of the helper of a data file other than the first have its index
 		files := path.Join(backupCluster.GetDirForContent(contentID), fmt.Sprintf("gpbackup_%d_%s_*_", contentID, timestamp))
-		return fmt.Sprintf("! ls -d %[1]soid* %[1]sscript* %[1]spipe* %[1]serror* %[1]sskip* 2>/dev/null | grep -q .", files)
+		return fmt.Sprintf("! ls -d %[1]soid* %[1]sscript* %[1]spipe* %[1]serror* %[1]sskip* %[1]sheartbeat* 2>/dev/null | grep -q .", files)
 	}
 	remoteOutput := backupCluster.GenerateAndExecuteCommand(description, cluster.ON_SEGMENTS|cluster.INCLUDE_COORDINATOR, cleanupFunc)
 	if remoteOutput.NumErrors != 0 {

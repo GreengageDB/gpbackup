@@ -9,11 +9,13 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/pkg/errors"
+	"golang.org/x/sys/unix"
 )
 
 /*
@@ -21,6 +23,12 @@ import (
  */
 
 func doBackupAgent() error {
+	if *heartbeatTimeout > 0 {
+		go watchHeartbeat(utils.GetHeartbeatFilename(*pipeFile), time.Duration(*heartbeatTimeout)*time.Second, func() {
+			// The same shutdown as on the request of the cleanup of gpbackup, which removes the pipes and writes the error file
+			_ = unix.Kill(os.Getpid(), unix.SIGUSR1)
+		})
+	}
 	var lastRead uint64
 	var (
 		pipeWriter BackupPipeWriterCloser
@@ -123,6 +131,30 @@ func doBackupAgent() error {
 	}
 	logVerbose("Finished writing segment TOC")
 	return nil
+}
+
+/*
+ * watchHeartbeat calls heartbeatLost once gpbackup has not touched the heartbeat
+ * file for the given time, as when gpbackup has died without its cleanup, as with
+ * SIGKILL: the helper would otherwise wait for good for the COPY of its next slot,
+ * which no one runs.  gpbackup touches the file before it starts the helper, and a
+ * missing file counts as touched when the helper started.
+ */
+func watchHeartbeat(heartbeatFile string, timeout time.Duration, heartbeatLost func()) {
+	started := time.Now()
+	ticker := time.NewTicker(timeout / 10)
+	defer ticker.Stop()
+	for range ticker.C {
+		lastTouched := started
+		if info, err := os.Stat(heartbeatFile); err == nil && info.ModTime().After(lastTouched) {
+			lastTouched = info.ModTime()
+		}
+		if time.Since(lastTouched) > timeout {
+			logError(fmt.Sprintf("gpbackup has not touched the heartbeat file %s for %v, so it has stopped: ending", heartbeatFile, timeout))
+			heartbeatLost()
+			return
+		}
+	}
 }
 
 /*

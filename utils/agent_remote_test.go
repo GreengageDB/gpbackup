@@ -201,6 +201,38 @@ var _ = Describe("agent remote", func() {
 			Expect(cc[1].CommandString).To(MatchRegexp(`--toc-file /data/gpseg1/backups/11112233/11112233445566/gpbackup_1_11112233445566_toc1.yaml --pipe-file /data/gpseg1/gpbackup_1_11112233445566_\d+_pipe1 `))
 			Expect(cc[1].CommandString).ToNot(ContainSubstring("--oid-file"))
 		})
+		It("Gives the timeout of its heartbeat to a gpbackup_helper that backs up only", func() {
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "--backup-agent", "/tmp/pluginConfigFile.yml", " compressStr", false, false, 4, true, false, 0, 0, 0, gplog.LOGINFO)
+			utils.StartGpbackupHelpers(testCluster, fpInfo, "--restore-agent", "/tmp/pluginConfigFile.yml", " compressStr", false, false, 4, true, false, 0, 0, 0, gplog.LOGINFO)
+
+			Expect(testExecutor.ClusterCommands[0][1].CommandString).To(ContainSubstring(" --heartbeat-timeout 600 "))
+			Expect(testExecutor.ClusterCommands[1][1].CommandString).ToNot(ContainSubstring("--heartbeat-timeout"))
+		})
+	})
+	Describe("StartHelperHeartbeat()", func() {
+		It("touches the heartbeat files of the segments of each host with a single command until it is stopped", func() {
+			defaultInterval := utils.HelperHeartbeatInterval
+			utils.HelperHeartbeatInterval = 50 * time.Millisecond
+			defer func() { utils.HelperHeartbeatInterval = defaultInterval }()
+
+			utils.StartHelperHeartbeat(testCluster, fpInfo)
+			time.Sleep(300 * time.Millisecond)
+			// Once stopped, the heartbeat runs no command, so the executor is read after it
+			utils.StopHelperHeartbeat()
+			numTouches := testExecutor.NumExecutions
+			Expect(numTouches).To(BeNumerically(">=", 3))
+			commands := make([]string, 0)
+			for _, command := range testExecutor.ClusterCommands[0] {
+				commands = append(commands, command.CommandString)
+			}
+			Expect(commands).To(ConsistOf(
+				MatchRegexp(`touch /data/gpseg0/gpbackup_0_11112233445566_\d+_heartbeat\b`),
+				MatchRegexp(`touch /data/gpseg1/gpbackup_1_11112233445566_\d+_heartbeat\b`)))
+			time.Sleep(200 * time.Millisecond)
+			Expect(testExecutor.NumExecutions).To(Equal(numTouches))
+			// Stopping it again does nothing
+			utils.StopHelperHeartbeat()
+		})
 	})
 	Describe("FinishSlotBackupHelpers()", func() {
 		// The commands for the next slot and for the segment TOC of one data file

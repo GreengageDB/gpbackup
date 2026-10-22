@@ -50,6 +50,7 @@ var (
 	origSize         *int
 	destSize         *int
 	verbosity        *int
+	heartbeatTimeout *int
 )
 
 func DoHelper() {
@@ -109,6 +110,7 @@ func InitializeGlobals() {
 	origSize = flag.Int("orig-seg-count", 0, "Used with resize restore.  Gives the segment count of the backup.")
 	destSize = flag.Int("dest-seg-count", 0, "Used with resize restore.  Gives the segment count of the current cluster.")
 	verbosity = flag.Int("verbosity", gplog.LOGINFO, "Log file verbosity")
+	heartbeatTimeout = flag.Int("heartbeat-timeout", 0, "Used with backup.  Ends the agent once gpbackup has not touched its heartbeat file for that many seconds; 0 never does")
 
 	flag.Parse()
 	if *printVersion {

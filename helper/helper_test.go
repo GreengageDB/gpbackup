@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/GreengageDB/gpbackup/utils"
 	"golang.org/x/sys/unix"
@@ -297,6 +298,51 @@ var _ = Describe("helper tests", func() {
 			Expect(os.WriteFile(slotOidFile, []byte("x\n"), 0644)).To(Succeed())
 			_, _, err := readSlotOid(slotPipe)
 			Expect(err).To(HaveOccurred())
+		})
+	})
+	Describe("watchHeartbeat", func() {
+		heartbeatFile := utils.GetHeartbeatFilename(fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_pipe1", testDir))
+		timeout := 500 * time.Millisecond
+		// A channel closed once the heartbeat is lost
+		watch := func() chan struct{} {
+			lost := make(chan struct{})
+			go watchHeartbeat(heartbeatFile, timeout, func() { close(lost) })
+			return lost
+		}
+		touch := func(at time.Time) {
+			Expect(os.WriteFile(heartbeatFile, []byte{}, 0644)).To(Succeed())
+			Expect(os.Chtimes(heartbeatFile, at, at)).To(Succeed())
+		}
+		BeforeEach(func() {
+			_ = os.Remove(heartbeatFile)
+			DeferCleanup(func() { _ = os.Remove(heartbeatFile) })
+		})
+		It("names the heartbeat file of the helpers of all data files of a segment alike", func() {
+			Expect(heartbeatFile).To(Equal(fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_heartbeat", testDir)))
+			Expect(utils.GetHeartbeatFilename(fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_pipe", testDir))).To(Equal(heartbeatFile))
+		})
+		It("loses the heartbeat once the heartbeat file has not been touched for the timeout", func() {
+			touch(time.Now())
+			lost := watch()
+			Consistently(lost, timeout/2).ShouldNot(BeClosed())
+			Eventually(lost, 4*timeout).Should(BeClosed())
+		})
+		It("keeps the heartbeat while the heartbeat file is touched", func() {
+			touch(time.Now())
+			lost := watch()
+			touching := time.NewTicker(timeout / 5)
+			defer touching.Stop()
+			for start := time.Now(); time.Since(start) < 4*timeout; {
+				<-touching.C
+				touch(time.Now())
+				Expect(lost).ToNot(BeClosed())
+			}
+		})
+		It("counts a missing or older heartbeat file as touched when the helper started", func() {
+			touch(time.Now().Add(-time.Hour))
+			lost := watch()
+			Consistently(lost, timeout/2).ShouldNot(BeClosed())
+			Eventually(lost, 4*timeout).Should(BeClosed())
 		})
 	})
 	Describe("DoCleanup", func() {
