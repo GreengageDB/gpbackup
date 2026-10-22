@@ -144,17 +144,18 @@ func ExecutePredataStatements(statements []toc.StatementWithType, progressBar ut
 		executeStatementsForConn(tasks, &fatalErr, &numErrors, progressBar, connNum, executeInParallel)
 	} else {
 		panicChan := make(chan error)
-		splitStatements := scheduleStatementsOnWorkers(statements, connectionPool.NumConns)
-		chanMap := make(map[int]chan toc.StatementWithType, connectionPool.NumConns)
+		numConns := GetNumMetadataConns()
+		splitStatements := scheduleStatementsOnWorkers(statements, numConns)
+		chanMap := make(map[int]chan toc.StatementWithType, numConns)
 		// preinitialize channels to prevent concurrent read and write
-		for i := 0; i < connectionPool.NumConns; i++ {
+		for i := 0; i < numConns; i++ {
 			chanMap[i] = make(chan toc.StatementWithType, len(splitStatements[i]))
 			for _, statement := range splitStatements[i] {
 				chanMap[i] <- statement
 			}
 			close(chanMap[i])
 		}
-		for i := 0; i < connectionPool.NumConns; i++ {
+		for i := 0; i < numConns; i++ {
 			workerPool.Add(1)
 			go func(connNum int) {
 				defer func() {
@@ -176,7 +177,8 @@ func ExecutePredataStatements(statements []toc.StatementWithType, progressBar ut
 			// no panic, nothing to do
 		}
 	}
-	if fatalErr != nil {
+	// The cleanup of a terminated restore terminates a session that waits, as for a lock
+	if fatalErr != nil && !wasTerminated.Load() {
 		fmt.Println("")
 		gplog.Fatal(fatalErr, "")
 	} else if numErrors > 0 {
@@ -202,7 +204,7 @@ func ExecuteStatements(statements []toc.StatementWithType, progressBar utils.Pro
 		executeStatementsForConn(tasks, &fatalErr, &numErrors, progressBar, connNum, executeInParallel)
 	} else {
 		panicChan := make(chan error)
-		for i := 0; i < connectionPool.NumConns; i++ {
+		for i := 0; i < GetNumMetadataConns(); i++ {
 			workerPool.Add(1)
 			go func(connNum int) {
 				defer func() {
@@ -224,7 +226,8 @@ func ExecuteStatements(statements []toc.StatementWithType, progressBar utils.Pro
 			// no panic, nothing to do
 		}
 	}
-	if fatalErr != nil {
+	// The cleanup of a terminated restore terminates a session that waits, as for a lock
+	if fatalErr != nil && !wasTerminated.Load() {
 		fmt.Println("")
 		gplog.Fatal(fatalErr, "")
 	} else if numErrors > 0 {

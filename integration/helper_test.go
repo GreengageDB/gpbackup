@@ -25,12 +25,12 @@ import (
 var (
 	examplePluginExec          string
 	examplePluginTestConfig    = "/tmp/test_example_plugin_config.yaml"
+	slowPluginTestConfig       = "/tmp/test_slow_plugin_config.yaml"
 	examplePluginTestBackupDir = "/tmp/plugin_dest/20180101/20180101010101"
 	examplePluginTestDataFile  = filepath.Join(examplePluginTestBackupDir, "test_data")
 	examplePluginTestDir       = "/tmp/plugin_dest" // hardcoded in example plugin
 	testDir                    = "/tmp/helper_test/20180101/20180101010101"
 	tocFile                    = fmt.Sprintf("%s/test_toc.yaml", testDir)
-	backupOidFile              = fmt.Sprintf("%s/backup_test_oids", testDir)
 	restoreOidFile             = fmt.Sprintf("%s/restore_test_oids", testDir)
 	pipeFile                   = fmt.Sprintf("%s/test_pipe", testDir)
 	dataFileFullPath           = filepath.Join(testDir, "test_data")
@@ -57,7 +57,7 @@ here is some data
 )
 
 func gpbackupHelperBackup(helperPath string, args ...string) *exec.Cmd {
-	args = append([]string{"--backup-agent", "--oid-file", backupOidFile}, args...)
+	args = append([]string{"--backup-agent"}, args...)
 	return gpbackupHelper(helperPath, args...)
 }
 
@@ -119,9 +119,8 @@ options:
 	})
 	Context("backup tests", func() {
 		BeforeEach(func() {
-			f, _ := os.Create(backupOidFile)
-			_, _ = f.WriteString("1\n2\n3\n")
-			err = unix.Mkfifo(fmt.Sprintf("%s_%d", pipeFile, 1), 0700)
+			// gpbackup creates the pipe of the first slot before it starts the helper
+			err = unix.Mkfifo(fmt.Sprintf("%s_%d", pipeFile, 0), 0700)
 			if err != nil {
 				Fail(fmt.Sprintf("%v", err))
 			}
@@ -180,6 +179,119 @@ options:
 			printHelperLogOnError(err)
 			Expect(err).ToNot(HaveOccurred())
 			assertBackupArtifactsWithCompression("zstd", true)
+		})
+		DescribeTable("ends a data file of a backup gpbackup_helper without tables", func(withPlugin bool) {
+			args := []string{"--compression-level", "0", "--data-file", dataFileFullPath}
+			dataFile := dataFileFullPath
+			if withPlugin {
+				args = append(args, "--plugin-config", examplePluginTestConfig)
+				dataFile = examplePluginTestDataFile
+			}
+			helperCmd := gpbackupHelperBackup(gpbackupHelperPath, args...)
+			Expect(finishBackupHelper(0)).To(Succeed())
+			err := helperCmd.Wait()
+			printHelperLogOnError(err)
+			Expect(err).ToNot(HaveOccurred())
+			contents, err := ioutil.ReadFile(dataFile)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(contents).To(BeEmpty())
+			contents, err = ioutil.ReadFile(tocFile)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(contents)).To(Equal("dataentries: {}\n"))
+			assertNoErrors()
+		},
+			Entry("without a plugin", false),
+			Entry("with a plugin", true),
+		)
+		It("ends a backup gpbackup_helper once gpbackup has stopped touching its heartbeat file", func() {
+			heartbeatFile := utils.GetHeartbeatFilename(pipeFile)
+			Expect(os.WriteFile(heartbeatFile, []byte{}, 0644)).To(Succeed())
+			defer os.Remove(heartbeatFile)
+			defer os.Remove(errorFile)
+			// The helper waits for the COPY of its first slot, which no one runs, as when gpbackup has been killed
+			start := time.Now()
+			helperCmd := gpbackupHelperBackup(gpbackupHelperPath, "--compression-level", "0", "--data-file", dataFileFullPath, "--heartbeat-timeout", "2")
+			Expect(helperCmd.Wait()).To(HaveOccurred())
+			Expect(time.Since(start)).To(BeNumerically(">=", 2*time.Second))
+			Expect(time.Since(start)).To(BeNumerically("<", 10*time.Second))
+			// As on the request of the cleanup of gpbackup, it removes its pipes and writes its error file
+			pipes, _ := filepath.Glob(pipeFile + "_[0-9]*")
+			Expect(pipes).To(BeEmpty())
+			Expect(errorFile).To(BeAnExistingFile())
+			Expect(tocFile).ToNot(BeAnExistingFile())
+		})
+		It("keeps a backup gpbackup_helper whose heartbeat file gpbackup touches", func() {
+			heartbeatFile := utils.GetHeartbeatFilename(pipeFile)
+			Expect(os.WriteFile(heartbeatFile, []byte{}, 0644)).To(Succeed())
+			defer os.Remove(heartbeatFile)
+			touching := make(chan struct{})
+			defer close(touching)
+			go func() {
+				ticker := time.NewTicker(300 * time.Millisecond)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-touching:
+						return
+					case now := <-ticker.C:
+						_ = os.Chtimes(heartbeatFile, now, now)
+					}
+				}
+			}()
+			helperCmd := gpbackupHelperBackup(gpbackupHelperPath, "--compression-level", "0", "--data-file", dataFileFullPath, "--heartbeat-timeout", "2")
+			// Longer than the timeout before the first table
+			time.Sleep(4 * time.Second)
+			writeToBackupPipes(defaultData)
+			err := helperCmd.Wait()
+			printHelperLogOnError(err)
+			Expect(err).ToNot(HaveOccurred())
+			assertBackupArtifacts(false)
+		})
+		It("fails to end the data file of a backup gpbackup_helper that has been killed", func() {
+			helperCmd := gpbackupHelperBackup(gpbackupHelperPath, "--compression-level", "0", "--data-file", dataFileFullPath)
+			writeTablesToSlots(defaultData, defaultData, defaultData)
+			// Killed after its last table, the helper writes neither its segment TOC nor an error file
+			Expect(helperCmd.Process.Kill()).To(Succeed())
+			_ = helperCmd.Wait()
+
+			start := time.Now()
+			Expect(finishBackupHelper(3)).ToNot(Succeed())
+			Expect(time.Since(start)).To(BeNumerically("<", 30*time.Second))
+			Expect(tocFile).ToNot(BeAnExistingFile())
+		})
+		It("fails to end the data file of a backup gpbackup_helper killed before its segment TOC", func() {
+			slowPlugin := createSlowPlugin()
+			defer os.Remove(slowPluginTestConfig)
+			defer func() { _ = exec.Command("pkill", "-f", slowPlugin).Run() }()
+			helperCmd := gpbackupHelperBackup(gpbackupHelperPath, "--compression-level", "0", "--data-file", dataFileFullPath, "--plugin-config", slowPluginTestConfig)
+			writeTablesToSlots(defaultData)
+
+			// The helper ends its data file at once, then waits for the plugin before its segment TOC
+			finished := make(chan error)
+			go func() {
+				defer GinkgoRecover()
+				finished <- finishBackupHelper(1)
+			}()
+			time.Sleep(3 * time.Second)
+			Expect(helperCmd.Process.Kill()).To(Succeed())
+			_ = helperCmd.Wait()
+			Eventually(finished, 10*time.Second).Should(Receive(HaveOccurred()))
+			Expect(tocFile).ToNot(BeAnExistingFile())
+		})
+		It("ends the data file of a backup gpbackup_helper that is still writing its last table", func() {
+			createSlowPlugin()
+			defer os.Remove(slowPluginTestConfig)
+			helperCmd := gpbackupHelperBackup(gpbackupHelperPath, "--compression-level", "0", "--data-file", dataFileFullPath, "--plugin-config", slowPluginTestConfig)
+
+			// More data than the pipe to the plugin holds, so that the helper is still writing
+			// the table once the pipe of its slot has taken the rest of it
+			writeTablesToSlots(strings.Repeat("a", 96*1024))
+			start := time.Now()
+			Expect(finishBackupHelper(1)).To(Succeed())
+			// Ending the data file outlasts a single attempt to open its next slot
+			Expect(time.Since(start)).To(BeNumerically(">", 10*time.Second))
+			Expect(helperCmd.Wait()).To(Succeed())
+			Expect(tocFile).To(BeAnExistingFile())
 		})
 		It("Generates error file when backup agent interrupted", FlakeAttempts(5), func() {
 			helperCmd := gpbackupHelperBackup(gpbackupHelperPath, "--compression-level", "0", "--data-file", dataFileFullPath)
@@ -776,10 +888,31 @@ func printHelperLogOnError(helperErr error) {
 	}
 }
 
+/*
+ * writeToBackupPipes writes the data of the tables with oids 1, 2 and 3 to the
+ * helper and then ends its data file, as gpbackup does.
+ */
 func writeToBackupPipes(data string) {
-	for i := 1; i <= 3; i++ {
-		currentPipe := fmt.Sprintf("%s_%d", pipeFile, i)
+	writeTablesToSlots(data, data, data)
+	err := finishBackupHelper(3)
+	if err != nil {
+		Fail(fmt.Sprintf("%v", err))
+	}
+}
+
+/*
+ * writeTablesToSlots writes the data of each table, with oids from 1, to the pipe
+ * of its slot of the helper, as the COPY commands of gpbackup do, writing the oid
+ * of the table next to the pipe of its slot first.
+ */
+func writeTablesToSlots(tables ...string) {
+	for slot, data := range tables {
+		currentPipe := fmt.Sprintf("%s_%d", pipeFile, slot)
 		_, err := os.Stat(currentPipe)
+		if err != nil {
+			Fail(fmt.Sprintf("%v", err))
+		}
+		err = os.WriteFile(utils.GetSlotOidFilename(currentPipe), []byte(fmt.Sprintf("%d\n", slot+1)), 0644)
 		if err != nil {
 			Fail(fmt.Sprintf("%v", err))
 		}
@@ -795,11 +928,31 @@ func writeToBackupPipes(data string) {
 	}
 }
 
+// createSlowPlugin creates a plugin that starts reading the data file only after 15 seconds
+func createSlowPlugin() string {
+	slowPlugin := fmt.Sprintf("%s/slow_plugin.bash", testDir)
+	err := os.WriteFile(slowPlugin, []byte("#!/bin/bash\nif [ \"$1\" = backup_data ]; then sleep 15; cat > \"$3\"; fi\n"), 0755)
+	Expect(err).ToNot(HaveOccurred())
+	err = os.WriteFile(slowPluginTestConfig, []byte(fmt.Sprintf("executablepath: %s\n", slowPlugin)), 0644)
+	Expect(err).ToNot(HaveOccurred())
+	return slowPlugin
+}
+
+// finishBackupHelper ends the data file of the helper at the given slot with the commands of gpbackup
+func finishBackupHelper(nextSlot int) error {
+	wake, wait := utils.FinishSlotBackupHelperCommands(fmt.Sprintf("%s_%d", pipeFile, nextSlot), tocFile, errorFile)
+	output, err := exec.Command("bash", "-c", wake+" && "+wait).CombinedOutput()
+	if err != nil {
+		fmt.Printf("%s", output)
+	}
+	return err
+}
+
 func waitForPipeCreation() {
 	// wait up to 5 seconds for two pipe files to have been created
 	tries := 0
 	for tries < 1000 {
-		pipes, err := filepath.Glob(pipeFile + "_[1-9]*")
+		pipes, err := filepath.Glob(pipeFile + "_[0-9]*")
 		Expect(err).ToNot(HaveOccurred())
 		if len(pipes) > 1 {
 			return

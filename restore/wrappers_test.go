@@ -7,6 +7,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
+	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/history"
 	"github.com/GreengageDB/gpbackup/options"
@@ -115,6 +116,75 @@ var _ = Describe("wrapper tests", func() {
 				To(Equal([]string{"schema1.table1", "schema2.table2"}))
 		})
 
+	})
+	Describe("GetPartitionedTableFQNs", func() {
+		var version dbconn.GPDBVersion
+		BeforeEach(func() {
+			version = connectionPool.Version
+		})
+		AfterEach(func() {
+			connectionPool.Version = version
+		})
+		It("gets the roots and the intermediate levels of the partition hierarchies before GPDB 7", func() {
+			testhelper.SetDBVersion(connectionPool, "6.0.0")
+			mock.ExpectQuery(`SELECT p.parrelid FROM pg_catalog.pg_partition p\s+UNION SELECT r.parchildrelid FROM pg_catalog.pg_partition_rule r`).
+				WillReturnRows(sqlmock.NewRows([]string{"fqn"}).AddRow("public.sales").AddRow("public.sales_1_prt_2"))
+			partitionedTables, err := restore.GetPartitionedTableFQNs()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(partitionedTables).To(Equal([]string{"public.sales", "public.sales_1_prt_2"}))
+		})
+		It("gets the partitioned tables from GPDB 7", func() {
+			testhelper.SetDBVersion(connectionPool, "7.0.0")
+			mock.ExpectQuery(`WHERE c.relkind = 'p';`).
+				WillReturnRows(sqlmock.NewRows([]string{"fqn"}).AddRow("public.sales").AddRow("public.sales_1_prt_2"))
+			partitionedTables, err := restore.GetPartitionedTableFQNs()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(partitionedTables).To(Equal([]string{"public.sales", "public.sales_1_prt_2"}))
+		})
+	})
+	Describe("GetNumMetadataConns", func() {
+		var numConns int
+		BeforeEach(func() {
+			numConns = connectionPool.NumConns
+			connectionPool.NumConns = 6
+		})
+		AfterEach(func() {
+			connectionPool.NumConns = numConns
+			_ = cmdFlags.Set(options.JOBS, "1")
+			cmdFlags.Lookup(options.JOBS).Changed = false
+		})
+		It("restores the metadata with --jobs connections when --copy-queue-size adds more for the data", func() {
+			_ = cmdFlags.Set(options.JOBS, "3")
+			Expect(restore.GetNumMetadataConns()).To(Equal(3))
+		})
+		It("restores the metadata with every connection without --jobs", func() {
+			Expect(restore.GetNumMetadataConns()).To(Equal(6))
+		})
+	})
+	Describe("GetNumConnections", func() {
+		BeforeEach(func() {
+			restore.SetBackupConfig(&history.BackupConfig{SingleDataFile: true})
+		})
+		AfterEach(func() {
+			_ = cmdFlags.Set(options.JOBS, "1")
+			_ = cmdFlags.Set(options.COPY_QUEUE_SIZE, "1")
+			cmdFlags.Lookup(options.COPY_QUEUE_SIZE).Changed = false
+		})
+		It("opens --jobs times --copy-queue-size connections for a backup taken with --single-data-file", func() {
+			_ = cmdFlags.Set(options.JOBS, "3")
+			_ = cmdFlags.Set(options.COPY_QUEUE_SIZE, "2")
+			Expect(restore.GetNumConnections()).To(Equal(6))
+		})
+		It("opens --jobs connections without --copy-queue-size", func() {
+			_ = cmdFlags.Set(options.JOBS, "3")
+			Expect(restore.GetNumConnections()).To(Equal(3))
+		})
+		It("opens --copy-queue-size connections before the backup is known", func() {
+			restore.SetBackupConfig(nil)
+			_ = cmdFlags.Set(options.JOBS, "3")
+			_ = cmdFlags.Set(options.COPY_QUEUE_SIZE, "2")
+			Expect(restore.GetNumConnections()).To(Equal(2))
+		})
 	})
 	Describe("restore history tests", func() {
 		sampleConfigContents := `

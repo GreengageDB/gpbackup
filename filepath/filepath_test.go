@@ -176,6 +176,20 @@ var _ = Describe("filepath tests", func() {
 			Expect(fpInfo.GetTableBackupFilePath(-1, 1234, "", true)).To(Equal("/foo/bar/gpseg-1/backups/20170101/20170101010101/gpbackup_-1_20170101010101"))
 		})
 	})
+	Describe("GetSingleDataFilePath and GetSegmentTOCFilePathForDataFile", func() {
+		It("returns the usual single data file and segment TOC paths for data file 0", func() {
+			fpInfo := NewFilePathInfo(c, "", "20170101010101", "gpseg", false)
+			Expect(fpInfo.GetSingleDataFilePath(-1, ".gz", 0)).To(Equal(fpInfo.GetTableBackupFilePath(-1, 0, ".gz", true)))
+			Expect(fpInfo.GetSegmentTOCFilePathForDataFile(-1, 0)).To(Equal(fpInfo.GetSegmentTOCFilePath(-1)))
+			Expect(fpInfo.GetSegmentTOCFilePath(-1)).To(Equal("/data/gpseg-1/backups/20170101/20170101010101/gpbackup_-1_20170101010101_toc.yaml"))
+		})
+		It("returns numbered data file and segment TOC paths for other data files", func() {
+			fpInfo := NewFilePathInfo(c, "/foo/bar", "20170101010101", "gpseg", false)
+			Expect(fpInfo.GetSingleDataFilePath(-1, ".gz", 2)).To(Equal("/foo/bar/gpseg-1/backups/20170101/20170101010101/gpbackup_-1_20170101010101_file2.gz"))
+			Expect(fpInfo.GetSingleDataFilePath(-1, "", 2)).To(Equal("/foo/bar/gpseg-1/backups/20170101/20170101010101/gpbackup_-1_20170101010101_file2"))
+			Expect(fpInfo.GetSegmentTOCFilePathForDataFile(-1, 2)).To(Equal("/foo/bar/gpseg-1/backups/20170101/20170101010101/gpbackup_-1_20170101010101_toc2.yaml"))
+		})
+	})
 	Describe("ParseSegPrefix", func() {
 		AfterEach(func() {
 			operating.System.Glob = path.Glob

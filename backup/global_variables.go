@@ -28,7 +28,6 @@ const (
 	Deferred
 	Complete
 	PG_LOCK_NOT_AVAILABLE = "55P03"
-	ENUM_TYPE_OID         = 3500
 )
 
 /*
@@ -109,6 +108,10 @@ func SetReport(report *report.Report) {
 
 func GetReport() *report.Report {
 	return backupReport
+}
+
+func SetDataFiles(slots *DataFileSlots) {
+	dataFiles = slots
 }
 
 func SetTOC(toc *toc.TOC) {

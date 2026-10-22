@@ -164,6 +164,10 @@ func DoBackup() {
 		}
 
 		backupReport.RestorePlan = PopulateRestorePlan(backupSetTables, targetBackupRestorePlan, dataTables)
+		// Known before the data is backed up, so that the history database records it below
+		if numDataFiles := getNumDataFiles(len(backupSetTables)); numDataFiles > 1 {
+			backupReport.BackupConfig.SingleDataFileCount = numDataFiles
+		}
 	}
 
 	// As soon as all necessary data is available, capture the backup into history database
@@ -383,30 +387,86 @@ func backupData(tables []Table) {
 		gplog.Info("Data backup complete")
 		return
 	}
+	dataFiles = nil
+	numDataFiles := 1
 	if MustGetFlagBool(options.SINGLE_DATA_FILE) {
 		gplog.Verbose("Initializing pipes and gpbackup_helper on segments for single data file backup")
 		utils.VerifyHelperVersionOnSegments(version, globalCluster)
-		oidList := make([]string, 0, len(tables))
-		for _, table := range tables {
-			oidList = append(oidList, fmt.Sprintf("%d", table.Oid))
-		}
-		utils.WriteOidListToSegments(oidList, globalCluster, globalFPInfo)
 		compressStr := fmt.Sprintf(" --compression-level %d --compression-type %s", MustGetFlagInt(options.COMPRESSION_LEVEL), MustGetFlagString(options.COMPRESSION_TYPE))
 		if MustGetFlagBool(options.NO_COMPRESSION) {
 			compressStr = " --compression-level 0"
 		}
-		initialPipes := CreateInitialSegmentPipes(oidList, globalCluster, connectionPool, globalFPInfo)
-		// Do not pass through the --on-error-continue flag or the resizeClusterMap because neither apply to gpbackup
-		utils.StartGpbackupHelpers(globalCluster, globalFPInfo, "--backup-agent",
-			MustGetFlagString(options.PLUGIN_CONFIG), compressStr, false, false, &wasTerminated, initialPipes, true, false, 0, 0, gplog.GetVerbosity())
+
+		numDataFiles = getNumDataFiles(len(tables))
+		if numDataFiles > 1 {
+			gplog.Verbose("Writing data to %d data files per segment", numDataFiles)
+		}
+		startDataFileHelpers(numDataFiles, compressStr)
 	}
 	gplog.Info("Writing data to file")
 	rowsCopiedMaps := BackupDataForAllTables(tables)
+	if dataFiles != nil && !wasTerminated.Load() {
+		utils.FinishSlotBackupHelpers(globalCluster, globalFPInfo, dataFiles.GetNextSlots())
+	}
 	AddTableDataEntriesToTOC(tables, rowsCopiedMaps)
-	if MustGetFlagBool(options.SINGLE_DATA_FILE) && MustGetFlagString(options.PLUGIN_CONFIG) != "" {
-		pluginConfig.BackupSegmentTOCs(globalCluster, globalFPInfo)
+	if dataFiles != nil && !wasTerminated.Load() && MustGetFlagString(options.PLUGIN_CONFIG) != "" {
+		pluginConfig.BackupSegmentTOCs(globalCluster, globalFPInfo, numDataFiles)
 	}
 	logCompletionMessage("Data backup")
+}
+
+/*
+ * getNumDataFiles returns the number of data files per segment for the given
+ * number of tables: with --single-data-file, each job writes its own data file, so
+ * that the tables are backed up in parallel, and no data file is left without a
+ * table; 1 without --single-data-file.
+ */
+func getNumDataFiles(numTables int) int {
+	if !MustGetFlagBool(options.SINGLE_DATA_FILE) {
+		return 1
+	}
+	numDataFiles := MustGetFlagInt(options.JOBS)
+	if numDataFiles > numTables {
+		numDataFiles = numTables
+	}
+	return numDataFiles
+}
+
+/*
+ * startDataFileHelpers starts a gpbackup_helper for each data file, one unless
+ * --jobs is given, which reads
+ * its tables from the pipes of its slots, as described at DataFileSlots.  Each data
+ * file gets as many slots ahead as its share of the workers, plus one for the
+ * main worker, which backs up the tables deferred because of lock conflicts.
+ */
+func startDataFileHelpers(numDataFiles int, compressStr string) {
+	startHelperHeartbeat()
+	numPipes := (connectionPool.NumConns-1)/numDataFiles + 1
+	dataFiles = NewDataFileSlots(numDataFiles, numPipes)
+	slotNames := make([]string, numPipes)
+	for slot := range slotNames {
+		slotNames[slot] = fmt.Sprintf("%d", slot)
+	}
+	for file := 0; file < numDataFiles; file++ {
+		startDataFileHelper(file, numDataFiles, slotNames, compressStr)
+	}
+}
+
+// The helpers end once gpbackup stops touching their heartbeat files, as when it dies without its cleanup
+func startHelperHeartbeat() {
+	unlock := utils.LockHelperStart(&wasTerminated)
+	defer unlock()
+	utils.StartHelperHeartbeat(globalCluster, globalFPInfo)
+}
+
+func startDataFileHelper(file int, numDataFiles int, slotNames []string, compressStr string) {
+	unlock := utils.LockHelperStart(&wasTerminated)
+	defer unlock()
+	helperIdx := utils.DataFileHelperIdx(file, numDataFiles)
+	utils.CreateSegmentPipesOnAllHostsForBackup(slotNames, globalCluster, globalFPInfo, helperIdx...)
+	// Do not pass through the --on-error-continue flag or the resizeClusterMap because neither apply to gpbackup
+	utils.StartGpbackupHelpers(globalCluster, globalFPInfo, "--backup-agent",
+		MustGetFlagString(options.PLUGIN_CONFIG), compressStr, false, false, len(slotNames), true, false, 0, 0, file, gplog.GetVerbosity(), helperIdx...)
 }
 
 func backupPostdata(metadataFile *utils.FileWithByteCount) {
@@ -563,6 +623,8 @@ func DoCleanup(backupFailed bool) {
 		cancelBlockedQueries(globalFPInfo.Timestamp)
 	}
 	if globalFPInfo.Timestamp != "" && MustGetFlagBool(options.SINGLE_DATA_FILE) {
+		// Before the files of the helpers are removed, as it would create their heartbeat files again
+		utils.StopHelperHeartbeat()
 		// Copy sessions must be terminated before cleaning up gpbackup_helper processes to avoid a potential deadlock
 		// If the terminate query is sent via a connection with an active COPY command, and the COPY's pipe is cleaned up, the COPY query will hang.
 		// This results in the DoCleanup function passed to the signal handler to never return, blocking the os.Exit call
@@ -574,12 +636,11 @@ func DoCleanup(backupFailed bool) {
 		utils.CleanUpSegmentHelperProcesses(globalCluster, globalFPInfo, "backup", cleanupTimeout)
 		utils.CleanUpHelperFilesOnAllHosts(globalCluster, globalFPInfo, cleanupTimeout)
 
-		// Check gpbackup_helper errors here if backup was terminated
-		if wasTerminated.Load() {
-			err := utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo)
-			if err != nil {
-				gplog.Error(err.Error())
-			}
+		// Check gpbackup_helper errors here if backup was terminated. The check removes
+		// the error files, which the helpers stopped above write after any failure.
+		err := utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo)
+		if err != nil && wasTerminated.Load() {
+			gplog.Error(err.Error())
 		}
 	}
 
@@ -588,7 +649,9 @@ func DoCleanup(backupFailed bool) {
 	// failure; in either case, update the end time to the actual value. Between our signal handler and recovering
 	// panics, there should be no way for gpbackup to exit that leaves the entry in the initial status.
 
-	if !MustGetFlagBool(options.NO_HISTORY) {
+	// Before the backup report and the paths of the backup exist, as when the setup fails, there is no
+	// entry to update, and the history database would be looked for in the current directory
+	if !MustGetFlagBool(options.NO_HISTORY) && backupReport != nil && globalFPInfo.Timestamp != "" {
 		var statusString string
 		if backupFailed {
 			statusString = history.BackupStatusFailed
@@ -616,7 +679,7 @@ func DoCleanup(backupFailed bool) {
 
 // Cancel blocked gpbackup queries waiting for locks.
 func cancelBlockedQueries(timestamp string) {
-	conn := dbconn.NewDBConnFromEnvironment(MustGetFlagString(options.DBNAME))
+	conn := utils.NewResourceGroupBypassConn(MustGetFlagString(options.DBNAME))
 	conn.MustConnect(1)
 	defer conn.Close()
 
@@ -675,20 +738,6 @@ func logCompletionMessage(msg string) {
 	} else {
 		gplog.Info("%s complete", msg)
 	}
-}
-
-func CreateInitialSegmentPipes(oidList []string, c *cluster.Cluster, connectionPool *dbconn.DBConn, fpInfo filepath.FilePathInfo) int {
-	// Create min(connections, tables) segment pipes on each host
-	var maxPipes int
-	if connectionPool.NumConns < len(oidList) {
-		maxPipes = connectionPool.NumConns
-	} else {
-		maxPipes = len(oidList)
-	}
-	for i := 0; i < maxPipes; i++ {
-		utils.CreateSegmentPipeOnAllHostsForBackup(oidList[i], c, fpInfo)
-	}
-	return maxPipes
 }
 
 type TableLocks struct {

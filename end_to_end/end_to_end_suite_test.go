@@ -25,7 +25,6 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/structmatcher"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/backup"
-	"github.com/GreengageDB/gpbackup/filepath"
 	"github.com/GreengageDB/gpbackup/testutils"
 	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/GreengageDB/gpbackup/utils"
@@ -325,19 +324,16 @@ func assertRelationsExistForIncremental(conn *dbconn.DBConn, expectedNumTables i
 
 func assertArtifactsCleaned(timestamp string) {
 	cmdStr := fmt.Sprintf("ps -ef | grep -v grep | grep -E gpbackup_helper.*%s || true", timestamp)
-	output := mustRunCommand(exec.Command("bash", "-c", cmdStr))
-	Eventually(func() string { return strings.TrimSpace(string(output)) }, 30*time.Second, 100*time.Millisecond).Should(Equal(""))
+	Eventually(func() string {
+		return strings.TrimSpace(string(mustRunCommand(exec.Command("bash", "-c", cmdStr))))
+	}, 30*time.Second, 100*time.Millisecond).Should(Equal(""))
 
-	fpInfo := filepath.NewFilePathInfo(backupCluster, "", timestamp, "", false)
 	description := "Checking if helper files are cleaned up properly"
 	cleanupFunc := func(contentID int) string {
-		oidFile := fpInfo.GetSegmentHelperFilePath(contentID, "oid")
-		scriptFile := fpInfo.GetSegmentHelperFilePath(contentID, "script")
-		pipeFile := fpInfo.GetSegmentPipeFilePath(contentID)
-		errorFile := utils.GetErrorFilename(pipeFile)
-		skipFile := utils.GetSkipFilename(pipeFile)
-
-		return fmt.Sprintf("! ls %s* && ! ls %s* && ! ls %s* && ! ls %s* && ! ls %s*", errorFile, skipFile, oidFile, scriptFile, pipeFile)
+		// The files are named after the process of gpbackup or gprestore, not that of the test,
+		// and those of the helper of a data file other than the first have its index
+		files := path.Join(backupCluster.GetDirForContent(contentID), fmt.Sprintf("gpbackup_%d_%s_*_", contentID, timestamp))
+		return fmt.Sprintf("! ls -d %[1]soid* %[1]sscript* %[1]spipe* %[1]serror* %[1]sskip* %[1]sheartbeat* 2>/dev/null | grep -q .", files)
 	}
 	remoteOutput := backupCluster.GenerateAndExecuteCommand(description, cluster.ON_SEGMENTS|cluster.INCLUDE_COORDINATOR, cleanupFunc)
 	if remoteOutput.NumErrors != 0 {
@@ -1036,6 +1032,88 @@ var _ = Describe("backup and restore end to end tests", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(files).To(HaveLen(0))
 		})
+		DescribeTable(`keeps the data of the tables of a data file whose gpbackup_helper has stopped with --single-data-file and --on-error-continue`, func(backupJobs int, restoreFlags []string, restoredRows string, truncates bool) {
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA helper_stop")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA helper_stop CASCADE")
+			for i := 1; i <= 16; i++ {
+				testhelper.AssertQueryRuns(backupConn, fmt.Sprintf(`CREATE TABLE helper_stop.t%[1]d (i int, v text) DISTRIBUTED BY (i);
+					INSERT INTO helper_stop.t%[1]d SELECT g, repeat('x', 100) FROM generate_series(1, 1000) g`, i))
+			}
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--jobs", fmt.Sprintf("%d", backupJobs),
+				"--include-schema", "helper_stop",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+
+			// The last data file of the backup is broken
+			brokenDataFile := backupJobs - 1
+			tocFiles, _ := path.Glob(path.Join(backupDir, "*-1/backups/*", timestamp, fmt.Sprintf("gpbackup_%s_toc.yaml", timestamp)))
+			Expect(tocFiles).To(HaveLen(1))
+			dataEntries := toc.NewTOC(tocFiles[0]).DataEntries
+			brokenTables := make([]string, 0)
+			for _, entry := range dataEntries {
+				if entry.DataFileIdx == brokenDataFile {
+					brokenTables = append(brokenTables, entry.Name)
+				}
+			}
+			// The helper may notice that it has stopped only a few tables later
+			Expect(len(brokenTables)).To(BeNumerically(">=", 4))
+
+			// The data file of segment 0 ends in its first table, so that its helper stops there
+			dataFileName := fmt.Sprintf("gpbackup_0_%s.gz", timestamp)
+			if brokenDataFile > 0 {
+				dataFileName = fmt.Sprintf("gpbackup_0_%s_file%d.gz", timestamp, brokenDataFile)
+			}
+			dataFiles, _ := path.Glob(path.Join(backupDir, "*/backups/*", timestamp, dataFileName))
+			Expect(dataFiles).To(HaveLen(1))
+			Expect(os.Truncate(dataFiles[0], 100)).To(Succeed())
+			// Rows that a table keeps if it is not truncated
+			for i := 1; i <= 16; i++ {
+				testhelper.AssertQueryRuns(backupConn, fmt.Sprintf("INSERT INTO helper_stop.t%d SELECT g, 'kept' FROM generate_series(1001, 1005) g", i))
+			}
+
+			gprestoreArgs := append([]string{
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--data-only",
+				"--on-error-continue",
+				"--jobs", "2"}, restoreFlags...)
+			restoreOutput, err := exec.Command(gprestorePath, gprestoreArgs...).CombinedOutput()
+			Expect(err).To(HaveOccurred(), string(restoreOutput))
+
+			errorFiles, _ := path.Glob(path.Join(backupDir, "*-1/backups/*", timestamp, "*error_tables_data"))
+			Expect(errorFiles).To(HaveLen(1))
+			contents, err := ioutil.ReadFile(errorFiles[0])
+			Expect(err).ToNot(HaveOccurred())
+			errorTables := strings.Split(string(contents), "\n")
+			for _, entry := range dataEntries {
+				tableName := fmt.Sprintf("helper_stop.%s", entry.Name)
+				numRows := dbconn.MustSelectString(backupConn, fmt.Sprintf("SELECT count(*) AS string FROM %s", tableName))
+				if entry.DataFileIdx != brokenDataFile {
+					Expect(numRows).To(Equal(restoredRows), tableName)
+					Expect(errorTables).ToNot(ContainElement(tableName))
+				} else if numRows != restoredRows {
+					Expect(errorTables).To(ContainElement(tableName))
+					if truncates {
+						// A table is truncated in the transaction of its COPY, which is rolled back
+						Expect(numRows).To(Equal("1005"), tableName)
+					}
+				}
+			}
+			// The last table of the broken data file keeps its rows, as its helper has stopped by then
+			Expect(dbconn.MustSelectString(backupConn, fmt.Sprintf("SELECT count(*) AS string FROM helper_stop.%s", brokenTables[len(brokenTables)-1]))).To(Equal("1005"))
+			assertArtifactsCleaned(timestamp)
+		},
+			Entry("with two data files, truncating the tables with --truncate-table", 2, []string{"--truncate-table"}, "1000", true),
+			Entry("with two data files, truncating the tables with --incremental", 2, []string{"--incremental"}, "1000", true),
+			// The restored tables then have their 1005 rows and the 1000 of the backup
+			Entry("with two data files, without truncating the tables", 2, []string{}, "2005", false),
+			Entry("with a single data file, truncating the tables with --truncate-table", 1, []string{"--truncate-table"}, "1000", true),
+		)
 	})
 	Describe("Redirect Schema", func() {
 		It("runs gprestore with --redirect-schema restoring data and statistics to the new schema", func() {
@@ -1976,6 +2054,428 @@ var _ = Describe("backup and restore end to end tests", func() {
 			assertDataRestored(restoreConn, map[string]int{
 				"public.sales": 1, "public.sales_1_prt_jan17": 1})
 		})
+		DescribeTable("keeps the data of the child of an inherited table restored before its parent", func(backupFlags []string, restoreFlags []string) {
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA truncate_inherit")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA truncate_inherit CASCADE")
+			// The child comes before its parent among the data entries
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE truncate_inherit.child (i int) DISTRIBUTED BY (i);
+				CREATE TABLE truncate_inherit.parent (i int) DISTRIBUTED BY (i);
+				ALTER TABLE truncate_inherit.child INHERIT truncate_inherit.parent;
+				INSERT INTO truncate_inherit.child SELECT generate_series(1, 1000);
+				INSERT INTO truncate_inherit.parent SELECT generate_series(1, 100)`)
+			output := gpbackup(gpbackupPath, backupHelperPath, append([]string{
+				"--include-schema", "truncate_inherit",
+				"--backup-dir", backupDir}, backupFlags...)...)
+			timestamp := getBackupTimestamp(string(output))
+
+			gprestore(gprestorePath, restoreHelperPath, timestamp, append([]string{
+				"--backup-dir", backupDir,
+				"--truncate-table", "--data-only"}, restoreFlags...)...)
+			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM ONLY truncate_inherit.child")).To(Equal("1000"))
+			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM ONLY truncate_inherit.parent")).To(Equal("100"))
+		},
+			Entry("with a data file per table", []string{}, []string{}),
+			// The TRUNCATE of the parent locked the child, whose COPY waited for it, and the helper for that COPY
+			Entry("with a single data file restored by two connections", []string{"--single-data-file"}, []string{"--copy-queue-size", "2"}),
+		)
+		It("restores the other tables of a data file whose TRUNCATE of a table fails with --on-error-continue", func() {
+			// gprestore runs here without the wrapper that installs the gpbackup_helper of its version
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
+			// Nor are skip files created before GPDB 6
+			testutils.SkipIfBefore6(backupConn)
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA truncate_missing")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA truncate_missing CASCADE")
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE truncate_missing.first (i int) DISTRIBUTED BY (i);
+				CREATE TABLE truncate_missing.second (i int) DISTRIBUTED BY (i);
+				INSERT INTO truncate_missing.first SELECT generate_series(1, 1000);
+				INSERT INTO truncate_missing.second SELECT generate_series(1, 1000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "truncate_missing",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+			// The first table of the data file cannot be truncated, and the second keeps these rows unless restored
+			testhelper.AssertQueryRuns(backupConn, `DROP TABLE truncate_missing.first;
+				INSERT INTO truncate_missing.second SELECT generate_series(1001, 1005)`)
+
+			// Without a skip file for the first table, its helper waited for its COPY, and the COPY of the second for the helper
+			restoreOutput, err := exec.Command(gprestorePath,
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--truncate-table", "--data-only", "--on-error-continue").CombinedOutput()
+			Expect(err).To(HaveOccurred(), string(restoreOutput))
+			Expect(string(restoreOutput)).To(ContainSubstring(`relation "truncate_missing.first" does not exist`))
+			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM truncate_missing.second")).To(Equal("1000"))
+		})
+		It("restores the tables of a data file while a session that has read the first of them reads the next", func() {
+			// gprestore runs here without the wrapper that installs the gpbackup_helper of its version
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA truncate_reader")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA truncate_reader CASCADE")
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE truncate_reader.first (i int) DISTRIBUTED BY (i);
+				CREATE TABLE truncate_reader.second (i int) DISTRIBUTED BY (i);
+				INSERT INTO truncate_reader.first SELECT generate_series(1, 1000);
+				INSERT INTO truncate_reader.second SELECT generate_series(1, 1000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "truncate_reader",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+
+			// The session has read the first table, so that the TRUNCATE of the first table waits for it
+			readerConn := testutils.SetupTestDbConn("testdb")
+			defer readerConn.Close()
+			readerConn.MustExec("SET statement_timeout = '10s'")
+			readerConn.MustExec("BEGIN; LOCK TABLE truncate_reader.first IN ACCESS SHARE MODE")
+			restoreCmd := exec.Command(gprestorePath,
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--truncate-table", "--data-only",
+				"--copy-queue-size", "2")
+			Expect(restoreCmd.Start()).To(Succeed())
+			truncateWaitsQuery := `SELECT count(*) FROM pg_locks l
+				JOIN pg_class c ON c.oid = l.relation
+				JOIN pg_namespace n ON n.oid = c.relnamespace
+				WHERE n.nspname = 'truncate_reader' AND c.relname = 'first' AND l.mode = 'AccessExclusiveLock' AND NOT l.granted`
+			Eventually(func() int {
+				var numWaiting int
+				_ = readerConn.Get(&numWaiting, truncateWaitsQuery)
+				return numWaiting
+			}, "30s", "100ms").Should(BeNumerically(">", 0))
+			// Long enough for the other connection to truncate the second table if it went ahead
+			time.Sleep(time.Second)
+
+			// The second table is not locked until the first is truncated, so the session can read it and end
+			var numRows int
+			Expect(readerConn.Get(&numRows, "SELECT count(*) FROM truncate_reader.second")).To(Succeed())
+			Expect(numRows).To(Equal(1000))
+			readerConn.MustExec("COMMIT")
+			Expect(restoreCmd.Wait()).To(Succeed())
+			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM truncate_reader.first")).To(Equal("1000"))
+			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM truncate_reader.second")).To(Equal("1000"))
+		})
+	})
+	Describe("Restore of a single data file while a table waits for a lock", func() {
+		BeforeEach(func() {
+			// gprestore runs here without the wrapper that installs the gpbackup_helper of its version
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
+			// Nor are skip files created, or tables distributed by an enum found, before GPDB 6
+			testutils.SkipIfBefore6(backupConn)
+		})
+		// Whether the log of the gprestore of the given process, started at the given time, has a line of the
+		// given pattern after its prefix. The gprestore writes to the log of the day it started, which is not the
+		// last log once midnight has passed, so each log written since is read
+		restoreLogMatches := func(pid int, started time.Time, pattern string) bool {
+			restoreLogs, _ := path.Glob(path.Join(os.Getenv("HOME"), "gpAdminLogs/gprestore_*"))
+			linePattern := regexp.MustCompile(fmt.Sprintf(`:0*%d-%s`, pid, pattern))
+			for _, restoreLog := range restoreLogs {
+				info, err := os.Stat(restoreLog)
+				if err != nil || info.ModTime().Before(started.Add(-time.Second)) {
+					continue
+				}
+				contents, err := os.ReadFile(restoreLog)
+				Expect(err).ToNot(HaveOccurred())
+				if linePattern.Match(contents) {
+					return true
+				}
+			}
+			return false
+		}
+		// Interrupts a restore that a failure leaves running, so that its cleanup runs
+		interruptIfRunning := func(restoreCmd *exec.Cmd) {
+			if restoreCmd.ProcessState == nil {
+				_ = restoreCmd.Process.Signal(os.Interrupt)
+				_ = restoreCmd.Wait()
+			}
+		}
+		// The number of the given sessions of gprestore that run or wait as given
+		countRestoreSessions := func(condition string) int {
+			var count int
+			Expect(backupConn.Get(&count, fmt.Sprintf(`SELECT count(*) FROM pg_stat_activity
+				WHERE application_name LIKE 'gprestore\_%%' AND %s`, condition))).To(Succeed())
+			return count
+		}
+		// Whether a lock of the given mode on the given table waits
+		lockWaits := func(schema string, table string, mode string) func() int {
+			return func() int {
+				var count int
+				_ = backupConn.Get(&count, fmt.Sprintf(`SELECT count(*) FROM pg_locks l
+					JOIN pg_class c ON c.oid = l.relation
+					JOIN pg_namespace n ON n.oid = c.relnamespace
+					WHERE n.nspname = '%s' AND c.relname = '%s' AND l.mode = '%s' AND NOT l.granted`, schema, table, mode))
+				return count
+			}
+		}
+		countRows := func(table string) func() string {
+			return func() string {
+				count, _ := dbconn.SelectString(backupConn, fmt.Sprintf("SELECT count(*) AS string FROM %s", table))
+				return count
+			}
+		}
+		It("does not take the tables beyond the pipes of the helper after tables that fail at once with --on-error-continue", func() {
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA run_ahead")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA run_ahead CASCADE")
+			// In the data file in this order, the largest table first
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE run_ahead.t1 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE run_ahead.t2 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE run_ahead.t3 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE run_ahead.t4 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE run_ahead.t5 (i int) DISTRIBUTED BY (i);
+				INSERT INTO run_ahead.t1 SELECT generate_series(1, 100000);
+				INSERT INTO run_ahead.t2 SELECT generate_series(1, 1000);
+				INSERT INTO run_ahead.t3 SELECT generate_series(1, 1000);
+				INSERT INTO run_ahead.t4 SELECT generate_series(1, 1000);
+				INSERT INTO run_ahead.t5 SELECT generate_series(1, 1000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "run_ahead",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+			// The COPY of the second and third tables fails at once, before it reads its pipe
+			testhelper.AssertQueryRuns(backupConn, `DROP TABLE run_ahead.t2; DROP TABLE run_ahead.t3;
+				TRUNCATE run_ahead.t1, run_ahead.t4, run_ahead.t5`)
+
+			lockConn := testutils.SetupTestDbConn("testdb")
+			defer lockConn.Close()
+			lockConn.MustExec("BEGIN; LOCK TABLE run_ahead.t1 IN ACCESS EXCLUSIVE MODE")
+			restoreCmd := exec.Command(gprestorePath,
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--data-only", "--on-error-continue",
+				"--jobs", "2")
+			var restoreOutput strings.Builder
+			restoreCmd.Stdout, restoreCmd.Stderr = &restoreOutput, &restoreOutput
+			restoreStarted := time.Now()
+			Expect(restoreCmd.Start()).To(Succeed())
+			defer interruptIfRunning(restoreCmd)
+			Eventually(lockWaits("run_ahead", "t1", "RowExclusiveLock"), "30s", "100ms").Should(BeNumerically(">", 0))
+
+			// The helper has created the pipes of two tables ahead of the first one, which waits; the
+			// other connection fails the second table, and does not take the fourth before the first
+			// is restored. Its COPY would wait for its pipe, and fail once the wait timed out
+			Eventually(func() bool {
+				return restoreLogMatches(restoreCmd.Process.Pid, restoreStarted, `\[ERROR\]:-Error loading data into table run_ahead\.t2`)
+			}, "30s", "100ms").Should(BeTrue())
+			Consistently(func() int {
+				return countRestoreSessions(`state = 'active' AND query ~ '^COPY run_ahead\.t[45]'`)
+			}, "10s", "100ms").Should(Equal(0))
+			lockConn.MustExec("COMMIT")
+
+			Expect(restoreCmd.Wait()).To(HaveOccurred())
+			Expect(restoreOutput.String()).To(ContainSubstring(`relation "run_ahead.t2" does not exist`))
+			Expect(restoreOutput.String()).To(ContainSubstring(`relation "run_ahead.t3" does not exist`))
+			Expect(restoreOutput.String()).To(ContainSubstring("Encountered 2 error(s) during table data restore"))
+			Expect(countRows("run_ahead.t1")()).To(Equal("100000"))
+			Expect(countRows("run_ahead.t4")()).To(Equal("1000"))
+			Expect(countRows("run_ahead.t5")()).To(Equal("1000"))
+		})
+		It("restores the next tables of a data file while an earlier table waits to be redistributed", func() {
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA reorganize_wait")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA reorganize_wait CASCADE")
+			// A table distributed by an enum is redistributed after its COPY; it is the largest, so the first
+			testhelper.AssertQueryRuns(backupConn, `CREATE TYPE reorganize_wait.e AS ENUM ('a', 'b', 'c');
+				CREATE TABLE reorganize_wait.t0 (k reorganize_wait.e, i int) DISTRIBUTED BY (k);
+				CREATE TABLE reorganize_wait.t1 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE reorganize_wait.t2 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE reorganize_wait.t3 (i int) DISTRIBUTED BY (i);
+				INSERT INTO reorganize_wait.t0 SELECT (ARRAY['a', 'b', 'c'])[1 + i % 3]::reorganize_wait.e, i FROM generate_series(1, 30000) i;
+				INSERT INTO reorganize_wait.t1 SELECT generate_series(1, 1000);
+				INSERT INTO reorganize_wait.t2 SELECT generate_series(1, 1000);
+				INSERT INTO reorganize_wait.t3 SELECT generate_series(1, 1000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "reorganize_wait",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+			testhelper.AssertQueryRuns(backupConn, "TRUNCATE reorganize_wait.t0, reorganize_wait.t1, reorganize_wait.t2, reorganize_wait.t3")
+
+			// The lock lets the COPY of the first table go on, but not its redistribution
+			lockConn := testutils.SetupTestDbConn("testdb")
+			defer lockConn.Close()
+			lockConn.MustExec("BEGIN; LOCK TABLE reorganize_wait.t0 IN ACCESS SHARE MODE")
+			restoreCmd := exec.Command(gprestorePath,
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--data-only",
+				"--jobs", "2")
+			var restoreOutput strings.Builder
+			restoreCmd.Stdout, restoreCmd.Stderr = &restoreOutput, &restoreOutput
+			Expect(restoreCmd.Start()).To(Succeed())
+			defer interruptIfRunning(restoreCmd)
+			Eventually(lockWaits("reorganize_wait", "t0", "AccessExclusiveLock"), "30s", "100ms").Should(BeNumerically(">", 0))
+
+			// The helper is done with the first table once its COPY ends, so the other connection
+			// restores the tables after it while it waits
+			Eventually(countRows("reorganize_wait.t3"), "30s", "100ms").Should(Equal("1000"))
+			Expect(countRows("reorganize_wait.t1")()).To(Equal("1000"))
+			Expect(countRows("reorganize_wait.t2")()).To(Equal("1000"))
+			lockConn.MustExec("COMMIT")
+
+			Expect(restoreCmd.Wait()).To(Succeed(), restoreOutput.String())
+			Expect(countRows("reorganize_wait.t0")()).To(Equal("30000"))
+		})
+		It("terminates the sessions of an interrupted restore that wait for a lock", func() {
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA waiting_session")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA waiting_session CASCADE")
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE waiting_session.t1 (i int) DISTRIBUTED BY (i);
+				CREATE TABLE waiting_session.t2 (i int) DISTRIBUTED BY (i);
+				INSERT INTO waiting_session.t1 SELECT generate_series(1, 1000);
+				INSERT INTO waiting_session.t2 SELECT generate_series(1, 1000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "waiting_session",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+
+			// The TRUNCATE of the first table waits for the lock of the session, and the other connection
+			// waits for its turn to truncate the second table, whose TRUNCATE would wait as well
+			lockConn := testutils.SetupTestDbConn("testdb")
+			defer lockConn.Close()
+			lockConn.MustExec("BEGIN; LOCK TABLE waiting_session.t1, waiting_session.t2 IN ACCESS SHARE MODE")
+			restoreCmd := exec.Command(gprestorePath,
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--truncate-table", "--data-only",
+				"--jobs", "2")
+			var restoreOutput strings.Builder
+			restoreCmd.Stdout, restoreCmd.Stderr = &restoreOutput, &restoreOutput
+			restoreStarted := time.Now()
+			Expect(restoreCmd.Start()).To(Succeed())
+			defer interruptIfRunning(restoreCmd)
+			Eventually(lockWaits("waiting_session", "t1", "AccessExclusiveLock"), "30s", "100ms").Should(BeNumerically(">", 0))
+
+			Expect(restoreCmd.Process.Signal(os.Interrupt)).To(Succeed())
+			Expect(restoreCmd.Wait()).To(HaveOccurred())
+			Expect(restoreOutput.String()).To(ContainSubstring("Received an interrupt signal, aborting restore process"))
+			// The session still holds its locks, and no session of the restore waits behind it, also not
+			// that of the second table once the first is terminated
+			Eventually(func() int { return countRestoreSessions("true") }, "10s", "100ms").Should(Equal(0))
+			// Nor is the error of the terminated session reported
+			Expect(restoreLogMatches(restoreCmd.Process.Pid, restoreStarted, `\[INFO\]:-Cleanup complete`)).To(BeTrue())
+			Expect(restoreLogMatches(restoreCmd.Process.Pid, restoreStarted, `\[CRITICAL\]`)).To(BeFalse())
+			lockConn.MustExec("COMMIT")
+
+			Expect(countRows("waiting_session.t1")()).To(Equal("1000"))
+			Expect(countRows("waiting_session.t2")()).To(Equal("1000"))
+		})
+		It("keeps the data of a partitioned table whose helper stops while an earlier table waits for a lock", func() {
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA stopped_root")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA stopped_root CASCADE")
+			// In the data file in this order, the largest table first
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE stopped_root.first (i int) DISTRIBUTED BY (i);
+				CREATE TABLE stopped_root.pt (i int) DISTRIBUTED BY (i)
+					PARTITION BY RANGE (i) (START (1) END (3001) EVERY (1000));
+				INSERT INTO stopped_root.first SELECT generate_series(1, 100000);
+				INSERT INTO stopped_root.pt SELECT generate_series(1, 2000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "stopped_root",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+
+			// The TRUNCATE of the first table waits for the lock of the session, and the other connection
+			// waits for its turn to truncate the partitioned table, which is not rolled back
+			lockConn := testutils.SetupTestDbConn("testdb")
+			defer lockConn.Close()
+			lockConn.MustExec("BEGIN; LOCK TABLE stopped_root.first IN ACCESS SHARE MODE")
+			restoreCmd := exec.Command(gprestorePath,
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--data-only", "--truncate-table", "--on-error-continue",
+				"--jobs", "2")
+			var restoreOutput strings.Builder
+			restoreCmd.Stdout, restoreCmd.Stderr = &restoreOutput, &restoreOutput
+			Expect(restoreCmd.Start()).To(Succeed())
+			defer interruptIfRunning(restoreCmd)
+			Eventually(lockWaits("stopped_root", "first", "AccessExclusiveLock"), "30s", "100ms").Should(BeNumerically(">", 0))
+
+			// The helper of the data file on segment 0 reports that it has stopped, before any COPY has
+			// failed for it
+			errorFileFunc := func(contentID int) string {
+				if contentID != 0 {
+					return "true"
+				}
+				return fmt.Sprintf("touch %s", path.Join(backupCluster.GetDirForContent(0),
+					fmt.Sprintf("gpbackup_0_%s_%d_error", timestamp, restoreCmd.Process.Pid)))
+			}
+			remoteOutput := backupCluster.GenerateAndExecuteCommand("Creating the error file of a helper", cluster.ON_SEGMENTS, errorFileFunc)
+			Expect(remoteOutput.NumErrors).To(Equal(0))
+			lockConn.MustExec("COMMIT")
+
+			Expect(restoreCmd.Wait()).To(HaveOccurred())
+			Expect(restoreOutput.String()).To(ContainSubstring("Encountered 2 error(s) during table data restore"))
+			// The partitioned table is not truncated once its helper is found to have stopped,
+			// and the first table is truncated in the transaction of its COPY, which is rolled back
+			Expect(countRows("stopped_root.pt")()).To(Equal("2000"))
+			Expect(countRows("stopped_root.first")()).To(Equal("100000"))
+			assertArtifactsCleaned(timestamp)
+		})
+		DescribeTable("keeps the data of a partitioned table whose helper stops during the COPY of an earlier table", func(onErrorContinue bool) {
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA stopped_copy")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA stopped_copy CASCADE")
+			// In the data file in this order, the largest table first, whose COPY takes a while
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE stopped_copy.first (i int) DISTRIBUTED BY (i);
+				CREATE TABLE stopped_copy.pt (i int) DISTRIBUTED BY (i)
+					PARTITION BY RANGE (i) (START (1) END (3001) EVERY (1000));
+				INSERT INTO stopped_copy.first SELECT generate_series(1, 3000000);
+				INSERT INTO stopped_copy.pt SELECT generate_series(1, 2000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "stopped_copy",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+
+			// The turn of the partitioned table comes once the first table is truncated, while the
+			// helper still restores the first table
+			restoreArgs := []string{
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--data-only", "--truncate-table",
+				"--jobs", "2"}
+			if onErrorContinue {
+				restoreArgs = append(restoreArgs, "--on-error-continue")
+			}
+			restoreCmd := exec.Command(gprestorePath, restoreArgs...)
+			var restoreOutput strings.Builder
+			restoreCmd.Stdout, restoreCmd.Stderr = &restoreOutput, &restoreOutput
+			Expect(restoreCmd.Start()).To(Succeed())
+			defer interruptIfRunning(restoreCmd)
+			Eventually(func() int {
+				return countRestoreSessions(`state = 'active' AND query ~ '^COPY stopped_copy\.first'`)
+			}, "30s", "50ms").Should(Equal(1))
+
+			// The helper of the data file on segment 0 stops during that COPY
+			killFunc := func(contentID int) string {
+				if contentID != 0 {
+					return "true"
+				}
+				return fmt.Sprintf("pkill -TERM -f '[g]pbackup_helper.*gpbackup_0_%s_%d_pipe'", timestamp, restoreCmd.Process.Pid)
+			}
+			remoteOutput := backupCluster.GenerateAndExecuteCommand("Stopping a helper", cluster.ON_SEGMENTS, killFunc)
+			Expect(remoteOutput.NumErrors).To(Equal(0))
+
+			Expect(restoreCmd.Wait()).To(HaveOccurred())
+			// The helper stopped before the COPY of the first table ended, which fails, or ends with fewer rows
+			// as the helper closes its pipe
+			Expect(restoreOutput.String()).To(MatchRegexp(`(Error loading data into table|Expected to restore 3000000 rows to table) stopped_copy\.first`))
+			if onErrorContinue {
+				Expect(restoreOutput.String()).To(ContainSubstring("Encountered 2 error(s) during table data restore"))
+			}
+			// The partitioned table is not truncated, and the first table is truncated in the transaction
+			// of its COPY, which is rolled back
+			Expect(countRows("stopped_copy.pt")()).To(Equal("2000"))
+			Expect(countRows("stopped_copy.first")()).To(Equal("3000000"))
+			assertArtifactsCleaned(timestamp)
+		},
+			Entry("with --on-error-continue", true),
+			Entry("without --on-error-continue", false),
+		)
 	})
 	Describe("Restore with --run-analyze", func() {
 		It("runs gprestore without --run-analyze", func() {
@@ -2932,6 +3432,31 @@ LANGUAGE plpgsql NO SQL;`)
 			assertDataRestored(restoreConn, map[string]int{
 				"table_with_multi_enum_distkey": 16})
 		})
+		It("Restores table data distributed by an array, a range and a domain of an enum", func() {
+			// Their hashes are those of the enum labels, so their rows are redistributed as well
+			testhelper.AssertQueryRuns(backupConn, `CREATE TYPE color_range AS RANGE (subtype = colors);
+				CREATE DOMAIN color_array AS colors[];
+				CREATE TABLE table_with_enum_array_distkey (key colors[]) DISTRIBUTED BY (key);
+				CREATE TABLE table_with_enum_range_distkey (key color_range) DISTRIBUTED BY (key);
+				CREATE TABLE table_with_enum_array_domain_distkey (key color_array) DISTRIBUTED BY (key);
+				INSERT INTO table_with_enum_array_distkey SELECT ARRAY[c] FROM unnest(enum_range(NULL::colors)) c;
+				INSERT INTO table_with_enum_range_distkey SELECT color_range(c, c, '[]') FROM unnest(enum_range(NULL::colors)) c;
+				INSERT INTO table_with_enum_array_domain_distkey SELECT ARRAY[c, c] FROM unnest(enum_range(NULL::colors)) c;`)
+
+			defer testhelper.AssertQueryRuns(backupConn, `DROP TABLE table_with_enum_array_distkey, table_with_enum_range_distkey,
+				table_with_enum_array_domain_distkey; DROP DOMAIN color_array; DROP TYPE color_range`)
+
+			output := gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--backup-dir", backupDir)
+			assertDataRestored(restoreConn, map[string]int{
+				"table_with_enum_array_distkey":        4,
+				"table_with_enum_range_distkey":        4,
+				"table_with_enum_array_domain_distkey": 4})
+		})
 		It("Restores table data distributed by altered enum type", func() {
 			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE table_with_altered_enum_distkey (key colors) DISTRIBUTED BY (key)`)
 			testhelper.AssertQueryRuns(backupConn, `INSERT INTO table_with_altered_enum_distkey VALUES ('red'), ('blue'), ('green'), ('yellow'),
@@ -3104,12 +3629,16 @@ LANGUAGE plpgsql NO SQL;`)
 				if isFilteredRestore {
 					gprestoreArgs = append(gprestoreArgs, "--include-schema", "schematwo")
 				}
-				if len(size) == 1 {
+				if len(size) >= 1 && size[0] > 0 {
 					if isSingleDataFileRestore {
 						gprestoreArgs = append(gprestoreArgs, "--copy-queue-size", fmt.Sprintf("%d", size[0]))
 					} else {
 						gprestoreArgs = append(gprestoreArgs, "--jobs", fmt.Sprintf("%d", size[0]))
 					}
+				}
+				// A second size is the number of jobs for a backup taken with --single-data-file and --jobs
+				if len(size) == 2 {
+					gprestoreArgs = append(gprestoreArgs, "--jobs", fmt.Sprintf("%d", size[1]))
 				}
 				gprestore(gprestorePath, restoreHelperPath, fullTimestamp, gprestoreArgs...)
 
@@ -3180,6 +3709,16 @@ LANGUAGE plpgsql NO SQL;`)
 			Entry("Can backup a 2-segment cluster and restore to current cluster with filter with jobs", "20220908150238", "", "2-segment-db-filter", false, true, false, false, 3),
 			Entry("Can backup a 2-segment cluster and restore to current cluster with incremental backups and a single data file", "20220909150612", "20220909150622", "2-segment-db-incremental", true, false, true, false),
 			Entry("Can backup a 2-segment cluster and restore to current cluster with incremental backups and a single data file with copy-queue-size", "20220909150612", "20220909150622", "2-segment-db-incremental", true, false, true, false, 3),
+			Entry("Can backup a 2-segment cluster with single data file and jobs and restore to current cluster", "20261016082758", "", "2-segment-db-single-data-file-jobs", false, false, true, false),
+			Entry("Can backup a 2-segment cluster with single data file and jobs and restore to current cluster with jobs", "20261016082758", "", "2-segment-db-single-data-file-jobs", false, false, true, false, 0, 3),
+			Entry("Can backup a 2-segment cluster with single data file and jobs and restore to current cluster with jobs and copy-queue-size", "20261016082758", "", "2-segment-db-single-data-file-jobs", false, false, true, false, 2, 2),
+			Entry("Can backup a 2-segment cluster with single data file and jobs and restore to current cluster with filter and jobs", "20261016082758", "", "2-segment-db-single-data-file-jobs", false, true, true, false, 0, 3),
+			Entry("Can backup a 2-segment cluster with single data file and jobs and restore to current cluster with incremental backups and jobs", "20261016082806", "20261016082814", "2-segment-db-single-data-file-jobs-incremental", true, false, true, false, 0, 3),
+			Entry("Can backup a 7-segment cluster with single data file and jobs and restore to current cluster", "20261016083430", "", "7-segment-db-single-data-file-jobs", false, false, true, false),
+			Entry("Can backup a 7-segment cluster with single data file and jobs and restore to current cluster with jobs", "20261016083430", "", "7-segment-db-single-data-file-jobs", false, false, true, false, 0, 3),
+			Entry("Can backup a 7-segment cluster with single data file and jobs and restore to current cluster with jobs and copy-queue-size", "20261016083430", "", "7-segment-db-single-data-file-jobs", false, false, true, false, 2, 2),
+			Entry("Can backup a 7-segment cluster with single data file and jobs and restore to current cluster with filter and jobs", "20261016083430", "", "7-segment-db-single-data-file-jobs", false, true, true, false, 0, 3),
+			Entry("Can backup a 7-segment cluster with single data file and jobs and restore to current cluster with incremental backups and jobs", "20261016083437", "20261016083446", "7-segment-db-single-data-file-jobs-incremental", true, false, true, false, 0, 3),
 			Entry("Can backup a 1-segment cluster and restore to current cluster", "20220908150735", "", "1-segment-db", false, false, false, false),
 			Entry("Can backup a 1-segment cluster and restore to current cluster with jobs", "20220908150735", "", "1-segment-db", false, false, false, false, 3),
 			Entry("Can backup a 1-segment cluster and restore to current cluster with single data file", "20220908150752", "", "1-segment-db-single-data-file", false, false, true, false),
@@ -3444,9 +3983,11 @@ LANGUAGE plpgsql NO SQL;`)
 			Expect(string(output)).To(MatchRegexp(`Error loading data into table public.a: COPY a, line 1: "\d,a": ERROR: null value in column "c" violates not-null constraint`))
 			Expect(string(output)).To(MatchRegexp(`Error loading data into table public.b: COPY b, line 1: "\d,b": ERROR: null value in column "c" violates not-null constraint`))
 			Expect(string(output)).To(MatchRegexp(`Error loading data into table public.c: COPY c, line 1: "\d,c": ERROR: null value in column "c" violates not-null constraint`))
-			Expect(string(output)).To(Not(ContainSubstring(fmt.Sprintf(`"<SEG_DATA_DIR>/gpbackup_<SEGID>_20240730085053_pipe_%d_16411_1"`, gprestoreCmd.Process.Pid))))
-			Expect(string(output)).To(Not(ContainSubstring(fmt.Sprintf(`"<SEG_DATA_DIR>/gpbackup_<SEGID>_20240730085053_pipe_%d_16417_1"`, gprestoreCmd.Process.Pid))))
-			Expect(string(output)).To(Not(ContainSubstring(fmt.Sprintf(`"<SEG_DATA_DIR>/gpbackup_<SEGID>_20240730085053_pipe_%d_16423_1"`, gprestoreCmd.Process.Pid))))
+			// The COPY of the first batch of each table runs and fails, and that of its next batch does not run
+			for _, oid := range []int{16411, 16417, 16423} {
+				Expect(string(output)).To(ContainSubstring(fmt.Sprintf(`"<SEG_DATA_DIR>/gpbackup_<SEGID>_20240730085053_%d_pipe_%d_0"`, gprestoreCmd.Process.Pid, oid)))
+				Expect(string(output)).To(Not(ContainSubstring(fmt.Sprintf(`"<SEG_DATA_DIR>/gpbackup_<SEGID>_20240730085053_%d_pipe_%d_1"`, gprestoreCmd.Process.Pid, oid))))
+			}
 			Expect(string(output)).To(ContainSubstring(`Encountered 3 error(s) during table data restore`))
 			assertArtifactsCleaned("20240730085053")
 			testhelper.AssertQueryRuns(restoreConn, "DROP TABLE a; DROP TABLE b; DROP TABLE c; DROP TABLE d;")

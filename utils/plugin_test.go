@@ -13,6 +13,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/iohelper"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
+	gpfilepath "github.com/GreengageDB/gpbackup/filepath"
 	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/blang/semver"
 	"github.com/pkg/errors"
@@ -328,6 +329,21 @@ options:
 
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(Equal(fmt.Sprintf("Cannot find encryption key for plugin %s. Please re-encrypt password(s) so that key becomes available.", pluginName)))
+		})
+	})
+	Describe("BackupSegmentTOCs", func() {
+		It("uploads the segment TOC of every data file", func() {
+			fpInfo := gpfilepath.NewFilePathInfo(testCluster, "", "20170101010101", "gpseg", false)
+			subject.BackupSegmentTOCs(testCluster, fpInfo, 2)
+
+			backupCommand := func(dataFile int) string {
+				tocFile := fpInfo.GetSegmentTOCFilePathForDataFile(0, dataFile)
+				return fmt.Sprintf("%s backup_file %s %s && chmod 0755 %s", subject.ExecutablePath, subject.ConfigPath, tocFile, tocFile)
+			}
+			Expect(executor.NumClusterExecutions).To(Equal(1))
+			cc := executor.ClusterCommands[0]
+			Expect(cc[0].Content).To(Equal(0))
+			Expect(cc[0].CommandString).To(ContainSubstring(backupCommand(0) + " && " + backupCommand(1)))
 		})
 	})
 	Describe("DeleteConfigFileOnSegments", func() {

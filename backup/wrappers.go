@@ -55,6 +55,9 @@ func initializeConnectionPool(timestamp string) {
 	 * additional connection to the database.
 	 */
 	switch true {
+	case MustGetFlagBool(options.SINGLE_DATA_FILE) && FlagChanged(options.JOBS):
+		// One data file per job, written by the given number of COPY commands
+		numConns = MustGetFlagInt(options.JOBS)*MustGetFlagInt(options.COPY_QUEUE_SIZE) + 1
 	case FlagChanged(options.COPY_QUEUE_SIZE):
 		numConns = MustGetFlagInt(options.COPY_QUEUE_SIZE) + 1
 	case FlagChanged(options.JOBS):
@@ -67,6 +70,10 @@ func initializeConnectionPool(timestamp string) {
 	connectionPool.MustConnect(numConns)
 
 	utils.ValidateGPDBVersionCompatibility(connectionPool)
+	// Each connection holds its transaction until the backup is done, and the
+	// connections opened meanwhile, such as that of the cluster configuration,
+	// need one more slot for their queries
+	utils.ValidateResourceGroupConcurrency(connectionPool, numConns+1, "gpbackup", "--jobs or --copy-queue-size")
 	InitializeMetadataParams(connectionPool)
 	// Begin transactions, initialize the synchronized snapshot, and set session GUCs
 	for connNum := 0; connNum < connectionPool.NumConns; connNum++ {

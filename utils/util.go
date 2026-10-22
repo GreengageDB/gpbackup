@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	path "path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gpbackup/filepath"
+	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
 )
@@ -176,11 +178,14 @@ func InitializeSignalHandler(cleanupFunc func(bool), procDesc string, termFlag *
 }
 
 // TODO: Uniquely identify COPY commands in the multiple data file case to allow terminating sessions
+//
+// The sessions are those whose application name is appName, which a connection
+// may follow with a number of its own.
 func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, timeout time.Duration, interval time.Duration) {
 	gplog.Verbose("Checking for leftover COPY sessions")
 	var pidCol, queryCol string
 
-	termConn := dbconn.NewDBConnFromEnvironment("postgres")
+	termConn := NewResourceGroupBypassConn("postgres")
 	termConn.MustConnect(1)
 	defer termConn.Close()
 
@@ -194,9 +199,9 @@ func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, 
 
 	copyFileName := fpInfo.GetSegmentPipePathForCopyCommand()
 	fromClause := fmt.Sprintf(`FROM pg_stat_activity
-	WHERE application_name = '%s'
+	WHERE %s
 	AND %s LIKE '%%%s%%'
-	AND %s <> pg_backend_pid()`, appName, queryCol, copyFileName, pidCol)
+	AND %s <> pg_backend_pid()`, sessionNameCondition(appName), queryCol, copyFileName, pidCol)
 
 	tickerTerminate := time.NewTicker(interval)
 	tickerCount := time.NewTicker(interval / 5)
@@ -210,6 +215,7 @@ func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, 
 	// Terminate any COPY commands that are still running.
 	// Send a termination query every interval until no COPY commands are running, or timeout is reached.
 	// Check for remaining COPY commands every 20% of the interval duration.
+	timeoutReached := time.After(timeout)
 	for {
 		count := dbconn.MustSelectString(termConn, countQuery)
 		select {
@@ -219,11 +225,135 @@ func TerminateHangingCopySessions(fpInfo filepath.FilePathInfo, appName string, 
 			}
 		case <-tickerTerminate.C:
 			termConn.MustExec(termQuery)
-		case <-time.After(timeout):
-			gplog.Warn("Timeout of %ds reached while waiting for %s COPY command(s) to complete.", timeout, count)
+		case <-timeoutReached:
+			gplog.Warn("Timeout of %ds reached while waiting for %s COPY command(s) to complete.", int(timeout.Seconds()), count)
 			return
 		}
 	}
+}
+
+/*
+ * resourceGroupBypassDriver connects with gp_resource_group_bypass set from the
+ * start of the session: a SET would come too late, as the first query of a
+ * connection, which finds the version of the database, already waits for a slot
+ * of its resource group.  Versions that do not know the setting are connected to
+ * without it.
+ */
+type resourceGroupBypassDriver struct{}
+
+func (driver *resourceGroupBypassDriver) Connect(driverName string, dataSourceName string) (*sqlx.DB, error) {
+	conn, err := sqlx.Connect(driverName, dataSourceName+" gp_resource_group_bypass=on")
+	if err != nil && strings.Contains(err.Error(), `unrecognized configuration parameter "gp_resource_group_bypass"`) {
+		return sqlx.Connect(driverName, dataSourceName)
+	}
+	return conn, err
+}
+
+/*
+ * NewResourceGroupBypassConn returns a connection to dbname for the cleanup after
+ * gpbackup or gprestore, whose queries run without a slot of the resource group
+ * of the role, whose slots the sessions it cleans up may hold.
+ */
+func NewResourceGroupBypassConn(dbname string) *dbconn.DBConn {
+	conn := dbconn.NewDBConnFromEnvironment(dbname)
+	conn.Driver = &resourceGroupBypassDriver{}
+	return conn
+}
+
+/*
+ * The condition that the application name of a session is appName, or appName
+ * followed by "_" and a suffix of its connection, such as its number.  A plain
+ * prefix would also match the sessions of a program whose name only starts with
+ * appName, as with a PID that starts with the PID in appName.
+ */
+func sessionNameCondition(appName string) string {
+	return fmt.Sprintf("(application_name = '%[1]s' OR position('%[1]s_' in application_name) = 1)", appName)
+}
+
+/*
+ * TerminateWaitingSessions terminates the sessions whose application name is
+ * appName, with the suffix of a connection or not, and that wait for a lock or a
+ * slot of their resource group, such as those of a failed restore, which the
+ * cleanup of its COPY commands does not find.  Such a session would stay in its
+ * queue after the program exits, as it does not see its client go while it
+ * waits.  The other sessions end with the program.
+ */
+func TerminateWaitingSessions(appName string) {
+	termConn := NewResourceGroupBypassConn("postgres")
+	err := termConn.Connect(1)
+	if err != nil {
+		gplog.Warn("Could not connect to terminate the waiting sessions %s: %v", appName, err)
+		return
+	}
+	defer termConn.Close()
+	pidCol := "pid"
+	// Not a session that waits for its synchronous replication, whose transaction is committed already
+	waiting := "waiting AND waiting_reason IN ('lock', 'resgroup')"
+	if termConn.Version.Before("6") {
+		pidCol = "procpid"
+	} else if termConn.Version.AtLeast("7") {
+		waiting = "wait_event_type IN ('Lock', 'ResourceGroup')"
+	}
+	_, err = termConn.Exec(fmt.Sprintf(`SELECT pg_terminate_backend(%[1]s) FROM pg_stat_activity
+	WHERE %[2]s AND %[3]s AND %[1]s <> pg_backend_pid()`, pidCol, sessionNameCondition(appName), waiting))
+	if err != nil {
+		gplog.Warn("Could not terminate the waiting sessions %s: %v", appName, err)
+	}
+}
+
+/*
+ * ValidateResourceGroupConcurrency fails if, with resource groups, the resource
+ * group of the role of the connections allows fewer transactions at once than the
+ * numSlots that the program needs at once.  Each transaction holds a slot of the
+ * group until it ends, also the transaction of a single query, so that the
+ * program would wait for good for a slot that its own transactions hold.  The
+ * flags that give the number of slots are named in the error.
+ */
+func ValidateResourceGroupConcurrency(connectionPool *dbconn.DBConn, numSlots int, program string, flags string) {
+	name, concurrency, ok := ResourceGroupConcurrency(connectionPool)
+	if ok && numSlots > concurrency {
+		gplog.Fatal(errors.Errorf("%s needs %d slots of resource group %s at once, but the group has %d (its CONCURRENCY), "+
+			"so it would wait for a slot of the group for good. Lower %s, or raise the CONCURRENCY of the resource group.",
+			program, numSlots, name, concurrency, flags), "")
+	}
+}
+
+/*
+ * ResourceGroupConcurrency returns the name and the CONCURRENCY of the resource
+ * group of the role of the connections, the number of transactions that the
+ * group allows at once.  It returns false without resource groups, if the
+ * sessions bypass the group, as with gp_resource_group_bypass set for the database
+ * or the role, so that their transactions take no slots of it, or if the group is
+ * not found.
+ */
+func ResourceGroupConcurrency(connectionPool *dbconn.DBConn) (string, int, bool) {
+	resourceManager, err := dbconn.SelectString(connectionPool, "SELECT current_setting('gp_resource_manager') AS string")
+	if err != nil || !strings.HasPrefix(resourceManager, "group") {
+		return "", 0, false
+	}
+	// From pg_settings, as current_setting would fail in a transaction if the setting did not exist
+	bypass, err := dbconn.SelectString(connectionPool, "SELECT setting AS string FROM pg_catalog.pg_settings WHERE name = 'gp_resource_group_bypass'")
+	if err == nil && bypass == "on" {
+		return "", 0, false
+	}
+	group := struct {
+		Name        string
+		Concurrency string
+	}{}
+	err = connectionPool.Get(&group, `SELECT g.rsgname AS name, c.value AS concurrency
+	FROM pg_catalog.pg_roles r
+		JOIN pg_catalog.pg_resgroup g ON g.oid = r.rolresgroup
+		JOIN pg_catalog.pg_resgroupcapability c ON c.resgroupid = g.oid AND c.reslimittype = 1
+	WHERE r.rolname = current_user`)
+	if err != nil {
+		gplog.Verbose("Could not find the concurrency of the resource group of the role: %v", err)
+		return "", 0, false
+	}
+	concurrency, err := strconv.Atoi(strings.TrimSpace(group.Concurrency))
+	if err != nil {
+		return "", 0, false
+	}
+	return group.Name, concurrency, true
 }
 
 func ValidateGPDBVersionCompatibility(connectionPool *dbconn.DBConn) {

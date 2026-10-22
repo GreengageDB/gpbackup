@@ -6,8 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -52,6 +50,7 @@ var (
 	origSize         *int
 	destSize         *int
 	verbosity        *int
+	heartbeatTimeout *int
 )
 
 func DoHelper() {
@@ -111,6 +110,7 @@ func InitializeGlobals() {
 	origSize = flag.Int("orig-seg-count", 0, "Used with resize restore.  Gives the segment count of the backup.")
 	destSize = flag.Int("dest-seg-count", 0, "Used with resize restore.  Gives the segment count of the current cluster.")
 	verbosity = flag.Int("verbosity", gplog.LOGINFO, "Log file verbosity")
+	heartbeatTimeout = flag.Int("heartbeat-timeout", 0, "Used with backup.  Ends the agent once gpbackup has not touched its heartbeat file for that many seconds; 0 never does")
 
 	flag.Parse()
 	if *printVersion {
@@ -210,21 +210,6 @@ func openClosePipe(filename string) error {
 	return nil
 }
 
-func getOidListFromFile(oidFileName string) ([]int, error) {
-	oidStr, err := operating.System.ReadFile(oidFileName)
-	if err != nil {
-		logError(fmt.Sprintf("Error encountered reading oid list from file: %v", err))
-		return nil, err
-	}
-	oidStrList := strings.Split(strings.TrimSpace(fmt.Sprintf("%s", oidStr)), "\n")
-	oidList := make([]int, len(oidStrList))
-	for i, oid := range oidStrList {
-		num, _ := strconv.Atoi(oid)
-		oidList[i] = num
-	}
-	return oidList, nil
-}
-
 /*
  * Shared helper functions
  */
@@ -269,7 +254,8 @@ func DoCleanup() {
 		}
 	}
 
-	skipFiles, _ := filepath.Glob(utils.GetSkipFilename(*pipeFile) + "*")
+	// The skip files of this helper only: those of helper 1 are not those of helper 10
+	skipFiles, _ := filepath.Glob(utils.GetSkipFilename(*pipeFile) + "_*")
 	for _, skipFile := range skipFiles {
 		err := utils.RemoveFileIfExists(skipFile)
 		if err != nil {

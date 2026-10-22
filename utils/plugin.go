@@ -408,33 +408,27 @@ func GetSecretKey(pluginName string, mdd string) (string, error) {
 
 }
 
-func (plugin *PluginConfig) BackupSegmentTOCs(c *cluster.Cluster, fpInfo filepath.FilePathInfo) {
-	var command string
-	remoteOutput := c.GenerateAndExecuteCommand("Waiting for remaining data to be uploaded to plugin destination",
-		cluster.ON_SEGMENTS,
+func (plugin *PluginConfig) BackupSegmentTOCs(c *cluster.Cluster, fpInfo filepath.FilePathInfo, numDataFiles int) {
+	// FinishSlotBackupHelpers has waited for the segment TOC of every data file, which the
+	// helpers write once their data is uploaded
+	remoteOutput := c.GenerateAndExecuteCommand("Processing segment TOC files with plugin", cluster.ON_SEGMENTS,
 		func(contentID int) string {
-			tocFile := fpInfo.GetSegmentTOCFilePath(contentID)
-			errorFile := GetErrorFilename(fpInfo.GetSegmentPipeFilePath(contentID))
-			command = fmt.Sprintf(`while [[ ! -f "%s" && ! -f "%s" ]]; do sleep 1; done; ls "%s"`, tocFile, errorFile, tocFile)
-			return command
-		})
-	gplog.Debug("%s", command)
-	c.CheckClusterError(remoteOutput, "Error occurred in gpbackup_helper", func(contentID int) string {
-		return "See gpAdminLog for gpbackup_helper on segment host for details: Error occurred with plugin"
-	})
-
-	remoteOutput = c.GenerateAndExecuteCommand("Processing segment TOC files with plugin", cluster.ON_SEGMENTS,
-		func(contentID int) string {
-			tocFile := fpInfo.GetSegmentTOCFilePath(contentID)
-			return fmt.Sprintf("source %s/greengage_path.sh && %s backup_file %s %s && "+
-				"chmod 0755 %s", operating.System.Getenv("GPHOME"), plugin.ExecutablePath, plugin.ConfigPath, tocFile, tocFile)
+			backupCommands := make([]string, 0, numDataFiles)
+			for file := 0; file < numDataFiles; file++ {
+				tocFile := fpInfo.GetSegmentTOCFilePathForDataFile(contentID, file)
+				backupCommands = append(backupCommands, fmt.Sprintf("%s backup_file %s %s && chmod 0755 %s", plugin.ExecutablePath, plugin.ConfigPath, tocFile, tocFile))
+			}
+			return fmt.Sprintf("source %s/greengage_path.sh && %s", operating.System.Getenv("GPHOME"), strings.Join(backupCommands, " && "))
 		})
 	c.CheckClusterError(remoteOutput, "Unable to process segment TOC files using plugin", func(contentID int) string {
 		return "See gpAdminLog for gpbackup_helper on segment host for details: Error occurred with plugin"
 	})
 }
 
-func (plugin *PluginConfig) RestoreSegmentTOCs(c *cluster.Cluster, fpInfo filepath.FilePathInfo, origSize int, destSize int, batches int) {
+func (plugin *PluginConfig) RestoreSegmentTOCs(c *cluster.Cluster, fpInfo filepath.FilePathInfo, origSize int, destSize int, batches int, numDataFiles int) {
+	if numDataFiles < 1 {
+		numDataFiles = 1
+	}
 	var command string
 	for b := 0; b < batches; b++ {
 		remoteOutput := c.GenerateAndExecuteCommand("Processing segment TOC files with plugin", cluster.ON_SEGMENTS, func(contentID int) string {
@@ -442,12 +436,16 @@ func (plugin *PluginConfig) RestoreSegmentTOCs(c *cluster.Cluster, fpInfo filepa
 			if origContent >= origSize { // Don't try to restore files for contents that aren't part of the backup set
 				return ""
 			}
-			tocFile := fpInfo.GetSegmentTOCFilePath(contentID)
-			// Restore the filename with the origin content to the directory with the destination content
-			tocFile = strings.ReplaceAll(tocFile, fmt.Sprintf("gpbackup_%d", contentID), fmt.Sprintf("gpbackup_%d", origContent))
-			command = fmt.Sprintf("mkdir -p %s && source %s/greengage_path.sh && %s restore_file %s %s",
-				fpInfo.GetDirForContent(contentID), operating.System.Getenv("GPHOME"),
-				plugin.ExecutablePath, plugin.ConfigPath, tocFile)
+			// Each data file has its own segment TOC
+			restoreCommands := make([]string, 0, numDataFiles)
+			for file := 0; file < numDataFiles; file++ {
+				tocFile := fpInfo.GetSegmentTOCFilePathForDataFile(contentID, file)
+				// Restore the filename with the origin content to the directory with the destination content
+				tocFile = strings.ReplaceAll(tocFile, fmt.Sprintf("gpbackup_%d", contentID), fmt.Sprintf("gpbackup_%d", origContent))
+				restoreCommands = append(restoreCommands, fmt.Sprintf("%s restore_file %s %s", plugin.ExecutablePath, plugin.ConfigPath, tocFile))
+			}
+			command = fmt.Sprintf("mkdir -p %s && source %s/greengage_path.sh && %s",
+				fpInfo.GetDirForContent(contentID), operating.System.Getenv("GPHOME"), strings.Join(restoreCommands, " && "))
 			return command
 		})
 		gplog.Debug("%s", command)

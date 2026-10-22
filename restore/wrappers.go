@@ -2,6 +2,7 @@ package restore
 
 import (
 	"fmt"
+	"os"
 	path "path/filepath"
 	"strconv"
 	"strings"
@@ -68,18 +69,50 @@ func SetLoggerVerbosity() {
 
 func CreateConnectionPool(unquotedDBName string) {
 	connectionPool = dbconn.NewDBConnFromEnvironment(unquotedDBName)
-	if FlagChanged(options.COPY_QUEUE_SIZE) {
-		connectionPool.MustConnect(MustGetFlagInt(options.COPY_QUEUE_SIZE))
-	} else {
-		connectionPool.MustConnect(MustGetFlagInt(options.JOBS))
-	}
+	connectionPool.MustConnect(GetNumConnections())
 	utils.ValidateGPDBVersionCompatibility(connectionPool)
+}
+
+/*
+ * GetNumConnections returns the number of connections to open.  A backup taken
+ * with --single-data-file is restored by --jobs groups of --copy-queue-size
+ * connections, each group restoring one data file at a time.
+ */
+func GetNumConnections() int {
+	if backupConfig != nil && backupConfig.SingleDataFile && FlagChanged(options.COPY_QUEUE_SIZE) {
+		return MustGetFlagInt(options.JOBS) * MustGetFlagInt(options.COPY_QUEUE_SIZE)
+	} else if FlagChanged(options.COPY_QUEUE_SIZE) {
+		return MustGetFlagInt(options.COPY_QUEUE_SIZE)
+	}
+	return MustGetFlagInt(options.JOBS)
+}
+
+/*
+ * GetNumMetadataConns returns the number of connections that restore the metadata
+ * and run ANALYZE in parallel: --jobs of them, without the connections that
+ * --copy-queue-size adds for the data of each of the --jobs groups.
+ */
+func GetNumMetadataConns() int {
+	if FlagChanged(options.JOBS) && MustGetFlagInt(options.JOBS) < connectionPool.NumConns {
+		return MustGetFlagInt(options.JOBS)
+	}
+	return connectionPool.NumConns
+}
+
+/*
+ * SessionName is the application name of the sessions of the restore of the given
+ * backup that started at the given time, which DoCleanup looks for.  The PID tells
+ * apart the restores of the same backup that start in the same second, so that the
+ * cleanup of one does not terminate the sessions of another.
+ */
+func SessionName(backupTimestamp string, restoreTimestamp string) string {
+	return fmt.Sprintf("gprestore_%s_%s_%d", backupTimestamp, restoreTimestamp, os.Getpid())
 }
 
 func InitializeConnectionPool(backupTimestamp string, restoreTimestamp string, unquotedDBName string) {
 	CreateConnectionPool(unquotedDBName)
 	resizeRestore := MustGetFlagBool(options.RESIZE_CLUSTER)
-	setupQuery := fmt.Sprintf("SET application_name TO 'gprestore_%s_%s';", backupTimestamp, restoreTimestamp)
+	setupQuery := fmt.Sprintf("SET application_name TO '%s';", SessionName(backupTimestamp, restoreTimestamp))
 	setupQuery += `
 SET search_path TO pg_catalog;
 SET gp_default_storage_options='';
@@ -238,7 +271,13 @@ func RecoverMetadataFilesUsingPlugin() {
 		pluginConfig.MustRestoreFile(fpInfo.GetTOCFilePath())
 		if backupConfig.SingleDataFile {
 			origSize, destSize, _, batches := GetResizeClusterInfo()
-			pluginConfig.RestoreSegmentTOCs(globalCluster, fpInfo, origSize, destSize, batches)
+			numDataFiles := backupConfig.SingleDataFileCount
+			if backupConfig.Incremental {
+				// Each backup of an incremental chain may have its own number of data files,
+				// which for the earlier backups of the chain only their TOCs record
+				numDataFiles = toc.GetNumDataFiles(toc.NewTOC(fpInfo.GetTOCFilePath()).DataEntries)
+			}
+			pluginConfig.RestoreSegmentTOCs(globalCluster, fpInfo, origSize, destSize, batches, numDataFiles)
 		}
 	}
 }
@@ -402,6 +441,54 @@ func GetExistingTableFQNs() ([]string, error) {
 
 	err := connectionPool.Select(&existingTableFQNs, query)
 	return existingTableFQNs, err
+}
+
+/*
+ * GetPartitionedTableFQNs returns the partitioned tables of the database, the roots
+ * of the partition hierarchies and their intermediate levels, as a TRUNCATE of such
+ * a table locks all its partitions.
+ */
+func GetPartitionedTableFQNs() ([]string, error) {
+	partitionedTableFQNs := make([]string, 0)
+	query := `SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname)
+			  FROM pg_catalog.pg_class c
+				JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			  WHERE c.oid IN (SELECT p.parrelid FROM pg_catalog.pg_partition p
+				UNION SELECT r.parchildrelid FROM pg_catalog.pg_partition_rule r
+					JOIN pg_catalog.pg_inherits i ON i.inhparent = r.parchildrelid);`
+	if connectionPool.Version.AtLeast("7") {
+		query = `SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname)
+			  FROM pg_catalog.pg_class c
+				JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			  WHERE c.relkind = 'p';`
+	}
+	err := connectionPool.Select(&partitionedTableFQNs, query)
+	return partitionedTableFQNs, err
+}
+
+/*
+ * GetPartitionAncestorFQNs returns the ancestors of each partition of the database,
+ * on GPDB 7, where the COPY into a partition locks all its ancestors.
+ */
+func GetPartitionAncestorFQNs() (map[string][]string, error) {
+	partitionAncestors := make([]struct {
+		Partition string
+		Ancestor  string
+	}, 0)
+	query := `SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS partition,
+			quote_ident(an.nspname) || '.' || quote_ident(a.relname) AS ancestor
+		  FROM pg_catalog.pg_class c
+			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			CROSS JOIN LATERAL pg_catalog.pg_partition_ancestors(c.oid) AS anc
+			JOIN pg_catalog.pg_class a ON a.oid = anc.relid
+			JOIN pg_catalog.pg_namespace an ON an.oid = a.relnamespace
+		  WHERE c.relispartition AND anc.relid <> c.oid;`
+	err := connectionPool.Select(&partitionAncestors, query)
+	ancestorsOfPartition := make(map[string][]string)
+	for _, row := range partitionAncestors {
+		ancestorsOfPartition[row.Partition] = append(ancestorsOfPartition[row.Partition], row.Ancestor)
+	}
+	return ancestorsOfPartition, err
 }
 
 func GetExistingSchemas() ([]string, error) {

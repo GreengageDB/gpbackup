@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,7 +24,137 @@ import (
 
 var (
 	tableDelim = ","
+
+	/*
+	 * With --single-data-file, the data of each segment is written to one data file,
+	 * or with --jobs to several, each by its own gpbackup_helper.  dataFiles chooses
+	 * the data file and the position of each table when its COPY starts; it is nil
+	 * without --single-data-file.
+	 */
+	dataFiles *DataFileSlots
 )
+
+/*
+ * DataFileSlots chooses the data file of each table while the tables are backed up.
+ *
+ * The gpbackup_helper of a data file reads its tables one after another, from
+ * pipes named by slot, the position of the table in the data file, which it creates
+ * up to maxCopies slots ahead, and the COPY of each table writes its oid to a file
+ * next to the pipe of its slot.  A worker that has locked its table takes the next
+ * slot of the data file with the fewest COPY commands in progress, so that a data
+ * file whose tables are done gets the next table, and each data file gets a table
+ * before any gets a second one.  As a slot is only taken right before its COPY
+ * command, a helper never waits for a table that is not being backed up.  With
+ * maxCopies COPY commands in progress in a data file, the next one waits, as the
+ * pipe of its slot may not exist yet.
+ *
+ * Every segment reads the slots of a data file in the same order, which is the
+ * order of their tables among the data entries of the TOC, so that restore reads
+ * the tables of each data file in the order they were written.
+ */
+type DataFileSlots struct {
+	mutex     sync.Mutex
+	slotFreed *sync.Cond
+	maxCopies int
+	copies    []int
+	numSlots  []int
+	slots     map[uint32]DataFileSlot
+	order     []uint32
+}
+
+type DataFileSlot struct {
+	DataFile int
+	Slot     int
+}
+
+func NewDataFileSlots(numDataFiles int, maxCopies int) *DataFileSlots {
+	slots := &DataFileSlots{
+		maxCopies: maxCopies,
+		copies:    make([]int, numDataFiles),
+		numSlots:  make([]int, numDataFiles),
+		slots:     make(map[uint32]DataFileSlot),
+	}
+	slots.slotFreed = sync.NewCond(&slots.mutex)
+	return slots
+}
+
+func (slots *DataFileSlots) NumDataFiles() int {
+	return len(slots.copies)
+}
+
+func (slots *DataFileSlots) Take(oid uint32) DataFileSlot {
+	slots.mutex.Lock()
+	defer slots.mutex.Unlock()
+	for {
+		file := 0
+		for f := 1; f < len(slots.copies); f++ {
+			if slots.copies[f] < slots.copies[file] ||
+				(slots.copies[f] == slots.copies[file] && slots.numSlots[f] < slots.numSlots[file]) {
+				file = f
+			}
+		}
+		if slots.copies[file] < slots.maxCopies {
+			slot := DataFileSlot{DataFile: file, Slot: slots.numSlots[file]}
+			slots.copies[file]++
+			slots.numSlots[file]++
+			slots.slots[oid] = slot
+			slots.order = append(slots.order, oid)
+			return slot
+		}
+		slots.slotFreed.Wait()
+	}
+}
+
+func (slots *DataFileSlots) Release(slot DataFileSlot) {
+	slots.mutex.Lock()
+	defer slots.mutex.Unlock()
+	slots.copies[slot.DataFile]--
+	slots.slotFreed.Broadcast()
+}
+
+func (slots *DataFileSlots) GetDataFile(oid uint32) int {
+	slots.mutex.Lock()
+	defer slots.mutex.Unlock()
+	return slots.slots[oid].DataFile
+}
+
+// The next slot of each data file, which ends the data file once all tables are backed up
+func (slots *DataFileSlots) GetNextSlots() []int {
+	slots.mutex.Lock()
+	defer slots.mutex.Unlock()
+	nextSlots := make([]int, len(slots.numSlots))
+	copy(nextSlots, slots.numSlots)
+	return nextSlots
+}
+
+// The tables in the order of their slots, followed by any table without a slot
+func (slots *DataFileSlots) OrderTables(tables []Table) []Table {
+	slots.mutex.Lock()
+	defer slots.mutex.Unlock()
+	position := make(map[uint32]int, len(slots.order))
+	for i, oid := range slots.order {
+		position[oid] = i
+	}
+	positionOf := func(table Table) int {
+		if pos, ok := position[table.Oid]; ok {
+			return pos
+		}
+		return len(slots.order)
+	}
+	ordered := make([]Table, len(tables))
+	copy(ordered, tables)
+	sort.SliceStable(ordered, func(a, b int) bool {
+		return positionOf(ordered[a]) < positionOf(ordered[b])
+	})
+	return ordered
+}
+
+func getDataFile(table Table) int {
+	if dataFiles == nil {
+		return 0
+	}
+	return dataFiles.GetDataFile(table.Oid)
+}
 
 func ConstructTableAttributesList(columnDefs []ColumnDefinition) string {
 	// this attribute list used ONLY by CopyTableIn on the restore side
@@ -42,6 +173,10 @@ func ConstructTableAttributesList(columnDefs []ColumnDefinition) string {
 }
 
 func AddTableDataEntriesToTOC(tables []Table, rowsCopiedMaps []map[uint32]int64) {
+	if dataFiles != nil {
+		// Restore reads the tables of each data file in the order of the data entries
+		tables = dataFiles.OrderTables(tables)
+	}
 	for _, table := range tables {
 		if !table.SkipDataBackup() {
 			var rowsCopied int64
@@ -52,7 +187,7 @@ func AddTableDataEntriesToTOC(tables []Table, rowsCopiedMaps []map[uint32]int64)
 				}
 			}
 			attributes := ConstructTableAttributesList(table.ColumnDefs)
-			globalTOC.AddCoordinatorDataEntry(table.Schema, table.Name, table.Oid, attributes, rowsCopied, table.PartitionLevelInfo.RootName, table.DistPolicy.Policy, table.DistPolicy.DistByEnum)
+			globalTOC.AddCoordinatorDataEntryForDataFile(table.Schema, table.Name, table.Oid, attributes, rowsCopied, table.PartitionLevelInfo.RootName, table.DistPolicy.Policy, table.DistPolicy.DistByEnum, getDataFile(table))
 		}
 	}
 }
@@ -78,6 +213,8 @@ func CopyTableOut(queryContext context.Context, connectionPool *dbconn.DBConn, t
 		 * of the data is backed up.
 		 */
 		checkPipeExistsCommand = fmt.Sprintf("(test -p \"%s\" || (echo \"Pipe not found %s\">&2; exit 1)) && ", destinationToWrite, destinationToWrite)
+		// The pipe is named by its slot, so the helper reads the oid of the table from a file
+		checkPipeExistsCommand += fmt.Sprintf("echo %d > \"%s\" && ", table.Oid, utils.GetSlotOidFilename(destinationToWrite))
 		customPipeThroughCommand = utils.DefaultPipeThroughProgram
 	} else if MustGetFlagString(options.PLUGIN_CONFIG) != "" {
 		sendToDestinationCommand = fmt.Sprintf("| %s backup_data %s", pluginConfig.ExecutablePath, pluginConfig.ConfigPath)
@@ -134,7 +271,10 @@ func BackupSingleTableData(queryContext context.Context, table Table, rowsCopied
 
 	destinationToWrite := ""
 	if MustGetFlagBool(options.SINGLE_DATA_FILE) {
-		destinationToWrite = fmt.Sprintf("%s_%d", globalFPInfo.GetSegmentPipePathForCopyCommand(), table.Oid)
+		slot := dataFiles.Take(table.Oid)
+		defer dataFiles.Release(slot)
+		helperIdx := utils.DataFileHelperIdx(slot.DataFile, dataFiles.NumDataFiles())
+		destinationToWrite = fmt.Sprintf("%s_%d", globalFPInfo.GetSegmentPipePathForCopyCommand(helperIdx...), slot.Slot)
 	} else {
 		destinationToWrite = globalFPInfo.GetTableBackupFilePathForCopyCommand(table.Oid, utils.GetPipeThroughProgram().Extension, false)
 	}
@@ -192,19 +332,20 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 	 * 	3) Processes tables only in the event that the other workers encounter locking issues.
 	 * Worker 0 already has all locks on the tables so it will not run into locking issues.
 	 */
-	panicChan := make(chan error)
+	// Buffered, so that each worker records its panic before it is done
+	panicChan := make(chan error, connectionPool.NumConns)
 	rowsCopiedMaps[0] = make(map[uint32]int64)
 	for connNum := 1; connNum < connectionPool.NumConns; connNum++ {
 		rowsCopiedMaps[connNum] = make(map[uint32]int64)
 		workerPool.Add(1)
 		go func(whichConn int) {
+			defer workerPool.Done()
 			defer func() {
 				if panicErr := recover(); panicErr != nil {
 					cancel()
 					panicChan <- fmt.Errorf("%v", panicErr)
 				}
 			}()
-			defer workerPool.Done()
 			// Close opened transaction to open new transaction with shared snapshot below.
 			if backupSnapshot != "" && connectionPool.Tx[whichConn] != nil {
 				if err := connectionPool.Commit(whichConn); err != nil {
@@ -299,6 +440,8 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 	// AccessShareLocks on all the tables already.
 	deferredWorkerDone := make(chan bool)
 	go func() {
+		// Done however the deferred worker ends, after it has recorded its panic
+		defer close(deferredWorkerDone)
 		defer func() {
 			if panicErr := recover(); panicErr != nil {
 				cancel()
@@ -335,7 +478,6 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 				}
 			}
 		}
-		deferredWorkerDone <- true
 	}()
 
 	close(tasks)
@@ -371,6 +513,12 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 
 	// Main goroutine waits for deferred worker 0 by waiting on this channel
 	<-deferredWorkerDone
+	select {
+	case err := <-panicChan:
+		gplog.Fatal(err, "")
+	default:
+		// no panic, nothing to do
+	}
 	agentErr := utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo)
 	if agentErr != nil {
 		gplog.Fatal(agentErr, "")

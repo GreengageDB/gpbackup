@@ -60,6 +60,38 @@ var _ = Describe("End to End incremental tests", func() {
 			schema2TupleCounts["schema2.ao1"] = 1002
 			assertDataRestored(restoreConn, schema2TupleCounts)
 		})
+		It("restores from an incremental backup with a single data file without changed tables", func() {
+			// Only AO tables, which an incremental backup skips while they are unchanged
+			testhelper.AssertQueryRuns(backupConn, `CREATE SCHEMA unchanged_ao;
+				CREATE TABLE unchanged_ao.ao1 (i int) WITH (appendonly=true) DISTRIBUTED BY (i);
+				CREATE TABLE unchanged_ao.ao2 (i int) WITH (appendonly=true) DISTRIBUTED BY (i);
+				INSERT INTO unchanged_ao.ao1 SELECT generate_series(1, 1000);
+				INSERT INTO unchanged_ao.ao2 SELECT generate_series(1, 2000)`)
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA unchanged_ao CASCADE")
+			defer testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA IF EXISTS unchanged_ao CASCADE")
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--leaf-partition-data",
+				"--single-data-file",
+				"--include-schema", "unchanged_ao",
+				"--backup-dir", backupDir)
+			fullBackupTimestamp := getBackupTimestamp(string(output))
+			output = gpbackup(gpbackupPath, backupHelperPath,
+				"--incremental",
+				"--leaf-partition-data",
+				"--single-data-file",
+				"--include-schema", "unchanged_ao",
+				"--backup-dir", backupDir)
+			Expect(string(output)).To(ContainSubstring("No tables to backup"))
+			incrementalTimestamp := getBackupTimestamp(string(output))
+
+			// The incremental backup has no files on the segments, and its tables are restored from the full one
+			gprestore(gprestorePath, restoreHelperPath, incrementalTimestamp,
+				"--redirect-db", "restoredb",
+				"--backup-dir", backupDir)
+			assertDataRestored(restoreConn, map[string]int{"unchanged_ao.ao1": 1000, "unchanged_ao.ao2": 2000})
+			assertArtifactsCleaned(fullBackupTimestamp)
+			assertArtifactsCleaned(incrementalTimestamp)
+		})
 		It("restores from an incremental backup with AO Table consisting of multiple segment files", func() {
 			// Versions before 1.13.0 incorrectly handle AO table inserts involving multiple seg files
 			skipIfOldBackupVersionBefore("1.13.0")
@@ -395,6 +427,71 @@ var _ = Describe("End to End incremental tests", func() {
 				assertArtifactsCleaned(fullBackupTimestamp)
 				assertArtifactsCleaned(incremental1Timestamp)
 				assertArtifactsCleaned(incremental2Timestamp)
+			})
+			It("Restores from incremental backups taken with single-data-file and different numbers of jobs", func() {
+				output := gpbackup(gpbackupPath, backupHelperPath,
+					"--leaf-partition-data",
+					"--single-data-file",
+					"--jobs", "3",
+					"--plugin-config", examplePluginTestConfig)
+				fullBackupTimestamp := getBackupTimestamp(string(output))
+
+				forceMetadataFileDownloadFromPlugin(backupConn, fullBackupTimestamp)
+				testhelper.AssertQueryRuns(backupConn,
+					"INSERT into schema2.ao1 values(1001)")
+				defer testhelper.AssertQueryRuns(backupConn,
+					"DELETE from schema2.ao1 where i=1001")
+				testhelper.AssertQueryRuns(backupConn,
+					"INSERT into schema2.ao2 values(1001)")
+				defer testhelper.AssertQueryRuns(backupConn,
+					"DELETE from schema2.ao2 where i=1001")
+				output = gpbackup(gpbackupPath, backupHelperPath,
+					"--incremental",
+					"--leaf-partition-data",
+					"--single-data-file",
+					"--jobs", "2",
+					"--from-timestamp", fullBackupTimestamp,
+					"--plugin-config", examplePluginTestConfig)
+				incremental1Timestamp := getBackupTimestamp(string(output))
+
+				forceMetadataFileDownloadFromPlugin(backupConn, incremental1Timestamp)
+
+				testhelper.AssertQueryRuns(backupConn,
+					"INSERT into schema2.ao1 values(1002)")
+				defer testhelper.AssertQueryRuns(backupConn,
+					"DELETE from schema2.ao1 where i=1002")
+				output = gpbackup(gpbackupPath, backupHelperPath,
+					"--incremental",
+					"--leaf-partition-data",
+					"--single-data-file",
+					"--plugin-config", examplePluginTestConfig)
+				incremental2Timestamp := getBackupTimestamp(string(output))
+
+				forceMetadataFileDownloadFromPlugin(backupConn, incremental2Timestamp)
+
+				gprestore(gprestorePath, restoreHelperPath, incremental2Timestamp,
+					"--redirect-db", "restoredb",
+					"--jobs", "3",
+					"--plugin-config", examplePluginTestConfig)
+
+				assertRelationsCreated(restoreConn, TOTAL_RELATIONS)
+				assertDataRestored(restoreConn, publicSchemaTupleCounts)
+				schema2TupleCounts["schema2.ao1"] = 1002
+				schema2TupleCounts["schema2.ao2"] = 1001
+				assertDataRestored(restoreConn, schema2TupleCounts)
+				assertArtifactsCleaned(fullBackupTimestamp)
+				assertArtifactsCleaned(incremental1Timestamp)
+				assertArtifactsCleaned(incremental2Timestamp)
+
+				// The history database records the number of data files of each backup, 0 for a single one
+				historyDB, err := history.InitializeHistoryDatabase(historyFilePath)
+				Expect(err).ToNot(HaveOccurred())
+				defer historyDB.Close()
+				for timestamp, numDataFiles := range map[string]int{fullBackupTimestamp: 3, incremental1Timestamp: 2, incremental2Timestamp: 0} {
+					backupConfig, err := history.GetBackupConfig(timestamp, historyDB)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(backupConfig.SingleDataFileCount).To(Equal(numDataFiles), timestamp)
+				}
 			})
 			It("Restores from an incremental backup based on a from-timestamp incremental with --copy-queue-size", func() {
 				output := gpbackup(gpbackupPath, backupHelperPath,

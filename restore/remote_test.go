@@ -78,6 +78,32 @@ var _ = Describe("restore/remote tests", func() {
 			defer testhelper.ShouldPanicWithMessage("Found incorrect number of backup files on 2 segments")
 			restore.VerifyBackupFileCountOnSegments()
 		})
+		It("verifies that a backup with a single data file but without tables has no files on the segments", func() {
+			// As an incremental backup without changed tables
+			restore.SetTOC(&toc.TOC{DataEntries: []toc.CoordinatorDataEntry{}})
+			testExecutor.ClusterOutput = &cluster.RemoteOutput{
+				Commands: []cluster.ShellCommand{
+					cluster.ShellCommand{Stdout: "0"},
+					cluster.ShellCommand{Stdout: "0"},
+				},
+			}
+			testCluster.Executor = testExecutor
+			restore.SetCluster(testCluster)
+			restore.VerifyBackupFileCountOnSegments()
+		})
+		It("panics if a backup with a single data file but without tables has files on the segments", func() {
+			restore.SetTOC(&toc.TOC{DataEntries: []toc.CoordinatorDataEntry{}})
+			testExecutor.ClusterOutput = &cluster.RemoteOutput{
+				Commands: []cluster.ShellCommand{
+					cluster.ShellCommand{Stdout: "2"},
+					cluster.ShellCommand{Stdout: "0"},
+				},
+			}
+			testCluster.Executor = testExecutor
+			restore.SetCluster(testCluster)
+			defer testhelper.ShouldPanicWithMessage("Found incorrect number of backup files on 1 segment")
+			restore.VerifyBackupFileCountOnSegments()
+		})
 		It("panics if backup file counts do not match on some segments", func() {
 			testExecutor.ClusterOutput = &cluster.RemoteOutput{
 				Commands: []cluster.ShellCommand{

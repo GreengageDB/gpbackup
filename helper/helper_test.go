@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/GreengageDB/gpbackup/utils"
 	"golang.org/x/sys/unix"
@@ -274,6 +275,94 @@ var _ = Describe("helper tests", func() {
 		Expect(err).ShouldNot(HaveOccurred())
 	})
 
+	Describe("readSlotOid", func() {
+		slotPipe := fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_pipe1_3", testDir)
+		slotOidFile := slotPipe + "_oid"
+		BeforeEach(func() {
+			_ = os.Remove(slotOidFile)
+		})
+		It("reads and removes the oid file of the slot", func() {
+			Expect(os.WriteFile(slotOidFile, []byte("16384\n"), 0644)).To(Succeed())
+			oid, found, err := readSlotOid(slotPipe)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(oid).To(Equal(16384))
+			Expect(utils.FileExists(slotOidFile)).To(BeFalse())
+		})
+		It("ends the data file at a slot without an oid file", func() {
+			_, found, err := readSlotOid(slotPipe)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(found).To(BeFalse())
+		})
+		It("fails if the oid file of the slot is not an oid", func() {
+			Expect(os.WriteFile(slotOidFile, []byte("x\n"), 0644)).To(Succeed())
+			_, _, err := readSlotOid(slotPipe)
+			Expect(err).To(HaveOccurred())
+		})
+	})
+	Describe("watchHeartbeat", func() {
+		heartbeatFile := utils.GetHeartbeatFilename(fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_pipe1", testDir))
+		timeout := 500 * time.Millisecond
+		// A channel closed once the heartbeat is lost
+		watch := func() chan struct{} {
+			lost := make(chan struct{})
+			go watchHeartbeat(heartbeatFile, timeout, func() { close(lost) })
+			return lost
+		}
+		touch := func(at time.Time) {
+			Expect(os.WriteFile(heartbeatFile, []byte{}, 0644)).To(Succeed())
+			Expect(os.Chtimes(heartbeatFile, at, at)).To(Succeed())
+		}
+		BeforeEach(func() {
+			_ = os.Remove(heartbeatFile)
+			DeferCleanup(func() { _ = os.Remove(heartbeatFile) })
+		})
+		It("names the heartbeat file of the helpers of all data files of a segment alike", func() {
+			Expect(heartbeatFile).To(Equal(fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_heartbeat", testDir)))
+			Expect(utils.GetHeartbeatFilename(fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_pipe", testDir))).To(Equal(heartbeatFile))
+		})
+		It("loses the heartbeat once the heartbeat file has not been touched for the timeout", func() {
+			touch(time.Now())
+			lost := watch()
+			Consistently(lost, timeout/2).ShouldNot(BeClosed())
+			Eventually(lost, 4*timeout).Should(BeClosed())
+		})
+		It("keeps the heartbeat while the heartbeat file is touched", func() {
+			touch(time.Now())
+			lost := watch()
+			touching := time.NewTicker(timeout / 5)
+			defer touching.Stop()
+			for start := time.Now(); time.Since(start) < 4*timeout; {
+				<-touching.C
+				touch(time.Now())
+				Expect(lost).ToNot(BeClosed())
+			}
+		})
+		It("counts a missing or older heartbeat file as touched when the helper started", func() {
+			touch(time.Now().Add(-time.Hour))
+			lost := watch()
+			Consistently(lost, timeout/2).ShouldNot(BeClosed())
+			Eventually(lost, 4*timeout).Should(BeClosed())
+		})
+	})
+	Describe("DoCleanup", func() {
+		It("removes the skip files of its helper only, not those of a helper with a longer index", func() {
+			oldPipeFile := *pipeFile
+			DeferCleanup(func() { *pipeFile = oldPipeFile })
+			*pipeFile = fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_pipe1", testDir)
+			ownSkipFile := fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_skip1_100", testDir)
+			otherSkipFile := fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_skip10_200", testDir)
+			DeferCleanup(func() { _ = os.Remove(otherSkipFile) })
+			Expect(os.WriteFile(ownSkipFile, nil, 0644)).To(Succeed())
+			Expect(os.WriteFile(otherSkipFile, nil, 0644)).To(Succeed())
+
+			CleanupGroup.Add(1)
+			DoCleanup()
+			Expect(utils.FileExists(ownSkipFile)).To(BeFalse())
+			// Helper 10 may still be restoring the table its skip file is for
+			Expect(utils.FileExists(otherSkipFile)).To(BeTrue())
+		})
+	})
 	Describe("Check subset flag", func() {
 		It("when restore_subset is off, --on-error-continue is false, compression is not used", func() {
 			pluginConfig.Options["restore_subset"] = "off"
@@ -491,6 +580,30 @@ var _ = Describe("helper tests", func() {
 			helper := newHelperTest(oidBatch, expectedScenario)
 			err := doRestoreAgentInternal(helper)
 			Expect(err).ToNot(HaveOccurred())
+			Expect(helper.restoreData.discardedBytes).To(Equal(int64(18)))
+		})
+		It("discards the data of a skipped replicated table from its first batch only with single datafile and resize restore", func() {
+			// Two batches, from contents 1 and 4, of which a replicated table is restored from the first only
+			*singleDataFile = true
+			*tocFile = testTocFile
+
+			writeTestTOC(testTocFile)
+			defer func() {
+				_ = os.Remove(*tocFile)
+			}()
+
+			oidBatch := []oidWithBatch{
+				{1 /* A replicated table, the first oid from TOC */, 0},
+			}
+
+			expectedScenario := []helperTestStep{
+				{"mock_1_0", false, 1, true, "Can not open pipe for table 1, check_skip_file shall called, skip file exists"},
+			}
+
+			helper := newHelperTest(oidBatch, expectedScenario)
+			err := doRestoreAgentInternal(helper)
+			Expect(err).ToNot(HaveOccurred())
+			// The subset of the second batch has no data of the table, and the next table would be read from its data
 			Expect(helper.restoreData.discardedBytes).To(Equal(int64(18)))
 		})
 		It("discard error data if skip file is discovered with single datafile", func() {
