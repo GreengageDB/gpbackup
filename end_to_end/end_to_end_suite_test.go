@@ -2416,6 +2416,66 @@ var _ = Describe("backup and restore end to end tests", func() {
 			Expect(countRows("stopped_root.first")()).To(Equal("100000"))
 			assertArtifactsCleaned(timestamp)
 		})
+		DescribeTable("keeps the data of a partitioned table whose helper stops during the COPY of an earlier table", func(onErrorContinue bool) {
+			testhelper.AssertQueryRuns(backupConn, "CREATE SCHEMA stopped_copy")
+			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA stopped_copy CASCADE")
+			// In the data file in this order, the largest table first, whose COPY takes a while
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE stopped_copy.first (i int) DISTRIBUTED BY (i);
+				CREATE TABLE stopped_copy.pt (i int) DISTRIBUTED BY (i)
+					PARTITION BY RANGE (i) (START (1) END (3001) EVERY (1000));
+				INSERT INTO stopped_copy.first SELECT generate_series(1, 3000000);
+				INSERT INTO stopped_copy.pt SELECT generate_series(1, 2000)`)
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--include-schema", "stopped_copy",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+
+			// The turn of the partitioned table comes once the first table is truncated, while the
+			// helper still restores the first table
+			restoreArgs := []string{
+				"--timestamp", timestamp,
+				"--backup-dir", backupDir,
+				"--data-only", "--truncate-table",
+				"--jobs", "2"}
+			if onErrorContinue {
+				restoreArgs = append(restoreArgs, "--on-error-continue")
+			}
+			restoreCmd := exec.Command(gprestorePath, restoreArgs...)
+			var restoreOutput strings.Builder
+			restoreCmd.Stdout, restoreCmd.Stderr = &restoreOutput, &restoreOutput
+			Expect(restoreCmd.Start()).To(Succeed())
+			defer interruptIfRunning(restoreCmd)
+			Eventually(func() int {
+				return countRestoreSessions(`state = 'active' AND query ~ '^COPY stopped_copy\.first'`)
+			}, "30s", "50ms").Should(Equal(1))
+
+			// The helper of the data file on segment 0 stops during that COPY
+			killFunc := func(contentID int) string {
+				if contentID != 0 {
+					return "true"
+				}
+				return fmt.Sprintf("pkill -TERM -f '[g]pbackup_helper.*gpbackup_0_%s_%d_pipe'", timestamp, restoreCmd.Process.Pid)
+			}
+			remoteOutput := backupCluster.GenerateAndExecuteCommand("Stopping a helper", cluster.ON_SEGMENTS, killFunc)
+			Expect(remoteOutput.NumErrors).To(Equal(0))
+
+			Expect(restoreCmd.Wait()).To(HaveOccurred())
+			// The helper stopped before the COPY of the first table ended, which fails, or ends with fewer rows
+			// as the helper closes its pipe
+			Expect(restoreOutput.String()).To(MatchRegexp(`(Error loading data into table|Expected to restore 3000000 rows to table) stopped_copy\.first`))
+			if onErrorContinue {
+				Expect(restoreOutput.String()).To(ContainSubstring("Encountered 2 error(s) during table data restore"))
+			}
+			// The partitioned table is not truncated, and the first table is truncated in the transaction
+			// of its COPY, which is rolled back
+			Expect(countRows("stopped_copy.pt")()).To(Equal("2000"))
+			Expect(countRows("stopped_copy.first")()).To(Equal("3000000"))
+			assertArtifactsCleaned(timestamp)
+		},
+			Entry("with --on-error-continue", true),
+			Entry("without --on-error-continue", false),
+		)
 	})
 	Describe("Restore with --run-analyze", func() {
 		It("runs gprestore without --run-analyze", func() {

@@ -4,12 +4,14 @@ import (
 	"context"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/GreengageDB/gp-common-go-libs/cluster"
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/filepath"
 	"github.com/GreengageDB/gpbackup/history"
 	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/pkg/errors"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -324,6 +326,43 @@ var _ = Describe("restore internal tests", func() {
 			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() {})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+		Describe("a COPY from a single data file that ends with fewer rows", func() {
+			var testExecutor *testhelper.TestExecutor
+			BeforeEach(func() {
+				backupConfig = &history.BackupConfig{SingleDataFile: true}
+				testExecutor = &testhelper.TestExecutor{}
+				oldCluster := globalCluster
+				globalCluster = cluster.NewCluster([]cluster.SegConfig{
+					{ContentID: -1, Hostname: "localhost", DataDir: "/data/gpseg-1"},
+					{ContentID: 0, Hostname: "localhost", DataDir: "/data/gpseg0"},
+				})
+				globalCluster.Executor = testExecutor
+				DeferCleanup(func() { globalCluster = oldCluster })
+			})
+			restoreFewerRows := func() (bool, error) {
+				fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+				entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", RowsCopied: 10}
+				localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 4))
+				copyDone := false
+				err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() { copyDone = true })
+				Expect(localMock.ExpectationsWereMet()).To(Succeed())
+				return copyDone, err
+			}
+			It("returns that the helper has stopped if it has, as it closes its pipe as it stops", func() {
+				testExecutor.ClusterOutput = &cluster.RemoteOutput{Commands: []cluster.ShellCommand{{Stdout: "error"}}}
+				copyDone, err := restoreFewerRows()
+				Expect(errors.Is(err, utils.AgentErr)).To(BeTrue())
+				// The caller records the end of the COPY once it has recorded that the helper has stopped
+				Expect(copyDone).To(BeFalse())
+				Expect(testExecutor.NumExecutions).To(Equal(1))
+			})
+			It("returns the difference of the rows if the helper has not stopped", func() {
+				testExecutor.ClusterOutput = &cluster.RemoteOutput{Commands: []cluster.ShellCommand{{Stdout: ""}}}
+				copyDone, err := restoreFewerRows()
+				Expect(err).To(MatchError("Expected to restore 10 rows to table public.foo, but restored 4 instead"))
+				Expect(copyDone).To(BeFalse())
+			})
 		})
 	})
 	Describe("beginTableTransaction", func() {

@@ -141,7 +141,6 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 		}
 		numRowsRestored += partialRowsRestored
 	}
-	copyDone()
 
 	numRowsBackedUp := entry.RowsCopied
 
@@ -156,8 +155,21 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 	err := CheckRowsRestored(numRowsRestored, numRowsBackedUp, tableName)
 	if err != nil {
 		gplog.Error(err.Error())
+		/*
+		 * A helper that stops during the COPY closes its pipe after it creates its
+		 * error file, so that the COPY may end without an error and with fewer rows.
+		 * The helper is then found to have stopped, as for a failed COPY, before the
+		 * COPY is recorded as ended.
+		 */
+		if backupConfig.SingleDataFile || resizeCluster {
+			if agentErr := checkAgentErrors(*fpInfo, helperIdx); agentErr != nil {
+				gplog.Error(agentErr.Error())
+				return agentErr
+			}
+		}
 		return err
 	}
+	copyDone()
 
 	/*
 	 * Rows that are not redistributed are on the wrong segments, so the table is
@@ -297,11 +309,13 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	 * A partitioned table, a root or an intermediate level, is truncated on its own
 	 * and with its partitions, as before: its TRUNCATE locks all its partitions, and
 	 * holding these locks for the whole COPY in several connections at once could
-	 * fill the lock table.  As this TRUNCATE is not rolled back, the helper of the
-	 * table is checked for errors first, which the other tables of a stopped helper
-	 * may not have found yet, as when they wait for their turns or locks.  A helper
-	 * that stops after the check, during the COPY of the partitioned table, still
-	 * leaves the table empty.
+	 * fill the lock table.  As this TRUNCATE is not rolled back, with --single-data-file
+	 * it waits until the COPY of each table before it in its data file has ended, as
+	 * the turn of the table comes once the tables before it are truncated, while the
+	 * helper may still restore them.  A COPY that fails as the helper has stopped
+	 * records so before it ends, and the table is skipped then.  A helper that stops
+	 * after that, as during the COPY of the partitioned table, still leaves the table
+	 * empty.
 	 *
 	 * With --single-data-file, each table is restored in a transaction, which begins
 	 * and truncates its table in the order of the data file, as described at
@@ -353,6 +367,18 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				}
 			}()
 
+			// A table left by a stopped helper is reported as an error without being truncated
+			skipTableOfStoppedHelper := func(entryIdx int, tableName string) {
+				groups.TurnDone(entryIdx)
+				gplog.Verbose("Skipping data of table %s, as the gpbackup_helper of its data has stopped", tableName)
+				atomic.AddInt32(&numErrors, 1)
+				mutex.Lock()
+				errorTablesData[tableName] = Empty{}
+				mutex.Unlock()
+				groups.CopyDone(entryIdx)
+				dataProgressBar.Increment()
+			}
+
 			setGUCsForConnection(gucStatements, whichConn)
 			nextEntryIdx := groups.EntriesOfConn(ctx, whichConn)
 			if resizeCluster && !backupConfig.SingleDataFile {
@@ -384,15 +410,11 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				if len(helperIdx) > 0 {
 					helper = helperIdx[0]
 				}
-				if (backupConfig.SingleDataFile || resizeCluster) && stoppedHelpers[helper].Load() {
-					groups.TurnDone(entryIdx)
-					gplog.Verbose("Skipping data of table %s, as the gpbackup_helper of its data has stopped", tableName)
-					atomic.AddInt32(&numErrors, 1)
-					mutex.Lock()
-					errorTablesData[tableName] = Empty{}
-					mutex.Unlock()
-					groups.CopyDone(entryIdx)
-					dataProgressBar.Increment()
+				helperStopped := func() bool {
+					return (backupConfig.SingleDataFile || resizeCluster) && stoppedHelpers[helper].Load()
+				}
+				if helperStopped() {
+					skipTableOfStoppedHelper(entryIdx, tableName)
 					continue
 				}
 				var err error
@@ -401,17 +423,23 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				if !groups.WaitForTurn(ctx, entryIdx) {
 					return // Error somewhere, terminate
 				}
+				// The TRUNCATE of a partitioned table is not rolled back, so it waits until the helper has passed the
+				// tables before it, whose COPY finds whether the helper has stopped
+				truncatePartitioned := truncateTable && partitioned
+				if truncatePartitioned && !groups.WaitForCopiesBefore(ctx, entryIdx) {
+					return // Error somewhere, terminate
+				}
 				if wasTerminated.Load() {
 					// The cleanup may have terminated the waiting sessions already, so the table does not begin to wait
 					dataProgressBar.(*pb.ProgressBar).NotPrint = true
 					cancel()
 					return
 				}
-				if truncateTable && partitioned && (backupConfig.SingleDataFile || resizeCluster) {
-					// The TRUNCATE of a partitioned table is not rolled back, so it is not run once the helper has stopped
-					err = checkAgentErrors(fpInfo, helperIdx)
+				if truncatePartitioned && helperStopped() {
+					skipTableOfStoppedHelper(entryIdx, tableName)
+					continue
 				}
-				if err == nil && truncateTable && partitioned {
+				if truncatePartitioned {
 					gplog.Verbose("Truncating table %s prior to restoring data", tableName)
 					_, err = connectionPool.Exec(`TRUNCATE `+tableName, whichConn)
 				}
@@ -435,9 +463,8 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				}
 				if err != nil {
 					gplog.Error(err.Error())
-					// The COPY of the table is not run, so its helpers are told to skip it, unless they have stopped
-					if onErrorContinue && connectionPool.Version.AtLeast("6") && (backupConfig.SingleDataFile || resizeCluster) &&
-						!errors.Is(err, utils.AgentErr) {
+					// The COPY of the table is not run, so its helpers are told to skip it
+					if onErrorContinue && connectionPool.Version.AtLeast("6") && (backupConfig.SingleDataFile || resizeCluster) {
 						utils.CreateSkipFileOnSegments(entry.Oid, tableName, globalCluster, fpInfo, helperIdx...)
 					}
 				}
@@ -824,6 +851,26 @@ func (groups *DataFileGroups) CopyDone(entryIdx int) {
 		groups.firstNotCopied[file]++
 	}
 	groups.progressed.Broadcast()
+}
+
+/*
+ * WaitForCopiesBefore waits, with LimitAhead, until the COPY of each table before
+ * the given data entry in its data file has ended, or the tables are skipped, so
+ * that the helper of the data file has passed them.  It returns false if the
+ * context is done first.  The tables before it have taken their turns once it has
+ * its own, so their COPY does not wait for it.
+ */
+func (groups *DataFileGroups) WaitForCopiesBefore(ctx context.Context, entryIdx int) bool {
+	if !groups.LimitAhead {
+		return true
+	}
+	file, position := groups.fileOfEntry[entryIdx], groups.positionOfEntry[entryIdx]
+	groups.mutex.Lock()
+	defer groups.mutex.Unlock()
+	for groups.firstNotCopied[file] < position && ctx.Err() == nil {
+		groups.progressed.Wait()
+	}
+	return ctx.Err() == nil
 }
 
 // WakeWhenDone wakes the connections waiting for their turns or tables once the context is done

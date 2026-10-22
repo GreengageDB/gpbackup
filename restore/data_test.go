@@ -313,6 +313,37 @@ var _ = Describe("restore/data tests", func() {
 				groups := restore.NewDataFileGroups(singleFileEntries, 1, 2, 2)
 				Expect(entriesOfConns(groups, 2)).To(Equal([][]int{{0, 2}, {1, 3}}))
 			})
+			// Whether the COPY of the tables before an entry, waited for in the background, has ended
+			waitForCopiesBefore := func(groups *restore.DataFileGroups, ctx context.Context, entryIdx int) chan bool {
+				copied := make(chan bool, 1)
+				go func() { copied <- groups.WaitForCopiesBefore(ctx, entryIdx) }()
+				return copied
+			}
+			It("waits until the COPY of each table before an entry in its data file has ended", func() {
+				groups := restore.NewDataFileGroups(singleFileEntries, 1, 2, 2)
+				groups.LimitAhead = true
+				Expect(groups.WaitForCopiesBefore(context.Background(), 0)).To(BeTrue())
+				copied := waitForCopiesBefore(groups, context.Background(), 2)
+				groups.CopyDone(1)
+				Consistently(copied, "200ms").ShouldNot(Receive())
+				groups.CopyDone(0)
+				Eventually(copied).Should(Receive(BeTrue()))
+			})
+			It("stops waiting for the COPY of the tables before an entry once the context is done", func() {
+				groups := restore.NewDataFileGroups(singleFileEntries, 1, 2, 2)
+				groups.LimitAhead = true
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				groups.WakeWhenDone(ctx)
+				copied := waitForCopiesBefore(groups, ctx, 1)
+				Consistently(copied, "200ms").ShouldNot(Receive())
+				cancel()
+				Eventually(copied).Should(Receive(BeFalse()))
+			})
+			It("does not wait for the COPY of the tables before an entry without LimitAhead", func() {
+				groups := restore.NewDataFileGroups(singleFileEntries, 1, 2, 2)
+				Expect(groups.WaitForCopiesBefore(context.Background(), 3)).To(BeTrue())
+			})
 		})
 	})
 	Describe("CheckRowsRestored", func() {
