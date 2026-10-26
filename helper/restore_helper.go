@@ -256,14 +256,8 @@ func doRestoreAgentInternal(restoreHelper IRestoreHelper) error {
 	}
 
 	oidList := make(map[int][]int)
-	// The tables of each batch: a replicated table is restored from its first batch only
-	isInBatch := make(map[int]map[int]bool)
 	for _, v := range oidWithBatchList {
 		oidList[v.batch] = append(oidList[v.batch], v.oid)
-		if isInBatch[v.batch] == nil {
-			isInBatch[v.batch] = make(map[int]bool)
-		}
-		isInBatch[v.batch][v.oid] = true
 	}
 
 	if *singleDataFile {
@@ -394,11 +388,6 @@ func doRestoreAgentInternal(restoreHelper IRestoreHelper) error {
 						if *singleDataFile {
 							// Discard remaining batches
 							for batchToDiscard := batchNum; batchToDiscard < batches; batchToDiscard++ {
-								// The subset of a batch without the table, such as a later batch of a
-								// replicated table, does not have its data
-								if !isInBatch[batchToDiscard][tableOid] {
-									continue
-								}
 								contentToDiscard := *content + (*destSize * batchToDiscard)
 								if readers[contentToDiscard] != nil && readers[contentToDiscard].getReaderType() == SUBSET {
 									start[contentToDiscard] = tocEntries[contentToDiscard][uint(tableOid)].StartByte
@@ -411,7 +400,7 @@ func doRestoreAgentInternal(restoreHelper IRestoreHelper) error {
 						/* Close up to *copyQueue files with this tableOid */
 						for idx := 0; idx < *copyQueue; idx++ {
 							batchToDelete := batchNum + idx
-							if batchToDelete < batches && isInBatch[batchToDelete][tableOid] {
+							if batchToDelete < batches {
 								restoreHelper.closeAndDeletePipe(tableOid, batchToDelete)
 							}
 						}

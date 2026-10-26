@@ -69,9 +69,7 @@ func VerifyBackupFileCountOnSegments() {
 	if backupConfig.SingleDataFileCount > 1 {
 		fileCount = 2 * backupConfig.SingleDataFileCount
 	}
-	// Without --single-data-file, a file for each table; with it, a backup without tables, such as an incremental
-	// one without changed tables, has neither a data file nor a segment TOC
-	if !backupConfig.SingleDataFile || len(globalTOC.DataEntries) == 0 {
+	if !backupConfig.SingleDataFile {
 		fileCount = len(globalTOC.DataEntries)
 	}
 

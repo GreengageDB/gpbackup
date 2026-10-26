@@ -14,10 +14,9 @@ import (
 )
 
 /*
- * The data restore truncates the partitioned tables and locks the ancestors of the
- * partitions by the names of the data entries, so the names that these queries
- * return must be those that the backup writes to its TOC.  A name of another form
- * would silently leave a table out.
+ * The data restore locks the ancestors of the partitions by the names of the data
+ * entries, so the names that these queries return must be those that the backup
+ * writes to its TOC.  A name of another form would silently leave a table out.
  */
 var _ = Describe("restore integration tests of the partitioned tables", func() {
 	const (
@@ -55,26 +54,6 @@ var _ = Describe("restore integration tests of the partitioned tables", func() {
 			CREATE TABLE "Part Schema".plain (i int) DISTRIBUTED BY (i);`)
 		DeferCleanup(func() {
 			testhelper.AssertQueryRuns(connectionPool, `DROP SCHEMA "Part Schema" CASCADE`)
-		})
-	})
-	Describe("GetPartitionedTableFQNs", func() {
-		It("returns the roots and the intermediate levels of the partition hierarchies", func() {
-			partitionedTables, err := restore.GetPartitionedTableFQNs()
-			Expect(err).ToNot(HaveOccurred())
-			ofSchema := make([]string, 0)
-			for _, table := range partitionedTables {
-				if strings.HasPrefix(table, `"Part Schema".`) {
-					ofSchema = append(ofSchema, table)
-				}
-			}
-			// Not the leaf partitions, a parent of an inheritance hierarchy or another table
-			Expect(ofSchema).To(ConsistOf(root, intermediate1, intermediate2))
-		})
-		It("returns the root by the name that the backup gives it", func() {
-			partitionedTables, err := restore.GetPartitionedTableFQNs()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(backupNames()).To(ContainElement(root))
-			Expect(partitionedTables).To(ContainElement(root))
 		})
 	})
 	Describe("GetPartitionAncestorFQNs", func() {

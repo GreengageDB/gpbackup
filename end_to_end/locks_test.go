@@ -5,23 +5,15 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/backup"
 	"github.com/GreengageDB/gpbackup/testutils"
-	"github.com/GreengageDB/gpbackup/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
-/*
- * The connections of these tests that lock tables, or wait for locks, bypass the
- * resource group of the role: with resource groups each of their transactions
- * would hold a slot of the group, which gpbackup then waits for, while the tests
- * wait for gpbackup to lock its tables.
- */
 var _ = Describe("Deadlock handling", func() {
 	BeforeEach(func() {
 		end_to_end_setup()
@@ -34,11 +26,6 @@ var _ = Describe("Deadlock handling", func() {
 	It("runs gpbackup with jobs flag and COPY deadlock handling occurs", func() {
 		if useOldBackupVersion {
 			Skip("This test is not needed for old backup versions")
-		}
-		// gpbackup --jobs 10 needs 12 slots of the resource group, and the transaction
-		// of backupConn below one more
-		if name, concurrency, ok := utils.ResourceGroupConcurrency(backupConn); ok && concurrency < 13 {
-			Skip(fmt.Sprintf("This test needs 13 slots of resource group %s, which has %d", name, concurrency))
 		}
 		// Acquire AccessExclusiveLock on public.foo to block gpbackup when it attempts
 		// to grab AccessShareLocks before its metadata dump section.
@@ -55,22 +42,9 @@ var _ = Describe("Deadlock handling", func() {
 		// that happens, acquire an AccessExclusiveLock on pg_catalog.pg_trigger to block gpbackup during its
 		// trigger metadata dump. Then release the initial AccessExclusiveLock on public.foo (from the
 		// beginning of the test) to unblock gpbackup and let gpbackup move forward to the trigger metadata dump.
-		anotherConn := testutils.SetupTestDbConnBypassingResourceGroup("testdb")
+		anotherConn := testutils.SetupTestDbConn("testdb")
 		defer anotherConn.Close()
-		// The goroutines below use the connections, so they end before the connections are closed
-		var lockers sync.WaitGroup
-		defer lockers.Wait()
-		lockers.Add(1)
 		go func() {
-			defer GinkgoRecover()
-			defer lockers.Done()
-			// gpbackup waits for its lock on public.foo until the session commits, also if the lock below fails
-			committed := false
-			defer func() {
-				if !committed {
-					_, _ = backupConn.Exec("COMMIT")
-				}
-			}()
 			// Query to see if gpbackup's AccessShareLock request on public.foo is blocked
 			checkLockQuery := `SELECT count(*) FROM pg_locks l, pg_class c, pg_namespace n WHERE l.relation = c.oid AND n.oid = c.relnamespace AND n.nspname = 'public' AND c.relname = 'foo' AND l.granted = 'f' AND l.mode = 'AccessShareLock'`
 
@@ -93,7 +67,6 @@ var _ = Describe("Deadlock handling", func() {
 			// AccessExclusiveLock on public.foo to let gpbackup go to the trigger metadata dump.
 			anotherConn.MustExec(`BEGIN; LOCK TABLE pg_catalog.pg_trigger IN ACCESS EXCLUSIVE MODE`)
 			backupConn.MustExec("COMMIT")
-			committed = true
 		}()
 
 		// Concurrently wait for gpbackup to block on the trigger metadata dump section. Once we
@@ -102,11 +75,8 @@ var _ = Describe("Deadlock handling", func() {
 		dataTables := []string{`public."FOObar"`, "public.foo", "public.holds", "public.sales", "public.bigtable",
 			"schema2.ao1", "schema2.ao2", "schema2.foo2", "schema2.foo3", "schema2.returns"}
 		for _, dataTable := range dataTables {
-			lockers.Add(1)
 			go func(dataTable string) {
-				defer GinkgoRecover()
-				defer lockers.Done()
-				accessExclusiveLockConn := testutils.SetupTestDbConnBypassingResourceGroup("testdb")
+				accessExclusiveLockConn := testutils.SetupTestDbConn("testdb")
 				defer accessExclusiveLockConn.Close()
 
 				// Query to see if gpbackup's AccessShareLock request on pg_catalog.pg_trigger is blocked
@@ -135,10 +105,7 @@ var _ = Describe("Deadlock handling", func() {
 		// Once that happens, release the AccessExclusiveLock on pg_catalog.pg_trigger to unblock
 		// gpbackup and let gpbackup move forward to the data dump section.
 		var accessExclBlockedLockCount int
-		lockers.Add(1)
 		go func() {
-			defer GinkgoRecover()
-			defer lockers.Done()
 			// Query to check for ungranted AccessExclusiveLock requests on our test tables
 			checkLockQuery := `SELECT count(*) FROM pg_locks WHERE granted = 'f' AND mode = 'AccessExclusiveLock'`
 
@@ -160,8 +127,6 @@ var _ = Describe("Deadlock handling", func() {
 
 		// gpbackup has finished
 		output, _ := cmd.CombinedOutput()
-		// The goroutines are done with the count of the locks too
-		lockers.Wait()
 		stdout := string(output)
 
 		// Check that 10 deadlock traps were placed during the test
@@ -207,22 +172,9 @@ var _ = Describe("Deadlock handling", func() {
 		// that happens, acquire an AccessExclusiveLock on pg_catalog.pg_trigger to block gpbackup during its
 		// trigger metadata dump. Then release the initial AccessExclusiveLock on public.foo (from the
 		// beginning of the test) to unblock gpbackup and let gpbackup move forward to the trigger metadata dump.
-		anotherConn := testutils.SetupTestDbConnBypassingResourceGroup("testdb")
+		anotherConn := testutils.SetupTestDbConn("testdb")
 		defer anotherConn.Close()
-		// The goroutines below use the connections, so they end before the connections are closed
-		var lockers sync.WaitGroup
-		defer lockers.Wait()
-		lockers.Add(1)
 		go func() {
-			defer GinkgoRecover()
-			defer lockers.Done()
-			// gpbackup waits for its lock on public.foo until the session commits, also if the lock below fails
-			committed := false
-			defer func() {
-				if !committed {
-					_, _ = backupConn.Exec("COMMIT")
-				}
-			}()
 			// Query to see if gpbackup's AccessShareLock request on public.foo is blocked
 			checkLockQuery := `SELECT count(*) FROM pg_locks l, pg_class c, pg_namespace n WHERE l.relation = c.oid AND n.oid = c.relnamespace AND n.nspname = 'public' AND c.relname = 'foo' AND l.granted = 'f' AND l.mode = 'AccessShareLock'`
 
@@ -245,7 +197,6 @@ var _ = Describe("Deadlock handling", func() {
 			// AccessExclusiveLock on public.foo to let gpbackup go to the trigger metadata dump.
 			anotherConn.MustExec(`BEGIN; LOCK TABLE pg_catalog.pg_trigger IN ACCESS EXCLUSIVE MODE`)
 			backupConn.MustExec("COMMIT")
-			committed = true
 		}()
 
 		// Concurrently wait for gpbackup to block on the trigger metadata dump section. Once we
@@ -254,11 +205,8 @@ var _ = Describe("Deadlock handling", func() {
 		dataTables := []string{"public.bigtable", "public.holds", "public.foo", "schema2.foo3", "schema2.ao1",
 			"schema2.ao2", `public."FOObar"`, "public.sales", "schema2.foo2", "schema2.returns"}
 		for _, dataTable := range dataTables {
-			lockers.Add(1)
 			go func(dataTable string) {
-				defer GinkgoRecover()
-				defer lockers.Done()
-				accessExclusiveLockConn := testutils.SetupTestDbConnBypassingResourceGroup("testdb")
+				accessExclusiveLockConn := testutils.SetupTestDbConn("testdb")
 				defer accessExclusiveLockConn.Close()
 
 				// Query to see if gpbackup's AccessShareLock request on pg_catalog.pg_trigger is blocked
@@ -287,10 +235,7 @@ var _ = Describe("Deadlock handling", func() {
 		// Once that happens, release the AccessExclusiveLock on pg_catalog.pg_trigger to unblock
 		// gpbackup and let gpbackup move forward to the data dump section.
 		var accessExclBlockedLockCount int
-		lockers.Add(1)
 		go func() {
-			defer GinkgoRecover()
-			defer lockers.Done()
 			// Query to check for ungranted AccessExclusiveLock requests on our test tables
 			checkLockQuery := `SELECT count(*) FROM pg_locks WHERE granted = 'f' AND mode = 'AccessExclusiveLock'`
 
@@ -312,8 +257,6 @@ var _ = Describe("Deadlock handling", func() {
 
 		// gpbackup has finished
 		output, _ := cmd.CombinedOutput()
-		// The goroutines are done with the count of the locks too
-		lockers.Wait()
 		stdout := string(output)
 
 		// Check that 10 deadlock traps were placed during the test
@@ -364,22 +307,9 @@ var _ = Describe("Deadlock handling", func() {
 		// that happens, acquire an AccessExclusiveLock on pg_catalog.pg_trigger to block gpbackup during its
 		// trigger metadata dump. Then release the initial AccessExclusiveLock on public.foo (from the
 		// beginning of the test) to unblock gpbackup and let gpbackup move forward to the trigger metadata dump.
-		anotherConn := testutils.SetupTestDbConnBypassingResourceGroup("testdb")
+		anotherConn := testutils.SetupTestDbConn("testdb")
 		defer anotherConn.Close()
-		// The goroutines below use the connections, so they end before the connections are closed
-		var lockers sync.WaitGroup
-		defer lockers.Wait()
-		lockers.Add(1)
 		go func() {
-			defer GinkgoRecover()
-			defer lockers.Done()
-			// gpbackup waits for its lock on public.foo until the session commits, also if the lock below fails
-			committed := false
-			defer func() {
-				if !committed {
-					_, _ = backupConn.Exec("COMMIT")
-				}
-			}()
 			// Query to see if gpbackup's AccessShareLock request on public.foo is blocked
 			checkLockQuery := `SELECT count(*) FROM pg_locks l, pg_class c, pg_namespace n WHERE l.relation = c.oid AND n.oid = c.relnamespace AND n.nspname = 'public' AND c.relname = 'foo' AND l.granted = 'f' AND l.mode = 'AccessShareLock'`
 
@@ -402,7 +332,6 @@ var _ = Describe("Deadlock handling", func() {
 			// AccessExclusiveLock on public.foo to let gpbackup go to the trigger metadata dump.
 			anotherConn.MustExec(`BEGIN; LOCK TABLE pg_catalog.pg_trigger IN ACCESS EXCLUSIVE MODE`)
 			backupConn.MustExec("COMMIT")
-			committed = true
 		}()
 
 		// Concurrently wait for gpbackup to block on the trigger metadata dump section. Once we
@@ -412,11 +341,8 @@ var _ = Describe("Deadlock handling", func() {
 			"schema2.ao1", "schema2.ao2", "schema2.foo2", "schema2.foo3", "schema2.returns"}
 		lockedTables := []string{`public."FOObar"`, "public.foo"}
 		for _, lockedTable := range lockedTables {
-			lockers.Add(1)
 			go func(lockedTable string) {
-				defer GinkgoRecover()
-				defer lockers.Done()
-				accessExclusiveLockConn := testutils.SetupTestDbConnBypassingResourceGroup("testdb")
+				accessExclusiveLockConn := testutils.SetupTestDbConn("testdb")
 				defer accessExclusiveLockConn.Close()
 
 				// Query to see if gpbackup's AccessShareLock request on pg_catalog.pg_trigger is blocked
@@ -444,10 +370,7 @@ var _ = Describe("Deadlock handling", func() {
 		// Once that happens, release the AccessExclusiveLock on pg_catalog.pg_trigger to unblock
 		// gpbackup and let gpbackup move forward to the data dump section.
 		var accessExclBlockedLockCount int
-		lockers.Add(1)
 		go func() {
-			defer GinkgoRecover()
-			defer lockers.Done()
 			// Query to check for ungranted AccessExclusiveLock requests on our test tables
 			checkLockQuery := `SELECT count(*) FROM pg_locks WHERE granted = 'f' AND mode = 'AccessExclusiveLock'`
 
@@ -469,8 +392,6 @@ var _ = Describe("Deadlock handling", func() {
 
 		// gpbackup has finished
 		output, _ := cmd.CombinedOutput()
-		// The goroutines are done with the count of the locks too
-		lockers.Wait()
 		stdout := string(output)
 
 		// Check that 2 deadlock traps were placed during the test
@@ -531,7 +452,7 @@ var _ = Describe("Deadlock handling", func() {
 		}
 		testhelper.AssertQueryRuns(backupConn, "ANALYZE pipe_test.t1")
 
-		anotherConn := testutils.SetupTestDbConnBypassingResourceGroup("testdb")
+		anotherConn := testutils.SetupTestDbConn("testdb")
 		defer anotherConn.Close()
 		waitForCount := func(query string, count int) {
 			var actual int
@@ -593,7 +514,7 @@ var _ = Describe("Deadlock handling", func() {
 		for i := 1; i <= 3; i++ {
 			go func(table int) {
 				defer GinkgoRecover()
-				lockConn := testutils.SetupTestDbConnBypassingResourceGroup("testdb")
+				lockConn := testutils.SetupTestDbConn("testdb")
 				defer lockConn.Close()
 				lockConn.MustExec(fmt.Sprintf("BEGIN; LOCK TABLE pipe_test.t%d IN ACCESS EXCLUSIVE MODE; COMMIT", table))
 			}(i)

@@ -440,7 +440,6 @@ func getNumDataFiles(numTables int) int {
  * main worker, which backs up the tables deferred because of lock conflicts.
  */
 func startDataFileHelpers(numDataFiles int, compressStr string) {
-	startHelperHeartbeat()
 	numPipes := (connectionPool.NumConns-1)/numDataFiles + 1
 	dataFiles = NewDataFileSlots(numDataFiles, numPipes)
 	slotNames := make([]string, numPipes)
@@ -450,13 +449,6 @@ func startDataFileHelpers(numDataFiles int, compressStr string) {
 	for file := 0; file < numDataFiles; file++ {
 		startDataFileHelper(file, numDataFiles, slotNames, compressStr)
 	}
-}
-
-// The helpers end once gpbackup stops touching their heartbeat files, as when it dies without its cleanup
-func startHelperHeartbeat() {
-	unlock := utils.LockHelperStart(&wasTerminated)
-	defer unlock()
-	utils.StartHelperHeartbeat(globalCluster, globalFPInfo)
 }
 
 func startDataFileHelper(file int, numDataFiles int, slotNames []string, compressStr string) {
@@ -623,8 +615,6 @@ func DoCleanup(backupFailed bool) {
 		cancelBlockedQueries(globalFPInfo.Timestamp)
 	}
 	if globalFPInfo.Timestamp != "" && MustGetFlagBool(options.SINGLE_DATA_FILE) {
-		// Before the files of the helpers are removed, as it would create their heartbeat files again
-		utils.StopHelperHeartbeat()
 		// Copy sessions must be terminated before cleaning up gpbackup_helper processes to avoid a potential deadlock
 		// If the terminate query is sent via a connection with an active COPY command, and the COPY's pipe is cleaned up, the COPY query will hang.
 		// This results in the DoCleanup function passed to the signal handler to never return, blocking the os.Exit call
@@ -636,11 +626,12 @@ func DoCleanup(backupFailed bool) {
 		utils.CleanUpSegmentHelperProcesses(globalCluster, globalFPInfo, "backup", cleanupTimeout)
 		utils.CleanUpHelperFilesOnAllHosts(globalCluster, globalFPInfo, cleanupTimeout)
 
-		// Check gpbackup_helper errors here if backup was terminated. The check removes
-		// the error files, which the helpers stopped above write after any failure.
-		err := utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo)
-		if err != nil && wasTerminated.Load() {
-			gplog.Error(err.Error())
+		// Check gpbackup_helper errors here if backup was terminated
+		if wasTerminated.Load() {
+			err := utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo)
+			if err != nil {
+				gplog.Error(err.Error())
+			}
 		}
 	}
 
@@ -649,9 +640,7 @@ func DoCleanup(backupFailed bool) {
 	// failure; in either case, update the end time to the actual value. Between our signal handler and recovering
 	// panics, there should be no way for gpbackup to exit that leaves the entry in the initial status.
 
-	// Before the backup report and the paths of the backup exist, as when the setup fails, there is no
-	// entry to update, and the history database would be looked for in the current directory
-	if !MustGetFlagBool(options.NO_HISTORY) && backupReport != nil && globalFPInfo.Timestamp != "" {
+	if !MustGetFlagBool(options.NO_HISTORY) {
 		var statusString string
 		if backupFailed {
 			statusString = history.BackupStatusFailed
@@ -679,7 +668,7 @@ func DoCleanup(backupFailed bool) {
 
 // Cancel blocked gpbackup queries waiting for locks.
 func cancelBlockedQueries(timestamp string) {
-	conn := utils.NewResourceGroupBypassConn(MustGetFlagString(options.DBNAME))
+	conn := dbconn.NewDBConnFromEnvironment(MustGetFlagString(options.DBNAME))
 	conn.MustConnect(1)
 	defer conn.Close()
 

@@ -62,14 +62,6 @@ func SetupTestDbConn(dbname string) *dbconn.DBConn {
 	return conn
 }
 
-// Connects bypassing the resource group of the role, so that the connection takes
-// no slot of the group, such as one that the program under test needs
-func SetupTestDbConnBypassingResourceGroup(dbname string) *dbconn.DBConn {
-	conn := utils.NewResourceGroupBypassConn(dbname)
-	conn.MustConnect(1)
-	return conn
-}
-
 // Connects to specific segment in utility mode
 func SetupTestDBConnSegment(dbname string, port int, host string, gpVersion dbconn.GPDBVersion) *dbconn.DBConn {
 

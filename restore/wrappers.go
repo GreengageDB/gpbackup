@@ -2,7 +2,6 @@ package restore
 
 import (
 	"fmt"
-	"os"
 	path "path/filepath"
 	"strconv"
 	"strings"
@@ -99,20 +98,10 @@ func GetNumMetadataConns() int {
 	return connectionPool.NumConns
 }
 
-/*
- * SessionName is the application name of the sessions of the restore of the given
- * backup that started at the given time, which DoCleanup looks for.  The PID tells
- * apart the restores of the same backup that start in the same second, so that the
- * cleanup of one does not terminate the sessions of another.
- */
-func SessionName(backupTimestamp string, restoreTimestamp string) string {
-	return fmt.Sprintf("gprestore_%s_%s_%d", backupTimestamp, restoreTimestamp, os.Getpid())
-}
-
 func InitializeConnectionPool(backupTimestamp string, restoreTimestamp string, unquotedDBName string) {
 	CreateConnectionPool(unquotedDBName)
 	resizeRestore := MustGetFlagBool(options.RESIZE_CLUSTER)
-	setupQuery := fmt.Sprintf("SET application_name TO '%s';", SessionName(backupTimestamp, restoreTimestamp))
+	setupQuery := fmt.Sprintf("SET application_name TO 'gprestore_%s_%s';", backupTimestamp, restoreTimestamp)
 	setupQuery += `
 SET search_path TO pg_catalog;
 SET gp_default_storage_options='';
@@ -441,29 +430,6 @@ func GetExistingTableFQNs() ([]string, error) {
 
 	err := connectionPool.Select(&existingTableFQNs, query)
 	return existingTableFQNs, err
-}
-
-/*
- * GetPartitionedTableFQNs returns the partitioned tables of the database, the roots
- * of the partition hierarchies and their intermediate levels, as a TRUNCATE of such
- * a table locks all its partitions.
- */
-func GetPartitionedTableFQNs() ([]string, error) {
-	partitionedTableFQNs := make([]string, 0)
-	query := `SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname)
-			  FROM pg_catalog.pg_class c
-				JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-			  WHERE c.oid IN (SELECT p.parrelid FROM pg_catalog.pg_partition p
-				UNION SELECT r.parchildrelid FROM pg_catalog.pg_partition_rule r
-					JOIN pg_catalog.pg_inherits i ON i.inhparent = r.parchildrelid);`
-	if connectionPool.Version.AtLeast("7") {
-		query = `SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname)
-			  FROM pg_catalog.pg_class c
-				JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-			  WHERE c.relkind = 'p';`
-	}
-	err := connectionPool.Select(&partitionedTableFQNs, query)
-	return partitionedTableFQNs, err
 }
 
 /*

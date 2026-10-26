@@ -102,8 +102,7 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 		}
 		gplog.Debug("Reading from %s", destinationToRead)
 
-		// With --resize-cluster the session has it off already, which RESET would turn on
-		if entry.DistByEnum && !resizeCluster {
+		if entry.DistByEnum {
 			gplog.Verbose("Setting gp_enable_segment_copy_checking TO off for table %s", tableName)
 			connectionPool.MustExec("SET gp_enable_segment_copy_checking TO off;", whichConn)
 			// In a transaction that the failure of the COPY has aborted, the RESET fails,
@@ -171,21 +170,18 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 	}
 	copyDone()
 
-	/*
-	 * Rows that are not redistributed are on the wrong segments, so the table is
-	 * not restored.  In the transaction of the COPY, its failure is rolled back with
-	 * the data of the table.
-	 */
 	if resizeCluster || entry.DistByEnum {
 		// replicated tables cannot be redistributed, so instead expand them if needed
 		if entry.IsReplicated && (origSize < destSize) {
-			err = ExpandReplicatedTable(origSize, tableName, whichConn)
+			err := ExpandReplicatedTable(origSize, tableName, whichConn)
+			if err != nil {
+				gplog.Error(err.Error())
+			}
 		} else {
-			err = RedistributeTableData(tableName, whichConn)
-		}
-		if err != nil {
-			gplog.Error(err.Error())
-			return err
+			err := RedistributeTableData(tableName, whichConn)
+			if err != nil {
+				gplog.Error(err.Error())
+			}
 		}
 	}
 
@@ -298,42 +294,21 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	 */
 	stoppedHelpers := make([]atomic.Bool, maxHelpers+1)
 	/*
-	 * A table is truncated in the transaction that restores its data, so that it
-	 * keeps its data if they cannot be restored, whether the helper has stopped or
-	 * the COPY has failed.  It is truncated with ONLY, so that the TRUNCATE locks no
-	 * other table.  The TRUNCATE of the parent of an inheritance hierarchy would
-	 * lock its children until its data is restored, so that a child earlier in the
-	 * same data file would wait for this lock, and the helper for the child, for
-	 * good; it would also empty a child restored before.
-	 *
-	 * A partitioned table, a root or an intermediate level, is truncated on its own
-	 * and with its partitions, as before: its TRUNCATE locks all its partitions, and
-	 * holding these locks for the whole COPY in several connections at once could
-	 * fill the lock table.  As this TRUNCATE is not rolled back, with --single-data-file
-	 * it waits until the COPY of each table before it in its data file has ended, as
-	 * the turn of the table comes once the tables before it are truncated, while the
-	 * helper may still restore them.  A COPY that fails as the helper has stopped
-	 * records so before it ends, and the table is skipped then.  A helper that stops
-	 * after that, as during the COPY of the partitioned table, still leaves the table
-	 * empty.
-	 *
 	 * With --single-data-file, each table is restored in a transaction, which begins
-	 * and truncates its table in the order of the data file, as described at
-	 * DataFileGroups.  On GPDB 7, the COPY into a partition locks all its ancestors
-	 * until the end of its transaction, so the transaction locks them in its turn as
-	 * well.
+	 * in the order of the data file, as described at DataFileGroups.  On GPDB 7, the
+	 * COPY into a partition locks all its ancestors until the end of its transaction,
+	 * so the transaction locks them in its turn as well.
+	 *
+	 * A table is truncated on its own before its data is restored, and with
+	 * --single-data-file in its turn, before its transaction begins: the TRUNCATE
+	 * takes a slot of its resource group as well, which it would otherwise hold
+	 * while it waits for the lock of its table, ahead of the transactions of the
+	 * tables before it.  A table whose TRUNCATE fails is not restored, as a table
+	 * whose COPY fails.
 	 */
 	truncateTable := MustGetFlagBool(options.INCREMENTAL) || MustGetFlagBool(options.TRUNCATE_TABLE)
 	groups.OrderTransactions = backupConfig.SingleDataFile
 	groups.LimitAhead = backupConfig.SingleDataFile
-	partitionedTables := make(map[string]bool)
-	if truncateTable {
-		partitionedTableFQNs, err := GetPartitionedTableFQNs()
-		gplog.FatalOnError(err)
-		for _, partitionedTableFQN := range partitionedTableFQNs {
-			partitionedTables[partitionedTableFQN] = true
-		}
-	}
 	partitionAncestors := make(map[string][]string)
 	if backupConfig.SingleDataFile && connectionPool.Version.AtLeast("7") {
 		var err error
@@ -349,8 +324,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	var workerPool sync.WaitGroup
 	var numErrors int32
 	var mutex = &sync.Mutex{}
-	// Buffered, so that each worker records its panic before it is done
-	panicChan := make(chan error, connectionPool.NumConns)
+	panicChan := make(chan error)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Make sure it's called to release resources even if no errors
 	groups.WakeWhenDone(ctx)
@@ -359,13 +333,13 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 	for i := 0; i < connectionPool.NumConns; i++ {
 		workerPool.Add(1)
 		go func(whichConn int) {
-			defer workerPool.Done()
 			defer func() {
 				if panicErr := recover(); panicErr != nil {
 					cancel()
 					panicChan <- fmt.Errorf("%v", panicErr)
 				}
 			}()
+			defer workerPool.Done()
 
 			// A table left by a stopped helper is reported as an error without being truncated
 			skipTableOfStoppedHelper := func(entryIdx int, tableName string) {
@@ -410,36 +384,22 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				if len(helperIdx) > 0 {
 					helper = helperIdx[0]
 				}
-				helperStopped := func() bool {
-					return (backupConfig.SingleDataFile || resizeCluster) && stoppedHelpers[helper].Load()
-				}
-				if helperStopped() {
+				if (backupConfig.SingleDataFile || resizeCluster) && stoppedHelpers[helper].Load() {
 					skipTableOfStoppedHelper(entryIdx, tableName)
 					continue
 				}
 				var err error
-				partitioned := partitionedTables[tableName]
-				inTransaction := backupConfig.SingleDataFile || (truncateTable && !partitioned)
+				inTransaction := backupConfig.SingleDataFile
 				if !groups.WaitForTurn(ctx, entryIdx) {
 					return // Error somewhere, terminate
 				}
-				// The TRUNCATE of a partitioned table is not rolled back, so it waits until the helper has passed the
-				// tables before it, whose COPY finds whether the helper has stopped
-				truncatePartitioned := truncateTable && partitioned
-				if truncatePartitioned && !groups.WaitForCopiesBefore(ctx, entryIdx) {
-					return // Error somewhere, terminate
-				}
 				if wasTerminated.Load() {
-					// The cleanup may have terminated the waiting sessions already, so the table does not begin to wait
+					// As at the start of the loop, as the restore may have been terminated while the table waited for its turn
 					dataProgressBar.(*pb.ProgressBar).NotPrint = true
 					cancel()
 					return
 				}
-				if truncatePartitioned && helperStopped() {
-					skipTableOfStoppedHelper(entryIdx, tableName)
-					continue
-				}
-				if truncatePartitioned {
+				if truncateTable {
 					gplog.Verbose("Truncating table %s prior to restoring data", tableName)
 					_, err = connectionPool.Exec(`TRUNCATE `+tableName, whichConn)
 				}
@@ -449,18 +409,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				if ancestors := partitionAncestors[tableName]; err == nil && len(ancestors) > 0 {
 					err = lockAncestors(ancestors, whichConn)
 				}
-				if err == nil && truncateTable && !partitioned {
-					gplog.Verbose("Truncating table %s prior to restoring data", tableName)
-					_, err = connectionPool.Exec(`TRUNCATE ONLY `+tableName, whichConn)
-				}
 				groups.TurnDone(entryIdx)
-				if err != nil && wasTerminated.Load() {
-					// The cleanup of the terminated restore terminates a session that waits, as for a lock of its table,
-					// and the other connections do not take their next tables either
-					dataProgressBar.(*pb.ProgressBar).NotPrint = true
-					cancel()
-					return
-				}
 				if err != nil {
 					gplog.Error(err.Error())
 					// The COPY of the table is not run, so its helpers are told to skip it
@@ -478,7 +427,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 							gplog.Error(err.Error())
 						}
 					} else {
-						// The table keeps the data it had
+						// No rows of the table are left behind
 						_ = connectionPool.Rollback(whichConn)
 					}
 				}
@@ -629,10 +578,10 @@ func lockAncestors(ancestors []string, whichConn int) error {
 }
 
 /*
- * beginTableTransaction begins the transaction that truncates a table and restores
- * its data, at the default isolation level.  dbconn.Begin would make it
- * SERIALIZABLE, with one more statement for every table, which Greengage logs as it
- * falls back to REPEATABLE READ.
+ * beginTableTransaction begins the transaction that restores the data of a table,
+ * at the default isolation level.  dbconn.Begin would make it SERIALIZABLE, with
+ * one more statement for every table, which Greengage logs as it falls back to
+ * REPEATABLE READ.
  */
 func beginTableTransaction(whichConn int) error {
 	tx, err := connectionPool.ConnPool[whichConn].Beginx()
@@ -715,28 +664,28 @@ func HelperIdx(whichConn int) []int {
  * Connections beyond the last full group restore nothing.
  *
  * With OrderTransactions, the transactions that restore the tables of each data
- * file take their turns in the order of the file: each one begins, locks the
- * ancestors of a partition on GPDB 7, and truncates its table once the
- * transactions of the tables before it have done so, or the tables are skipped.
- * The transaction of a table holds its locks until its data is restored, while
- * its COPY waits for the helper to restore the tables before it.  A connection
- * that truncated its table ahead of them could so hold its lock while another
- * session that has read one of the tables before it waits for this lock, and the
- * TRUNCATE of that table for the session: the database cannot see the wait
- * through the helper, so the restore and the session would wait for good.  Taking
- * these locks in the order of the file, the order in which the helper restores the
- * tables, leaves no such cycle.  Neither do resource groups, as a transaction
- * waits for a slot of its resource group as it begins, after the transactions of
- * the tables before it have theirs, so that the helper never waits for a table
- * whose transaction waits for a slot.
+ * file take their turns in the order of the file: each one begins, after the
+ * TRUNCATE of its table if any, and locks the ancestors of a partition on GPDB 7
+ * once the transactions of the tables before it have done so, or the tables are
+ * skipped.  The transaction of a table holds its slot of its resource group and
+ * its locks until its data is restored, while its COPY waits for the helper to
+ * restore the tables before it.  With resource groups, a transaction waits for a
+ * slot as it begins, so that the transactions of later tables could otherwise
+ * take all slots while the transaction of an earlier table waited for one, and
+ * the helper for its COPY.  On GPDB 7, the COPY into a partition locks all its
+ * ancestors, so that a session could otherwise wait for a lock on an ancestor
+ * that the transaction of a later table holds, and the transaction of an earlier
+ * table for the session as it locks the ancestor: the database cannot see the
+ * wait through the helper, so the restore and the session would wait for good.
+ * Taking the slots and these locks in the order of the file, the order in which
+ * the helper restores the tables, leaves no such cycle.
  *
- * A table that is not truncated takes its own lock with its COPY, after its turn,
- * as before.  A session that locks a table of a data file in SHARE mode and then
- * waits for a later one, whose COPY holds its lock and waits for the helper, can so
- * still wait in a cycle through the helper.  Taking that lock in the turn would
- * close it, but a LOCK is dispatched to the segments and would wait there for any
- * lock of the table on a single segment, which the COPY does not reach while it
- * fails on another segment.
+ * A table takes its own lock with its COPY, after its turn, as before.  A session
+ * that locks a table of a data file in SHARE mode and then waits for a later one,
+ * whose COPY holds its lock and waits for the helper, can so still wait in a cycle
+ * through the helper.  Taking that lock in the turn would close it, but a LOCK is
+ * dispatched to the segments and would wait there for any lock of the table on a
+ * single segment, which the COPY does not reach while it fails on another segment.
  */
 type DataFileGroups struct {
 	mutex            sync.Mutex
@@ -851,26 +800,6 @@ func (groups *DataFileGroups) CopyDone(entryIdx int) {
 		groups.firstNotCopied[file]++
 	}
 	groups.progressed.Broadcast()
-}
-
-/*
- * WaitForCopiesBefore waits, with LimitAhead, until the COPY of each table before
- * the given data entry in its data file has ended, or the tables are skipped, so
- * that the helper of the data file has passed them.  It returns false if the
- * context is done first.  The tables before it have taken their turns once it has
- * its own, so their COPY does not wait for it.
- */
-func (groups *DataFileGroups) WaitForCopiesBefore(ctx context.Context, entryIdx int) bool {
-	if !groups.LimitAhead {
-		return true
-	}
-	file, position := groups.fileOfEntry[entryIdx], groups.positionOfEntry[entryIdx]
-	groups.mutex.Lock()
-	defer groups.mutex.Unlock()
-	for groups.firstNotCopied[file] < position && ctx.Err() == nil {
-		groups.progressed.Wait()
-	}
-	return ctx.Err() == nil
 }
 
 // WakeWhenDone wakes the connections waiting for their turns or tables once the context is done

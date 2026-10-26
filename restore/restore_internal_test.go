@@ -9,7 +9,6 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/filepath"
 	"github.com/GreengageDB/gpbackup/history"
-	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/pkg/errors"
@@ -283,7 +282,7 @@ var _ = Describe("restore internal tests", func() {
 			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", DistByEnum: true}
 			localMock.ExpectExec("SET gp_enable_segment_copy_checking TO off").WillReturnResult(sqlmock.NewResult(0, 0))
 			localMock.ExpectExec("COPY public.foo").WillReturnError(errors.New("invalid input value for enum"))
-			// The transaction of the COPY, with --truncate-table, is aborted then
+			// The transaction of the COPY, with --single-data-file, is aborted then
 			localMock.ExpectExec("RESET gp_enable_segment_copy_checking").WillReturnError(errors.New("current transaction is aborted"))
 
 			var err error
@@ -296,35 +295,21 @@ var _ = Describe("restore internal tests", func() {
 			Expect(copyDone).To(BeFalse())
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
-		It("returns the error of a failed redistribution of a table distributed by an enum", func() {
+		It("records the end of the COPY of a table distributed by an enum before its redistribution", func() {
 			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
 			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", DistByEnum: true, RowsCopied: 10}
 			localMock.ExpectExec("SET gp_enable_segment_copy_checking TO off").WillReturnResult(sqlmock.NewResult(0, 0))
 			localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 10))
-			localMock.ExpectExec(`ALTER TABLE public.foo SET WITH \(REORGANIZE=true\)`).WillReturnError(errors.New("out of memory"))
+			localMock.ExpectExec(`ALTER TABLE public.foo SET WITH \(REORGANIZE=true\)`).WillReturnResult(sqlmock.NewResult(0, 0))
 			localMock.ExpectExec("RESET gp_enable_segment_copy_checking").WillReturnResult(sqlmock.NewResult(0, 0))
 
-			copyDone := false
-			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() { copyDone = true })
-			Expect(err).To(MatchError("out of memory"))
 			// The end of the COPY is recorded before the redistribution, which may take long
-			Expect(copyDone).To(BeTrue())
-			Expect(localMock.ExpectationsWereMet()).To(Succeed())
-		})
-		It("leaves gp_enable_segment_copy_checking off for a table distributed by an enum with --resize-cluster", func() {
-			// The session of a resize restore has it off, which a RESET would turn back on for the tables after
-			_ = cmdFlags.Set(options.RESIZE_CLUSTER, "true")
-			DeferCleanup(func() {
-				_ = cmdFlags.Set(options.RESIZE_CLUSTER, "false")
-				cmdFlags.Lookup(options.RESIZE_CLUSTER).Changed = false
+			var unmetAtCopyDone error
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() {
+				unmetAtCopyDone = localMock.ExpectationsWereMet()
 			})
-			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
-			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", DistByEnum: true, RowsCopied: 10}
-			localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 10))
-			localMock.ExpectExec(`ALTER TABLE public.foo SET WITH \(REORGANIZE=true\)`).WillReturnResult(sqlmock.NewResult(0, 0))
-
-			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() {})
 			Expect(err).ToNot(HaveOccurred())
+			Expect(unmetAtCopyDone).To(MatchError(ContainSubstring("ALTER TABLE public.foo")))
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
 		Describe("a COPY from a single data file that ends with fewer rows", func() {
@@ -373,12 +358,12 @@ var _ = Describe("restore internal tests", func() {
 			DeferCleanup(func() { connectionPool = oldConn })
 			// No SET TRANSACTION ISOLATION LEVEL SERIALIZABLE follows
 			localMock.ExpectBegin()
-			localMock.ExpectExec("TRUNCATE ONLY public.foo").WillReturnResult(sqlmock.NewResult(0, 0))
+			localMock.ExpectExec("LOCK TABLE ONLY public.foo IN ACCESS SHARE MODE").WillReturnResult(sqlmock.NewResult(0, 0))
 			localMock.ExpectCommit()
 
 			Expect(beginTableTransaction(1)).To(Succeed())
 			Expect(connectionPool.Tx[1]).ToNot(BeNil())
-			_, err := connectionPool.Exec("TRUNCATE ONLY public.foo", 1)
+			_, err := connectionPool.Exec("LOCK TABLE ONLY public.foo IN ACCESS SHARE MODE", 1)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(connectionPool.Commit(1)).To(Succeed())
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())

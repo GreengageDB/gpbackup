@@ -177,8 +177,7 @@ func ExecutePredataStatements(statements []toc.StatementWithType, progressBar ut
 			// no panic, nothing to do
 		}
 	}
-	// The cleanup of a terminated restore terminates a session that waits, as for a lock
-	if fatalErr != nil && !wasTerminated.Load() {
+	if fatalErr != nil {
 		fmt.Println("")
 		gplog.Fatal(fatalErr, "")
 	} else if numErrors > 0 {
@@ -226,8 +225,7 @@ func ExecuteStatements(statements []toc.StatementWithType, progressBar utils.Pro
 			// no panic, nothing to do
 		}
 	}
-	// The cleanup of a terminated restore terminates a session that waits, as for a lock
-	if fatalErr != nil && !wasTerminated.Load() {
+	if fatalErr != nil {
 		fmt.Println("")
 		gplog.Fatal(fatalErr, "")
 	} else if numErrors > 0 {

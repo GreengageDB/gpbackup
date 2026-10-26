@@ -284,7 +284,6 @@ var _ = Describe("backup/validate tests", func() {
 			Entry("jobs combos", "--jobs 2 --single-data-file --plugin-config /tmp/file", true),
 			Entry("jobs combos", "--jobs 2 --single-data-file --incremental --leaf-partition-data", true),
 			Entry("jobs combos", "--single-data-file --metadata-only", false),
-			Entry("jobs combos", "--jobs 0", false),
 			Entry("jobs combos", "--jobs 0 --single-data-file", false),
 			Entry("jobs combos", "--jobs -1 --single-data-file", false),
 			Entry("jobs combos", "--jobs 2 --plugin-config /tmp/file", true),

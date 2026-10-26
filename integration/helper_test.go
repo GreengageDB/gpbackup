@@ -203,50 +203,6 @@ options:
 			Entry("without a plugin", false),
 			Entry("with a plugin", true),
 		)
-		It("ends a backup gpbackup_helper once gpbackup has stopped touching its heartbeat file", func() {
-			heartbeatFile := utils.GetHeartbeatFilename(pipeFile)
-			Expect(os.WriteFile(heartbeatFile, []byte{}, 0644)).To(Succeed())
-			defer os.Remove(heartbeatFile)
-			defer os.Remove(errorFile)
-			// The helper waits for the COPY of its first slot, which no one runs, as when gpbackup has been killed
-			start := time.Now()
-			helperCmd := gpbackupHelperBackup(gpbackupHelperPath, "--compression-level", "0", "--data-file", dataFileFullPath, "--heartbeat-timeout", "2")
-			Expect(helperCmd.Wait()).To(HaveOccurred())
-			Expect(time.Since(start)).To(BeNumerically(">=", 2*time.Second))
-			Expect(time.Since(start)).To(BeNumerically("<", 10*time.Second))
-			// As on the request of the cleanup of gpbackup, it removes its pipes and writes its error file
-			pipes, _ := filepath.Glob(pipeFile + "_[0-9]*")
-			Expect(pipes).To(BeEmpty())
-			Expect(errorFile).To(BeAnExistingFile())
-			Expect(tocFile).ToNot(BeAnExistingFile())
-		})
-		It("keeps a backup gpbackup_helper whose heartbeat file gpbackup touches", func() {
-			heartbeatFile := utils.GetHeartbeatFilename(pipeFile)
-			Expect(os.WriteFile(heartbeatFile, []byte{}, 0644)).To(Succeed())
-			defer os.Remove(heartbeatFile)
-			touching := make(chan struct{})
-			defer close(touching)
-			go func() {
-				ticker := time.NewTicker(300 * time.Millisecond)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-touching:
-						return
-					case now := <-ticker.C:
-						_ = os.Chtimes(heartbeatFile, now, now)
-					}
-				}
-			}()
-			helperCmd := gpbackupHelperBackup(gpbackupHelperPath, "--compression-level", "0", "--data-file", dataFileFullPath, "--heartbeat-timeout", "2")
-			// Longer than the timeout before the first table
-			time.Sleep(4 * time.Second)
-			writeToBackupPipes(defaultData)
-			err := helperCmd.Wait()
-			printHelperLogOnError(err)
-			Expect(err).ToNot(HaveOccurred())
-			assertBackupArtifacts(false)
-		})
 		It("fails to end the data file of a backup gpbackup_helper that has been killed", func() {
 			helperCmd := gpbackupHelperBackup(gpbackupHelperPath, "--compression-level", "0", "--data-file", dataFileFullPath)
 			writeTablesToSlots(defaultData, defaultData, defaultData)

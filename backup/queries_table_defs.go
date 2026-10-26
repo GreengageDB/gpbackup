@@ -470,42 +470,25 @@ func GetDistributionPolicies(connectionPool *dbconn.DBConn, relations interface{
 			gplog.Fatal(fmt.Errorf("Unable to parse distribution policies"), "")
 		}
 
-		// A table is distributed by an enum if the type of any column of its distribution
-		// key is an enum, or a domain, an array or a range of a type that is: their hashes
-		// are those of the OIDs of the enum labels, which a restore changes. The columns
-		// of the key are aggregated into a single row of the table
-		query = fmt.Sprintf(`WITH RECURSIVE distpol AS (
+		query = fmt.Sprintf(`WITH distpol AS (
 			SELECT
 				localoid AS oid,
-				d.distkey,
-				pg_catalog.pg_get_table_distributedby(localoid) AS value
-			FROM unnest('%s'::pg_catalog.oid[]) AS src(tbloid)
+				d.distclass,
+				pg_catalog.pg_get_table_distributedby(localoid) AS value 
+			FROM unnest('%s'::pg_catalog.oid[]) AS src(tbloid) 
 			JOIN gp_distribution_policy d ON d.localoid=src.tbloid
-			),
-			typechild AS (
-				SELECT oid AS typid, typbasetype AS child FROM pg_type WHERE typbasetype <> 0
-				UNION ALL
-				SELECT oid, typelem FROM pg_type WHERE typelem <> 0
-				UNION ALL
-				SELECT rngtypid, rngsubtype FROM pg_range
-			),
-			keytype AS (
-				SELECT distpol.oid, a.atttypid AS typid
-				FROM distpol
-				JOIN pg_attribute a ON a.attrelid=distpol.oid AND a.attnum = ANY(distpol.distkey::pg_catalog.int2[])
-				UNION
-				SELECT k.oid, c.child
-				FROM keytype k
-				JOIN typechild c ON c.typid=k.typid
 			)
-			SELECT
+			SELECT 
 			distpol.oid,
 			distpol.value,
-				coalesce(bool_or(t.typtype = 'e'), false) AS distbyenum
-			FROM distpol
-			LEFT JOIN keytype k ON k.oid=distpol.oid
-			LEFT JOIN pg_type t ON t.oid=k.typid
-			GROUP BY distpol.oid, distpol.value;`, tbloids)
+				CASE WHEN opcintype=%d THEN true ELSE false END AS distbyenum
+			FROM distpol 
+			LEFT JOIN (
+				SELECT localoid, unnest(distclass) AS distclass 
+				FROM gp_distribution_policy
+				) t 
+			ON t.localoid=distpol.oid
+			LEFT JOIN pg_opclass opc ON opc.oid=t.distclass;`, tbloids, ENUM_TYPE_OID);
 	}
 
 	results := make([]DistPolicy, 0)

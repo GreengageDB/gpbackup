@@ -60,38 +60,6 @@ var _ = Describe("End to End incremental tests", func() {
 			schema2TupleCounts["schema2.ao1"] = 1002
 			assertDataRestored(restoreConn, schema2TupleCounts)
 		})
-		It("restores from an incremental backup with a single data file without changed tables", func() {
-			// Only AO tables, which an incremental backup skips while they are unchanged
-			testhelper.AssertQueryRuns(backupConn, `CREATE SCHEMA unchanged_ao;
-				CREATE TABLE unchanged_ao.ao1 (i int) WITH (appendonly=true) DISTRIBUTED BY (i);
-				CREATE TABLE unchanged_ao.ao2 (i int) WITH (appendonly=true) DISTRIBUTED BY (i);
-				INSERT INTO unchanged_ao.ao1 SELECT generate_series(1, 1000);
-				INSERT INTO unchanged_ao.ao2 SELECT generate_series(1, 2000)`)
-			defer testhelper.AssertQueryRuns(backupConn, "DROP SCHEMA unchanged_ao CASCADE")
-			defer testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA IF EXISTS unchanged_ao CASCADE")
-			output := gpbackup(gpbackupPath, backupHelperPath,
-				"--leaf-partition-data",
-				"--single-data-file",
-				"--include-schema", "unchanged_ao",
-				"--backup-dir", backupDir)
-			fullBackupTimestamp := getBackupTimestamp(string(output))
-			output = gpbackup(gpbackupPath, backupHelperPath,
-				"--incremental",
-				"--leaf-partition-data",
-				"--single-data-file",
-				"--include-schema", "unchanged_ao",
-				"--backup-dir", backupDir)
-			Expect(string(output)).To(ContainSubstring("No tables to backup"))
-			incrementalTimestamp := getBackupTimestamp(string(output))
-
-			// The incremental backup has no files on the segments, and its tables are restored from the full one
-			gprestore(gprestorePath, restoreHelperPath, incrementalTimestamp,
-				"--redirect-db", "restoredb",
-				"--backup-dir", backupDir)
-			assertDataRestored(restoreConn, map[string]int{"unchanged_ao.ao1": 1000, "unchanged_ao.ao2": 2000})
-			assertArtifactsCleaned(fullBackupTimestamp)
-			assertArtifactsCleaned(incrementalTimestamp)
-		})
 		It("restores from an incremental backup with AO Table consisting of multiple segment files", func() {
 			// Versions before 1.13.0 incorrectly handle AO table inserts involving multiple seg files
 			skipIfOldBackupVersionBefore("1.13.0")

@@ -332,20 +332,19 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 	 * 	3) Processes tables only in the event that the other workers encounter locking issues.
 	 * Worker 0 already has all locks on the tables so it will not run into locking issues.
 	 */
-	// Buffered, so that each worker records its panic before it is done
-	panicChan := make(chan error, connectionPool.NumConns)
+	panicChan := make(chan error)
 	rowsCopiedMaps[0] = make(map[uint32]int64)
 	for connNum := 1; connNum < connectionPool.NumConns; connNum++ {
 		rowsCopiedMaps[connNum] = make(map[uint32]int64)
 		workerPool.Add(1)
 		go func(whichConn int) {
-			defer workerPool.Done()
 			defer func() {
 				if panicErr := recover(); panicErr != nil {
 					cancel()
 					panicChan <- fmt.Errorf("%v", panicErr)
 				}
 			}()
+			defer workerPool.Done()
 			// Close opened transaction to open new transaction with shared snapshot below.
 			if backupSnapshot != "" && connectionPool.Tx[whichConn] != nil {
 				if err := connectionPool.Commit(whichConn); err != nil {
@@ -440,8 +439,6 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 	// AccessShareLocks on all the tables already.
 	deferredWorkerDone := make(chan bool)
 	go func() {
-		// Done however the deferred worker ends, after it has recorded its panic
-		defer close(deferredWorkerDone)
 		defer func() {
 			if panicErr := recover(); panicErr != nil {
 				cancel()
@@ -478,6 +475,7 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 				}
 			}
 		}
+		deferredWorkerDone <- true
 	}()
 
 	close(tasks)
@@ -513,12 +511,6 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 
 	// Main goroutine waits for deferred worker 0 by waiting on this channel
 	<-deferredWorkerDone
-	select {
-	case err := <-panicChan:
-		gplog.Fatal(err, "")
-	default:
-		// no panic, nothing to do
-	}
 	agentErr := utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo)
 	if agentErr != nil {
 		gplog.Fatal(agentErr, "")

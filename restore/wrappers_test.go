@@ -7,7 +7,6 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/GreengageDB/gp-common-go-libs/cluster"
-	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/history"
 	"github.com/GreengageDB/gpbackup/options"
@@ -116,31 +115,6 @@ var _ = Describe("wrapper tests", func() {
 				To(Equal([]string{"schema1.table1", "schema2.table2"}))
 		})
 
-	})
-	Describe("GetPartitionedTableFQNs", func() {
-		var version dbconn.GPDBVersion
-		BeforeEach(func() {
-			version = connectionPool.Version
-		})
-		AfterEach(func() {
-			connectionPool.Version = version
-		})
-		It("gets the roots and the intermediate levels of the partition hierarchies before GPDB 7", func() {
-			testhelper.SetDBVersion(connectionPool, "6.0.0")
-			mock.ExpectQuery(`SELECT p.parrelid FROM pg_catalog.pg_partition p\s+UNION SELECT r.parchildrelid FROM pg_catalog.pg_partition_rule r`).
-				WillReturnRows(sqlmock.NewRows([]string{"fqn"}).AddRow("public.sales").AddRow("public.sales_1_prt_2"))
-			partitionedTables, err := restore.GetPartitionedTableFQNs()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(partitionedTables).To(Equal([]string{"public.sales", "public.sales_1_prt_2"}))
-		})
-		It("gets the partitioned tables from GPDB 7", func() {
-			testhelper.SetDBVersion(connectionPool, "7.0.0")
-			mock.ExpectQuery(`WHERE c.relkind = 'p';`).
-				WillReturnRows(sqlmock.NewRows([]string{"fqn"}).AddRow("public.sales").AddRow("public.sales_1_prt_2"))
-			partitionedTables, err := restore.GetPartitionedTableFQNs()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(partitionedTables).To(Equal([]string{"public.sales", "public.sales_1_prt_2"}))
-		})
 	})
 	Describe("GetNumMetadataConns", func() {
 		var numConns int
