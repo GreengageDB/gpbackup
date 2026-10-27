@@ -148,15 +148,19 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 	if resizeCluster || entry.DistByEnum {
 		// replicated tables cannot be redistributed, so instead expand them if needed
 		if entry.IsReplicated && (origSize < destSize) {
-			err := ExpandReplicatedTable(origSize, tableName, whichConn)
+			err = ExpandReplicatedTable(origSize, tableName, whichConn)
 			if err != nil {
-				gplog.Error(err.Error())
+				err = errors.Wrapf(err, "Error expanding replicated table %s", tableName)
 			}
 		} else {
-			err := RedistributeTableData(tableName, whichConn)
+			err = RedistributeTableData(tableName, whichConn)
 			if err != nil {
-				gplog.Error(err.Error())
+				err = errors.Wrapf(err, "Error redistributing table %s", tableName)
 			}
+		}
+		if err != nil {
+			gplog.Error(err.Error())
+			return err
 		}
 	}
 
