@@ -274,6 +274,31 @@ var _ = Describe("helper tests", func() {
 		Expect(err).ShouldNot(HaveOccurred())
 	})
 
+	Describe("readSlotOid", func() {
+		slotPipe := fmt.Sprintf("%s/gpbackup_0_20180101010101_1234_pipe1_3", testDir)
+		slotOidFile := slotPipe + "_oid"
+		BeforeEach(func() {
+			_ = os.Remove(slotOidFile)
+		})
+		It("reads and removes the oid file of the slot", func() {
+			Expect(os.WriteFile(slotOidFile, []byte("16384\n"), 0644)).To(Succeed())
+			oid, found, err := readSlotOid(slotPipe)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(oid).To(Equal(16384))
+			Expect(utils.FileExists(slotOidFile)).To(BeFalse())
+		})
+		It("ends the data file at a slot without an oid file", func() {
+			_, found, err := readSlotOid(slotPipe)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(found).To(BeFalse())
+		})
+		It("fails if the oid file of the slot is not an oid", func() {
+			Expect(os.WriteFile(slotOidFile, []byte("x\n"), 0644)).To(Succeed())
+			_, _, err := readSlotOid(slotPipe)
+			Expect(err).To(HaveOccurred())
+		})
+	})
 	Describe("Check subset flag", func() {
 		It("when restore_subset is off, --on-error-continue is false, compression is not used", func() {
 			pluginConfig.Options["restore_subset"] = "off"

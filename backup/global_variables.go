@@ -111,6 +111,10 @@ func GetReport() *report.Report {
 	return backupReport
 }
 
+func SetDataFiles(slots *DataFileSlots) {
+	dataFiles = slots
+}
+
 func SetTOC(toc *toc.TOC) {
 	globalTOC = toc
 }

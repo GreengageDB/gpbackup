@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
+	"github.com/GreengageDB/gp-common-go-libs/operating"
 	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/pkg/errors"
@@ -27,12 +29,14 @@ func doBackupAgent() error {
 	tocfile := &toc.SegmentTOC{}
 	tocfile.DataEntries = make(map[uint]toc.SegmentDataEntry)
 
-	oidList, err := getOidListFromFile(*oidFile)
-	if err != nil {
-		// error logging handled in getOidListFromFile
-		return err
-	}
-
+	/*
+	 * gpbackup chooses the data file of each table when its COPY starts, so the
+	 * tables of this data file are not known in advance.  The pipes are named by
+	 * slot, the position of the table in the data file, and each COPY writes the oid
+	 * of its table to the oid file of its slot before it opens the pipe.  Once all
+	 * tables are backed up, gpbackup opens and closes the next slot without an oid
+	 * file, which ends the data file.
+	 */
 	var currentPipe string
 	var errBuf bytes.Buffer
 	/*
@@ -40,34 +44,43 @@ func doBackupAgent() error {
 	 * so that we establish a connection to the first pipe (created by gpbackup)
 	 * and properly clean it up if an error occurs while creating the writer.
 	 */
-	for i, oid := range oidList {
-		currentPipe = fmt.Sprintf("%s_%d", *pipeFile, oidList[i])
+	for slot := 0; ; slot++ {
+		currentPipe = fmt.Sprintf("%s_%d", *pipeFile, slot)
 		if wasTerminated.Load() {
 			logError("Terminated due to user request")
 			return errors.New("Terminated due to user request")
 		}
-		if i < len(oidList)-*copyQueue {
-			nextPipeToCreate := fmt.Sprintf("%s_%d", *pipeFile, oidList[i+*copyQueue])
-			logVerbose(fmt.Sprintf("Oid %d: Creating pipe %s\n", oidList[i+*copyQueue], nextPipeToCreate))
-			err := createPipe(nextPipeToCreate)
-			if err != nil {
-				logError(fmt.Sprintf("Oid %d: Failed to create pipe %s\n", oidList[i+*copyQueue], nextPipeToCreate))
-				return err
-			}
-		}
-
-		logInfo(fmt.Sprintf("Oid %d: Opening pipe %s", oid, currentPipe))
-		reader, readHandle, err := getBackupPipeReader(currentPipe)
+		nextPipeToCreate := fmt.Sprintf("%s_%d", *pipeFile, slot+*copyQueue)
+		logVerbose(fmt.Sprintf("Slot %d: Creating pipe %s\n", slot+*copyQueue, nextPipeToCreate))
+		err := createPipe(nextPipeToCreate)
 		if err != nil {
-			logError(fmt.Sprintf("Oid %d: Error encountered getting backup pipe reader: %v", oid, err))
+			logError(fmt.Sprintf("Slot %d: Failed to create pipe %s\n", slot+*copyQueue, nextPipeToCreate))
 			return err
 		}
-		if i == 0 {
+
+		logInfo(fmt.Sprintf("Slot %d: Opening pipe %s", slot, currentPipe))
+		reader, readHandle, err := getBackupPipeReader(currentPipe)
+		if err != nil {
+			logError(fmt.Sprintf("Slot %d: Error encountered getting backup pipe reader: %v", slot, err))
+			return err
+		}
+		oid, found, err := readSlotOid(currentPipe)
+		if err != nil {
+			return err
+		}
+		// A data file without tables is written as well, with its segment TOC
+		if slot == 0 {
 			pipeWriter, writeCmd, err = getBackupPipeWriter(&errBuf)
 			if err != nil {
-				logError(fmt.Sprintf("Oid %d: Error encountered getting backup pipe writer: %v", oid, err))
+				logError(fmt.Sprintf("Slot %d: Error encountered getting backup pipe writer: %v", slot, err))
 				return err
 			}
+		}
+		if !found {
+			logInfo(fmt.Sprintf("Slot %d: No more tables to back up", slot))
+			_ = readHandle.Close()
+			deletePipe(currentPipe)
+			break
 		}
 
 		logInfo(fmt.Sprintf("Oid %d: Backing up table with pipe %s", oid, currentPipe))
@@ -103,13 +116,37 @@ func doBackupAgent() error {
 			return errors.Wrap(err, strings.Trim(errBuf.String(), "\x00"))
 		}
 	}
-	err = tocfile.WriteToFileAndMakeReadOnly(*tocFile)
+	err := tocfile.WriteToFileAndMakeReadOnly(*tocFile)
 	if err != nil {
 		// error logging handled in util.go
 		return err
 	}
 	logVerbose("Finished writing segment TOC")
 	return nil
+}
+
+/*
+ * readSlotOid returns the oid of the table of a slot, which the COPY of the table
+ * writes to the oid file of the slot before it opens the pipe, so the file is
+ * complete once the pipe is open.  A slot without an oid file ends the data file.
+ */
+func readSlotOid(slotPipe string) (int, bool, error) {
+	slotOidFile := utils.GetSlotOidFilename(slotPipe)
+	if !utils.FileExists(slotOidFile) {
+		return 0, false, nil
+	}
+	oidStr, err := operating.System.ReadFile(slotOidFile)
+	if err != nil {
+		logError(fmt.Sprintf("Error encountered reading oid file %s: %v", slotOidFile, err))
+		return 0, false, err
+	}
+	oid, err := strconv.Atoi(strings.TrimSpace(string(oidStr)))
+	if err != nil {
+		logError(fmt.Sprintf("Error encountered parsing oid file %s: %v", slotOidFile, err))
+		return 0, false, err
+	}
+	_ = utils.RemoveFileIfExists(slotOidFile)
+	return oid, true, nil
 }
 
 func getBackupPipeReader(currentPipe string) (io.Reader, io.ReadCloser, error) {
