@@ -9,6 +9,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/testhelper"
 	"github.com/GreengageDB/gpbackup/filepath"
 	"github.com/GreengageDB/gpbackup/history"
+	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/pkg/errors"
@@ -310,6 +311,52 @@ var _ = Describe("restore internal tests", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(unmetAtCopyDone).To(MatchError(ContainSubstring("ALTER TABLE public.foo")))
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+		// Restores a backup of origSize segments with --resize-cluster to a cluster of 2 segments
+		resizeToTwoSegments := func(origSize int) {
+			oldCluster := globalCluster
+			globalCluster = cluster.NewCluster([]cluster.SegConfig{{ContentID: -1}, {ContentID: 0}, {ContentID: 1}})
+			globalCluster.Executor = &testhelper.TestExecutor{ClusterOutput: &cluster.RemoteOutput{}}
+			DeferCleanup(func() { globalCluster = oldCluster })
+			backupConfig.SegmentCount = origSize
+			Expect(cmdFlags.Set(options.RESIZE_CLUSTER, "true")).To(Succeed())
+		}
+		It("returns the error of a failed redistribution of a table distributed by an enum", func() {
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", DistByEnum: true, RowsCopied: 10}
+			localMock.ExpectExec("SET gp_enable_segment_copy_checking TO off").WillReturnResult(sqlmock.NewResult(0, 0))
+			localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 10))
+			localMock.ExpectExec(`ALTER TABLE public.foo SET WITH \(REORGANIZE=true\)`).WillReturnError(errors.New("out of memory"))
+			localMock.ExpectExec("RESET gp_enable_segment_copy_checking").WillReturnResult(sqlmock.NewResult(0, 0))
+
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() {})
+			Expect(err).To(MatchError("Error redistributing table public.foo: out of memory"))
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+		It("returns the error of a failed redistribution of a table restored to a smaller cluster", func() {
+			resizeToTwoSegments(3)
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", RowsCopied: 10}
+			// The data of the 3 segments are restored in 2 batches
+			localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 6))
+			localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 4))
+			localMock.ExpectExec(`ALTER TABLE public.foo SET WITH \(REORGANIZE=true\)`).WillReturnError(errors.New("out of memory"))
+
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() {})
+			Expect(err).To(MatchError("Error redistributing table public.foo: out of memory"))
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+		It("returns the error of a failed expansion of a replicated table restored to a larger cluster", func() {
+			resizeToTwoSegments(1)
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", IsReplicated: true, RowsCopied: 10}
+			localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 10))
+			localMock.ExpectExec("UPDATE gp_distribution_policy SET numsegments=1").WillReturnResult(sqlmock.NewResult(0, 1))
+			localMock.ExpectExec("ALTER TABLE public.foo EXPAND TABLE").WillReturnError(errors.New("out of memory"))
+
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() {})
+			Expect(err).To(MatchError("Error expanding replicated table public.foo: out of memory"))
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
 		Describe("a COPY from a single data file that ends with fewer rows", func() {
