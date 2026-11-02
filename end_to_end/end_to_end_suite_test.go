@@ -3896,6 +3896,25 @@ LANGUAGE plpgsql NO SQL;`)
 				"public.ao_full": 100, "public.skip_part": 3, "public.aoco_empty": 0,
 			})
 		})
+		It("truncates tables that became empty on gprestore --incremental", func() {
+			output := string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--leaf-partition-data", "--skip-empty-tables"))
+			fullTimestamp := getBackupTimestamp(output)
+			gprestore(gprestorePath, restoreHelperPath, fullTimestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir)
+			assertDataRestored(restoreConn, map[string]int{"public.heap_full": 100, "public.ao_full": 100})
+
+			testhelper.AssertQueryRuns(backupConn, `TRUNCATE public.heap_full;`)
+			testhelper.AssertQueryRuns(backupConn, `TRUNCATE public.ao_full;`)
+			output = string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--leaf-partition-data", "--skip-empty-tables", "--incremental", "--from-timestamp", fullTimestamp))
+			incrementalTimestamp := getBackupTimestamp(output)
+			assertSkipMessages(output, []string{"public.heap_full", "public.ao_full"}, []string{})
+
+			gprestore(gprestorePath, restoreHelperPath, incrementalTimestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir, "--incremental", "--data-only")
+			assertDataRestored(restoreConn, map[string]int{"public.heap_full": 0, "public.ao_full": 0})
+		})
 		DescribeTable("truncates empty tables on restore with --truncate-table",
 			func(backupFlags ...string) {
 				args := append([]string{"--backup-dir", backupDir, "--skip-empty-tables"}, backupFlags...)

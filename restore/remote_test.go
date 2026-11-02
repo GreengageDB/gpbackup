@@ -53,6 +53,44 @@ var _ = Describe("restore/remote tests", func() {
 			restore.VerifyBackupFileCountOnSegments()
 			Expect((*testExecutor).NumExecutions).To(Equal(1))
 		})
+		It("does not expect data files for empty tables with single-data-file if all tables are empty", func() {
+			restore.SetTOC(&toc.TOC{DataEntries: []toc.CoordinatorDataEntry{{IsEmpty: true}, {IsEmpty: true}}})
+			testExecutor.ClusterOutput = &cluster.RemoteOutput{
+				Commands: []cluster.ShellCommand{
+					cluster.ShellCommand{Stdout: "0"},
+					cluster.ShellCommand{Stdout: "0"},
+				},
+			}
+			testCluster.Executor = testExecutor
+			restore.SetCluster(testCluster)
+			// LogFatalError in VerifyBackupFileCountOnSegments will fail test if values are wrong
+			restore.VerifyBackupFileCountOnSegments()
+		})
+		It("still expects the data file and the segment TOC with single-data-file if some tables are not empty", func() {
+			restore.SetTOC(&toc.TOC{DataEntries: []toc.CoordinatorDataEntry{{IsEmpty: true}, {}}})
+			testExecutor.ClusterOutput = &cluster.RemoteOutput{
+				Commands: []cluster.ShellCommand{
+					cluster.ShellCommand{Stdout: "2"},
+					cluster.ShellCommand{Stdout: "2"},
+				},
+			}
+			testCluster.Executor = testExecutor
+			restore.SetCluster(testCluster)
+			restore.VerifyBackupFileCountOnSegments()
+		})
+		It("does not expect data files for empty tables without single-data-file", func() {
+			restore.SetBackupConfig(&history.BackupConfig{SingleDataFile: false})
+			restore.SetTOC(&toc.TOC{DataEntries: []toc.CoordinatorDataEntry{{IsEmpty: true}, {}}})
+			testExecutor.ClusterOutput = &cluster.RemoteOutput{
+				Commands: []cluster.ShellCommand{
+					cluster.ShellCommand{Stdout: "1"},
+					cluster.ShellCommand{Stdout: "1"},
+				},
+			}
+			testCluster.Executor = testExecutor
+			restore.SetCluster(testCluster)
+			restore.VerifyBackupFileCountOnSegments()
+		})
 		It("panics if backup file counts do not match on all segments with single-data-file", func() {
 			testExecutor.ClusterOutput = &cluster.RemoteOutput{
 				Commands: []cluster.ShellCommand{

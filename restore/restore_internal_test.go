@@ -281,6 +281,41 @@ var _ = Describe("restore internal tests", func() {
 			Expect(hasOnlyEmptyDataEntries(nil)).To(BeFalse())
 		})
 	})
+	Describe("createSegmentBackupDirectories", func() {
+		var executor *testhelper.TestExecutor
+		var fpInfo filepath.FilePathInfo
+		BeforeEach(func() {
+			oldCluster := globalCluster
+			DeferCleanup(func() { globalCluster = oldCluster })
+			globalCluster = cluster.NewCluster([]cluster.SegConfig{{ContentID: -1, DataDir: "/data/gpseg-1"},
+				{ContentID: 0, DataDir: "/data/gpseg0"}, {ContentID: 1, DataDir: "/data/gpseg1"}})
+			executor = &testhelper.TestExecutor{ClusterOutput: &cluster.RemoteOutput{}}
+			globalCluster.Executor = executor
+			fpInfo = filepath.NewFilePathInfo(globalCluster, "", "20170101010101", "gpseg", false)
+		})
+		It("creates the backup directory on every segment", func() {
+			createSegmentBackupDirectories(fpInfo, 2, 2)
+
+			Expect(executor.ClusterCommands).To(HaveLen(1))
+			Expect(executor.ClusterCommands[0]).To(HaveLen(2))
+			for _, command := range executor.ClusterCommands[0] {
+				Expect(command.CommandString).To(ContainSubstring("mkdir -p " + fpInfo.GetDirForContent(command.Content)))
+			}
+		})
+		It("skips segments that are not part of the backup set on a resize restore", func() {
+			createSegmentBackupDirectories(fpInfo, 1, 2)
+
+			// the generator returns an empty command for contents outside the backup set
+			Expect(executor.ClusterCommands).To(HaveLen(1))
+			for _, command := range executor.ClusterCommands[0] {
+				if command.Content == 0 {
+					Expect(command.CommandString).To(ContainSubstring("mkdir -p"))
+				} else {
+					Expect(command.CommandString).ToNot(ContainSubstring("mkdir"))
+				}
+			}
+		})
+	})
 	Describe("restoreSingleTableData", func() {
 		var localMock sqlmock.Sqlmock
 		BeforeEach(func() {
