@@ -282,6 +282,13 @@ var _ = Describe("backup/validate tests", func() {
 			Entry("jobs combos", "--jobs 2 --single-data-file", false),
 			Entry("jobs combos", "--jobs 2 --plugin-config /tmp/file", true),
 			Entry("jobs combos", "--jobs 2 --data-only", true),
+
+			/*
+			 * Below are various different skip-empty-tables combinations
+			 */
+			Entry("skip-empty-tables combos", "--skip-empty-tables --metadata-only", false),
+			Entry("skip-empty-tables combos", "--skip-empty-tables --data-only", true),
+			Entry("skip-empty-tables combos", "--skip-empty-tables --leaf-partition-data --single-data-file", true),
 		)
 	})
 })

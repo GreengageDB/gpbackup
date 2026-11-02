@@ -96,7 +96,7 @@ func SetBackupFlagDefaults(flagSet *pflag.FlagSet) {
 	flagSet.Bool(QUIET, false, "Suppress non-warning, non-error log messages")
 	flagSet.Bool(SINGLE_BACKUP_DIR, false, "Back up all data to a single directory instead of split by segment")
 	flagSet.Bool(SINGLE_DATA_FILE, false, "Back up all data to a single file instead of one per table")
-	flagSet.Bool(SKIP_EMPTY_TABLES, false, "Do not run data backup for tables that have no data files on any segment; partition parent tables are not checked")
+	flagSet.Bool(SKIP_EMPTY_TABLES, false, "Do not copy data of tables that are empty on all segments; partition parent tables are not checked")
 	flagSet.Int(COPY_QUEUE_SIZE, 1, "number of COPY commands gpbackup should enqueue when backing up using the --single-data-file option")
 	flagSet.Bool(VERBOSE, false, "Print verbose log messages")
 	flagSet.Bool(WITH_STATS, false, "Back up query plan statistics")
