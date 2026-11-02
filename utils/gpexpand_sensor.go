@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -63,7 +62,7 @@ func (sensor *GpexpandSensor) IsRunning() (bool, error) {
 		var tableName string
 		tableName, err = dbconn.SelectString(sensor.postgresConn, GpexpandStatusTableExistsQuery)
 		if err != nil {
-			gplog.Error(fmt.Sprintf("Error encountered retrieving gpexpand status: %v", err))
+			gplog.Error("Error encountered retrieving gpexpand status: %v", err)
 			return false, err
 		}
 		if len(tableName) <= 0 {
@@ -74,7 +73,7 @@ func (sensor *GpexpandSensor) IsRunning() (bool, error) {
 		var status string
 		status, err = dbconn.SelectString(sensor.postgresConn, GpexpandTemporaryTableStatusQuery)
 		if err != nil {
-			gplog.Error(fmt.Sprintf("Error encountered retrieving gpexpand status: %v", err))
+			gplog.Error("Error encountered retrieving gpexpand status: %v", err)
 			return false, err
 		}
 
