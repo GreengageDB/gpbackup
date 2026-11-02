@@ -79,6 +79,10 @@ func CopyTableIn(queryContext context.Context, connectionPool *dbconn.DBConn, ta
 }
 
 func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FilePathInfo, entry toc.CoordinatorDataEntry, tableName string, whichConn int) error {
+	// Empty tables have no data file and nothing to redistribute
+	if entry.IsEmpty {
+		return nil
+	}
 	origSize, destSize, resizeCluster, batches := GetResizeClusterInfo()
 
 	var numRowsRestored int64
@@ -236,6 +240,9 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 			// data loading so we assign the batches here.
 			oidList := make([]string, 0)
 			for entryIdx := whichConn; entryIdx < totalTables; entryIdx += maxHelpers {
+				if dataEntries[entryIdx].IsEmpty {
+					continue
+				}
 				if dataEntries[entryIdx].IsReplicated {
 					oidList = append(oidList, fmt.Sprintf("%d,0", dataEntries[entryIdx].Oid))
 					continue
@@ -244,6 +251,11 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				for b := 0; b < batches; b++ {
 					oidList = append(oidList, fmt.Sprintf("%d,%d", dataEntries[entryIdx].Oid, b))
 				}
+			}
+
+			// Every entry of this helper is empty, so it would have nothing to read
+			if len(oidList) == 0 {
+				continue
 			}
 
 			utils.WriteOidListToSegments(oidList, globalCluster, fpInfo, HelperIdx(whichConn)...)

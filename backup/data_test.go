@@ -58,6 +58,13 @@ var _ = Describe("backup/data tests", func() {
 			expectedDataEntries := []toc.CoordinatorDataEntry{{Schema: "public", Name: "table", Oid: 1, AttributeString: "(a)"}}
 			Expect(tocfile.DataEntries).To(Equal(expectedDataEntries))
 		})
+		It("adds an entry for an empty table with the IsEmpty flag", func() {
+			table.IsEmpty = true
+			tables := []backup.Table{table}
+			backup.AddTableDataEntriesToTOC(tables, rowsCopiedMaps)
+			expectedDataEntries := []toc.CoordinatorDataEntry{{Schema: "public", Name: "table", Oid: 1, AttributeString: "(a)", IsEmpty: true}}
+			Expect(tocfile.DataEntries).To(Equal(expectedDataEntries))
+		})
 		It("does not add an entry for an external table to the TOC", func() {
 			table.IsExternal = true
 			tables := []backup.Table{table}
@@ -198,7 +205,7 @@ var _ = Describe("backup/data tests", func() {
 			Expect(counters.NumRegTables).To(Equal(int64(1)))
 		})
 	})
-	Describe("SkipEmptyTables", func() {
+	Describe("MarkEmptyTables", func() {
 		var tables []backup.Table
 		BeforeEach(func() {
 			tables = []backup.Table{
@@ -210,20 +217,25 @@ var _ = Describe("backup/data tests", func() {
 				},
 			}
 		})
-		It("removes tables reported as empty and does not check partition parents", func() {
+		It("marks tables reported as empty and does not check partition parents", func() {
 			rows := sqlmock.NewRows([]string{"oid"}).AddRow(uint32(1))
 			mock.ExpectQuery(regexp.QuoteMeta("ARRAY[1,2]::oid[]")).WillReturnRows(rows)
 
-			result := backup.SkipEmptyTables(connectionPool, tables)
+			backup.MarkEmptyTables(connectionPool, tables)
 
-			Expect(result).To(Equal(tables[1:]))
+			Expect(tables).To(HaveLen(3))
+			Expect(tables[0].IsEmpty).To(BeTrue())
+			Expect(tables[1].IsEmpty).To(BeFalse())
+			Expect(tables[2].IsEmpty).To(BeFalse())
 		})
-		It("returns all tables if none are empty", func() {
+		It("marks nothing if no table is empty", func() {
 			mock.ExpectQuery(regexp.QuoteMeta("ARRAY[1,2]::oid[]")).WillReturnRows(sqlmock.NewRows([]string{"oid"}))
 
-			result := backup.SkipEmptyTables(connectionPool, tables)
+			backup.MarkEmptyTables(connectionPool, tables)
 
-			Expect(result).To(Equal(tables))
+			for _, table := range tables {
+				Expect(table.IsEmpty).To(BeFalse())
+			}
 		})
 	})
 	Describe("GetBackupDataSet", func() {

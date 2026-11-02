@@ -286,6 +286,23 @@ var _ = Describe("restore internal tests", func() {
 			backupConfig.SegmentCount = origSize
 			Expect(cmdFlags.Set(options.RESIZE_CLUSTER, "true")).To(Succeed())
 		}
+		It("does not run COPY for an empty table", func() {
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", IsEmpty: true}
+
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+		It("does not redistribute an empty table restored to a smaller cluster", func() {
+			resizeToTwoSegments(3)
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", IsEmpty: true}
+
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
 		It("returns the error of a failed redistribution of a table distributed by an enum", func() {
 			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
 			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", DistByEnum: true, RowsCopied: 10}

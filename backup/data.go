@@ -53,6 +53,9 @@ func AddTableDataEntriesToTOC(tables []Table, rowsCopiedMaps []map[uint32]int64)
 			}
 			attributes := ConstructTableAttributesList(table.ColumnDefs)
 			globalTOC.AddCoordinatorDataEntry(table.Schema, table.Name, table.Oid, attributes, rowsCopied, table.PartitionLevelInfo.RootName, table.DistPolicy.Policy, table.DistPolicy.DistByEnum)
+			if table.IsEmpty {
+				globalTOC.DataEntries[len(globalTOC.DataEntries)-1].IsEmpty = true
+			}
 		}
 	}
 }
@@ -426,10 +429,10 @@ func GetBackupDataSet(tables []Table) ([]Table, int64) {
 
 const emptyTablesBatchSize = 10000
 
-// SkipEmptyTables drops tables whose relation size is zero on every segment.
-// Partition parents and intermediates are kept: their own size is always zero,
+// MarkEmptyTables sets IsEmpty on tables whose relation size is zero on every segment.
+// Partition parents and intermediates are not checked: their own size is always zero,
 // but a COPY of a parent also reads its children.
-func SkipEmptyTables(connectionPool *dbconn.DBConn, tables []Table) []Table {
+func MarkEmptyTables(connectionPool *dbconn.DBConn, tables []Table) {
 	candidates := make([]Table, 0, len(tables))
 	for _, table := range tables {
 		if level := table.PartitionLevelInfo.Level; level != "p" && level != "i" {
@@ -469,19 +472,16 @@ func SkipEmptyTables(connectionPool *dbconn.DBConn, tables []Table) []Table {
 		}
 	}
 	if len(emptyOids) == 0 {
-		return tables
+		return
 	}
 
-	nonEmpty := make([]Table, 0, len(tables)-len(emptyOids))
-	for _, table := range tables {
-		if emptyOids[table.Oid] {
-			gplog.Verbose("Skipping data backup of table %s because it is empty.", table.FQN())
-			continue
+	for i := range tables {
+		if emptyOids[tables[i].Oid] {
+			gplog.Verbose("Skipping data backup of table %s because it is empty.", tables[i].FQN())
+			tables[i].IsEmpty = true
 		}
-		nonEmpty = append(nonEmpty, table)
 	}
-	gplog.Info("Skipping data backup of %d empty tables", len(emptyOids))
-	return nonEmpty
+	gplog.Info("Skipping data backup of %d empty table(s)", len(emptyOids))
 }
 
 // Acquire AccessShareLock on a table with NOWAIT option. If we are unable to acquire

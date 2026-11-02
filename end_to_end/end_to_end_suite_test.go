@@ -3896,6 +3896,30 @@ LANGUAGE plpgsql NO SQL;`)
 				"public.ao_full": 100, "public.skip_part": 3, "public.aoco_empty": 0,
 			})
 		})
+		DescribeTable("truncates empty tables on restore with --truncate-table",
+			func(backupFlags ...string) {
+				args := append([]string{"--backup-dir", backupDir, "--skip-empty-tables"}, backupFlags...)
+				output := string(gpbackup(gpbackupPath, backupHelperPath, args...))
+				timestamp := getBackupTimestamp(output)
+
+				gprestore(gprestorePath, restoreHelperPath, timestamp,
+					"--redirect-db", "restoredb", "--backup-dir", backupDir)
+				testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.heap_empty VALUES (1);`)
+				testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.ao_empty SELECT generate_series(1,10);`)
+				testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.heap_full VALUES (101);`)
+
+				gprestore(gprestorePath, restoreHelperPath, timestamp,
+					"--redirect-db", "restoredb", "--backup-dir", backupDir,
+					"--data-only", "--truncate-table",
+					"--include-table", "public.heap_empty", "--include-table", "public.ao_empty",
+					"--include-table", "public.heap_full")
+				assertDataRestored(restoreConn, map[string]int{
+					"public.heap_empty": 0, "public.ao_empty": 0, "public.heap_full": 100,
+				})
+			},
+			Entry("without --single-data-file", "--leaf-partition-data"),
+			Entry("with --single-data-file", "--leaf-partition-data", "--single-data-file"),
+		)
 	})
 	Describe("Report files", func() {
 		It("prints the correct end time in the report file", func() {

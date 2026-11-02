@@ -133,7 +133,7 @@ func DoBackup() {
 	dataTablesQDOnly, dataTables := SplitOutQDOnlyTables(dataTables)
 	dataTables, numExtOrForeignTables := GetBackupDataSet(dataTables)
 	if MustGetFlagBool(options.SKIP_EMPTY_TABLES) {
-		dataTables = SkipEmptyTables(connectionPool, dataTables)
+		MarkEmptyTables(connectionPool, dataTables)
 	}
 	if len(dataTables) == 0 && len(dataTablesQDOnly) == 0 && !backupReport.MetadataOnly {
 		gplog.Warn("No tables in backup set contain data. Performing metadata-only backup instead.")
@@ -386,11 +386,22 @@ func backupData(tables []Table) {
 		gplog.Info("Data backup complete")
 		return
 	}
+	tablesToCopy := make([]Table, 0, len(tables))
+	for _, table := range tables {
+		if !table.IsEmpty {
+			tablesToCopy = append(tablesToCopy, table)
+		}
+	}
+	if len(tablesToCopy) == 0 {
+		AddTableDataEntriesToTOC(tables, nil)
+		logCompletionMessage("Data backup")
+		return
+	}
 	if MustGetFlagBool(options.SINGLE_DATA_FILE) {
 		gplog.Verbose("Initializing pipes and gpbackup_helper on segments for single data file backup")
 		utils.VerifyHelperVersionOnSegments(version, globalCluster)
-		oidList := make([]string, 0, len(tables))
-		for _, table := range tables {
+		oidList := make([]string, 0, len(tablesToCopy))
+		for _, table := range tablesToCopy {
 			oidList = append(oidList, fmt.Sprintf("%d", table.Oid))
 		}
 		utils.WriteOidListToSegments(oidList, globalCluster, globalFPInfo)
@@ -404,7 +415,7 @@ func backupData(tables []Table) {
 			MustGetFlagString(options.PLUGIN_CONFIG), compressStr, false, false, &wasTerminated, initialPipes, true, false, 0, 0, gplog.GetVerbosity())
 	}
 	gplog.Info("Writing data to file")
-	rowsCopiedMaps := BackupDataForAllTables(tables)
+	rowsCopiedMaps := BackupDataForAllTables(tablesToCopy)
 	AddTableDataEntriesToTOC(tables, rowsCopiedMaps)
 	if MustGetFlagBool(options.SINGLE_DATA_FILE) && MustGetFlagString(options.PLUGIN_CONFIG) != "" {
 		pluginConfig.BackupSegmentTOCs(globalCluster, globalFPInfo)

@@ -65,9 +65,18 @@ func VerifyBackupFileCountOnSegments() {
 	})
 
 	// these are the file counts for non-resize restores.
+	numDataEntries := 0
+	for _, entry := range globalTOC.DataEntries {
+		if !entry.IsEmpty {
+			numDataEntries++
+		}
+	}
 	fileCount := 2 // 1 for the actual data file, 1 for the segment TOC file
+	if len(globalTOC.DataEntries) > 0 && numDataEntries == 0 {
+		fileCount = 0
+	}
 	if !backupConfig.SingleDataFile {
-		fileCount = len(globalTOC.DataEntries)
+		fileCount = numDataEntries
 	}
 
 	batchMap := make(map[int]int, len(remoteOutput.Commands))
