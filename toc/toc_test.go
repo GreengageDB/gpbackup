@@ -2,6 +2,8 @@ package toc_test
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/GreengageDB/gpbackup/testutils"
@@ -341,6 +343,42 @@ var _ = Describe("utils/toc tests", func() {
 
 				Expect(matchingEntries).To(BeEmpty())
 			})
+		})
+	})
+	Describe("data entries of empty tables", func() {
+		It("keeps the IsEmpty flag when the TOC is written to a file and read back", func() {
+			filename := filepath.Join(GinkgoT().TempDir(), "toc.yaml")
+			written := &toc.TOC{DataEntries: []toc.CoordinatorDataEntry{
+				{Schema: "public", Name: "empty", Oid: 1, IsEmpty: true},
+				{Schema: "public", Name: "full", Oid: 2, RowsCopied: 10},
+			}}
+			written.WriteToFileAndMakeReadOnly(filename)
+
+			read := toc.NewTOC(filename)
+
+			Expect(read.DataEntries).To(Equal(written.DataEntries))
+			Expect(read.DataEntries[0].IsEmpty).To(BeTrue())
+			Expect(read.DataEntries[1].IsEmpty).To(BeFalse())
+		})
+		It("reads a TOC written before the IsEmpty flag existed with IsEmpty unset", func() {
+			filename := filepath.Join(GinkgoT().TempDir(), "old_toc.yaml")
+			oldTOC := `dataentries:
+- schema: public
+  name: foo
+  oid: 1
+  attributestring: (a)
+  rowscopied: 5
+  partitionroot: ""
+  isreplicated: false
+  distbyenum: false
+`
+			Expect(os.WriteFile(filename, []byte(oldTOC), 0644)).To(Succeed())
+
+			read := toc.NewTOC(filename)
+
+			Expect(read.DataEntries).To(HaveLen(1))
+			Expect(read.DataEntries[0].IsEmpty).To(BeFalse())
+			Expect(read.DataEntries[0].RowsCopied).To(Equal(int64(5)))
 		})
 	})
 	Describe("SubstituteRedirectDatabaseInStatements", func() {

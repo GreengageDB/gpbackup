@@ -237,6 +237,21 @@ var _ = Describe("backup/data tests", func() {
 				Expect(table.IsEmpty).To(BeFalse())
 			}
 		})
+		It("checks the tables in batches of 10000", func() {
+			many := make([]backup.Table, 10001)
+			for i := range many {
+				many[i] = backup.Table{Relation: backup.Relation{Oid: uint32(i + 1), Schema: "public", Name: fmt.Sprintf("t%d", i+1)}}
+			}
+			mock.ExpectQuery(`ARRAY\[1,2,3,.*,9999,10000\]::oid\[\]`).WillReturnRows(sqlmock.NewRows([]string{"oid"}).AddRow(uint32(5)))
+			mock.ExpectQuery(regexp.QuoteMeta("ARRAY[10001]::oid[]")).WillReturnRows(sqlmock.NewRows([]string{"oid"}).AddRow(uint32(10001)))
+
+			backup.MarkEmptyTables(connectionPool, many)
+
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+			for _, table := range many {
+				Expect(table.IsEmpty).To(Equal(table.Oid == 5 || table.Oid == 10001))
+			}
+		})
 	})
 	Describe("GetBackupDataSet", func() {
 		config := history.BackupConfig{}

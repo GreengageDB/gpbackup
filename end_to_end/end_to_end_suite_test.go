@@ -3966,6 +3966,71 @@ LANGUAGE plpgsql NO SQL;`)
 				"--redirect-db", "restoredb", "--backup-dir", backupDir, "--incremental", "--data-only")
 			assertDataRestored(restoreConn, map[string]int{"public.heap_full": 0, "public.ao_full": 0})
 		})
+		It("restores a backup of only empty tables taken with --single-data-file", func() {
+			emptyTables := []string{"public.heap_empty", "public.ao_empty"}
+			output := string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--single-data-file", "--skip-empty-tables",
+				"--include-table", emptyTables[0], "--include-table", emptyTables[1]))
+			timestamp := getBackupTimestamp(output)
+			assertSkipMessages(output, emptyTables, []string{})
+
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir)
+			assertDataRestored(restoreConn, map[string]int{"public.heap_empty": 0, "public.ao_empty": 0})
+
+			testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.heap_empty VALUES (1);`)
+			testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.ao_empty SELECT generate_series(1,10);`)
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir,
+				"--data-only", "--truncate-table",
+				"--include-table", emptyTables[0], "--include-table", emptyTables[1])
+			assertDataRestored(restoreConn, map[string]int{"public.heap_empty": 0, "public.ao_empty": 0})
+			assertArtifactsCleaned(timestamp)
+		})
+		It("backs up and restores with --jobs", func() {
+			output := string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--leaf-partition-data", "--skip-empty-tables", "--jobs", "3"))
+			timestamp := getBackupTimestamp(output)
+			assertSkipMessages(output,
+				[]string{"public.heap_empty", "public.ao_empty", "public.aoco_empty", "public.repl_empty",
+					"public.skip_part_1_prt_2", "public.skip_part_1_prt_4"},
+				[]string{"public.heap_full", "public.heap_deleted", "public.ao_full", "public.repl_full",
+					"public.skip_part_1_prt_1", "public.skip_part_1_prt_3"})
+
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir, "--jobs", "3")
+			assertDataRestored(restoreConn, tableToTupleCount)
+
+			testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.heap_empty VALUES (1);`)
+			testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.ao_empty SELECT generate_series(1,10);`)
+			testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.skip_part VALUES (3, 15);`)
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir, "--jobs", "3",
+				"--data-only", "--truncate-table",
+				"--include-table", "public.heap_empty", "--include-table", "public.ao_empty",
+				"--include-table", "public.skip_part")
+			assertDataRestored(restoreConn, map[string]int{
+				"public.heap_empty": 0, "public.ao_empty": 0, "public.skip_part": 2,
+				"public.skip_part_1_prt_1": 1, "public.skip_part_1_prt_2": 0,
+				"public.skip_part_1_prt_3": 1, "public.skip_part_1_prt_4": 0,
+			})
+		})
+		It("restores empty tables with --include-table and --redirect-schema", func() {
+			testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA IF EXISTS redirected CASCADE; CREATE SCHEMA redirected;")
+			DeferCleanup(func() { testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA redirected CASCADE") })
+			output := string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--skip-empty-tables"))
+			timestamp := getBackupTimestamp(output)
+
+			args := []string{"--redirect-db", "restoredb", "--backup-dir", backupDir, "--redirect-schema", "redirected"}
+			redirectedTupleCount := make(map[string]int, len(tableToTupleCount))
+			for table, count := range tableToTupleCount {
+				args = append(args, "--include-table", table)
+				redirectedTupleCount["redirected."+strings.TrimPrefix(table, "public.")] = count
+			}
+			gprestore(gprestorePath, restoreHelperPath, timestamp, args...)
+			assertDataRestored(restoreConn, redirectedTupleCount)
+		})
 		DescribeTable("truncates empty tables on restore with --truncate-table",
 			func(backupFlags ...string) {
 				args := append([]string{"--backup-dir", backupDir, "--skip-empty-tables"}, backupFlags...)

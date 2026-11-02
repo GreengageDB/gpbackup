@@ -324,8 +324,8 @@ var _ = Describe("End to End plugin tests", func() {
 					Skip("This test is only needed for the most recent backup versions")
 				}
 			})
-			DescribeTable("runs gpbackup and gprestore with plugin, single-data-file and skip-empty-tables",
-				func(tableToTupleCount map[string]int) {
+			DescribeTable("runs gpbackup and gprestore with plugin and skip-empty-tables",
+				func(isSingleDataFile bool, tableToTupleCount map[string]int) {
 					copyPluginToAllHosts(backupConn, examplePluginExec)
 
 					testhelper.AssertQueryRuns(backupConn, `CREATE TABLE public.skip_empty_heap(a int) DISTRIBUTED BY (a);`)
@@ -336,7 +336,10 @@ var _ = Describe("End to End plugin tests", func() {
 						testhelper.AssertQueryRuns(backupConn, `DROP TABLE public.skip_empty_heap, public.skip_empty_ao, public.skip_full;`)
 					})
 
-					args := []string{"--single-data-file", "--skip-empty-tables", "--plugin-config", examplePluginTestConfig}
+					args := []string{"--skip-empty-tables", "--plugin-config", examplePluginTestConfig}
+					if isSingleDataFile {
+						args = append(args, "--single-data-file")
+					}
 					for table := range tableToTupleCount {
 						args = append(args, "--include-table", table)
 					}
@@ -351,9 +354,12 @@ var _ = Describe("End to End plugin tests", func() {
 					assertDataRestored(restoreConn, tableToTupleCount)
 					assertArtifactsCleaned(timestamp)
 				},
-				// No helper runs on backup, hence there are no segment TOCs to restore from the plugin
-				Entry("with only empty tables", map[string]int{"public.skip_empty_heap": 0, "public.skip_empty_ao": 0}),
-				Entry("with empty and non-empty tables", map[string]int{"public.skip_empty_heap": 0, "public.skip_empty_ao": 0, "public.skip_full": 100}),
+				// With single-data-file no helper runs on backup of only empty tables, hence there are no segment TOCs to restore from the plugin
+				Entry("with single-data-file and only empty tables", true, map[string]int{"public.skip_empty_heap": 0, "public.skip_empty_ao": 0}),
+				Entry("with single-data-file and empty and non-empty tables", true, map[string]int{"public.skip_empty_heap": 0, "public.skip_empty_ao": 0, "public.skip_full": 100}),
+				// Without single-data-file the plugin gets no data files of the empty tables
+				Entry("without single-data-file and only empty tables", false, map[string]int{"public.skip_empty_heap": 0, "public.skip_empty_ao": 0}),
+				Entry("without single-data-file and empty and non-empty tables", false, map[string]int{"public.skip_empty_heap": 0, "public.skip_empty_ao": 0, "public.skip_full": 100}),
 			)
 			It("Will not hang if gpbackup and gprestore runs with single-data-file and the helper goes down at its start", func(ctx SpecContext) {
 				copyPluginToAllHosts(backupConn, examplePluginExec)
