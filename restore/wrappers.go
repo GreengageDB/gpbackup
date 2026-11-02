@@ -236,11 +236,21 @@ func RecoverMetadataFilesUsingPlugin() {
 
 	for _, fpInfo := range fpInfoList {
 		pluginConfig.MustRestoreFile(fpInfo.GetTOCFilePath())
-		if backupConfig.SingleDataFile {
+		if backupConfig.SingleDataFile && !hasOnlyEmptyDataEntries(toc.NewTOC(fpInfo.GetTOCFilePath()).DataEntries) {
 			origSize, destSize, _, batches := GetResizeClusterInfo()
 			pluginConfig.RestoreSegmentTOCs(globalCluster, fpInfo, origSize, destSize, batches)
 		}
 	}
+}
+
+// Backup starts no helpers, hence uploads no segment TOCs, if all its tables are empty.
+func hasOnlyEmptyDataEntries(entries []toc.CoordinatorDataEntry) bool {
+	for _, entry := range entries {
+		if !entry.IsEmpty {
+			return false
+		}
+	}
+	return len(entries) > 0
 }
 
 func FindHistoricalPluginVersion(timestamp string) string {

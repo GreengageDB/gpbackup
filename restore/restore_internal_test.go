@@ -268,6 +268,19 @@ var _ = Describe("restore internal tests", func() {
 			}
 		})
 	})
+	Describe("hasOnlyEmptyDataEntries", func() {
+		It("is true if all data entries are empty", func() {
+			entries := []toc.CoordinatorDataEntry{{Oid: 1, IsEmpty: true}, {Oid: 2, IsEmpty: true}}
+			Expect(hasOnlyEmptyDataEntries(entries)).To(BeTrue())
+		})
+		It("is false if some data entry is not empty", func() {
+			entries := []toc.CoordinatorDataEntry{{Oid: 1, IsEmpty: true}, {Oid: 2}}
+			Expect(hasOnlyEmptyDataEntries(entries)).To(BeFalse())
+		})
+		It("is false if there are no data entries", func() {
+			Expect(hasOnlyEmptyDataEntries(nil)).To(BeFalse())
+		})
+	})
 	Describe("restoreSingleTableData", func() {
 		var localMock sqlmock.Sqlmock
 		BeforeEach(func() {
