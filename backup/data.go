@@ -449,12 +449,18 @@ func SkipEmptyTables(connectionPool *dbconn.DBConn, tables []Table) []Table {
 		for _, table := range candidates[start:end] {
 			oids = append(oids, fmt.Sprintf("%d", table.Oid))
 		}
+		// OFFSET 0 keeps pg_relation_size below the Redistribute Motion that the planner
+		// puts before GROUP BY; above it the size is read on the wrong segment and is 0.
 		query := fmt.Sprintf(`
 		SELECT oid
-		FROM gp_dist_random('pg_class')
-		WHERE oid = ANY(ARRAY[%s]::oid[])
+		FROM (
+			SELECT oid, pg_relation_size(oid) AS size
+			FROM gp_dist_random('pg_class')
+			WHERE oid = ANY(ARRAY[%s]::oid[])
+			OFFSET 0
+		) s
 		GROUP BY oid
-		HAVING max(pg_relation_size(oid)) = 0`, strings.Join(oids, ","))
+		HAVING max(size) = 0`, strings.Join(oids, ","))
 		var batchOids []uint32
 		err := connectionPool.Select(&batchOids, query)
 		gplog.FatalOnError(err)
