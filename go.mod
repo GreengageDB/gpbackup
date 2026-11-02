@@ -1,6 +1,8 @@
 module github.com/GreengageDB/gpbackup
 
-go 1.20
+go 1.26.9
+
+toolchain go1.26.10
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
