@@ -3204,16 +3204,18 @@ LANGUAGE plpgsql NO SQL;`)
 		)
 		// The backups for this test were taken with --skip-empty-tables and --leaf-partition-data on 2- and 5-segment clusters
 		// from a database with empty and non-empty heap, AO, AOCO, replicated and partitioned tables.
+		// The archives hold a full and an incremental backup taken after these changes:
+		// INSERT INTO heap_empty VALUES (1); INSERT 10 rows into ao_empty; TRUNCATE heap_full; INSERT INTO skip_part VALUES (3, 15).
 		DescribeTable("Restores a backup taken with --skip-empty-tables to the current cluster",
-			func(timestamp string, tarBaseName string, isSingleDataFileRestore bool) {
+			func(fullTimestamp string, incrementalTimestamp string, tarBaseName string, isSingleDataFileRestore bool) {
 				if isSingleDataFileRestore && segmentCount != 3 {
 					Skip("Single data file resize restores currently require a 3-segment cluster to test.")
 				}
 				extractDirectory := extractSavedTarFile(backupDir, tarBaseName)
 				isMultiNode := (backupCluster.GetHostForContent(0) != backupCluster.GetHostForContent(-1))
-				moveSegmentBackupFiles(tarBaseName, extractDirectory, isMultiNode, timestamp)
+				moveSegmentBackupFiles(tarBaseName, extractDirectory, isMultiNode, fullTimestamp, incrementalTimestamp)
 
-				gprestore(gprestorePath, restoreHelperPath, timestamp,
+				gprestore(gprestorePath, restoreHelperPath, fullTimestamp,
 					"--redirect-db", "restoredb",
 					"--backup-dir", extractDirectory,
 					"--resize-cluster")
@@ -3226,11 +3228,30 @@ LANGUAGE plpgsql NO SQL;`)
 					"public.skip_part_1_prt_1": 1, "public.skip_part_1_prt_2": 0,
 					"public.skip_part_1_prt_3": 1, "public.skip_part_1_prt_4": 0,
 				})
+
+				if incrementalTimestamp == "" {
+					return
+				}
+				gprestore(gprestorePath, restoreHelperPath, incrementalTimestamp,
+					"--redirect-db", "restoredb",
+					"--backup-dir", extractDirectory,
+					"--resize-cluster",
+					"--incremental",
+					"--data-only")
+
+				assertDataRestored(restoreConn, map[string]int{
+					"public.heap_empty": 1, "public.heap_full": 0,
+					"public.ao_empty": 10, "public.ao_full": 100, "public.aoco_empty": 0,
+					"public.repl_empty": 0, "public.repl_full": 2,
+					"public.skip_part":         3,
+					"public.skip_part_1_prt_1": 1, "public.skip_part_1_prt_2": 1,
+					"public.skip_part_1_prt_3": 1, "public.skip_part_1_prt_4": 0,
+				})
 			},
-			Entry("with a 2-segment cluster backup", "20261102143705", "2-segment-db-skip-empty", false),
-			Entry("with a 2-segment cluster backup and single data file", "20261102143708", "2-segment-db-skip-empty-single-data-file", true),
-			Entry("with a 5-segment cluster backup", "20261102145036", "5-segment-db-skip-empty", false),
-			Entry("with a 5-segment cluster backup and single data file", "20261102145039", "5-segment-db-skip-empty-single-data-file", true),
+			Entry("with a 2-segment cluster backup", "20261102154423", "20261102154426", "2-segment-db-skip-empty", false),
+			Entry("with a 2-segment cluster backup and single data file", "20261102154508", "20261102154515", "2-segment-db-skip-empty-single-data-file", true),
+			Entry("with a 5-segment cluster backup", "20261102155044", "20261102155047", "5-segment-db-skip-empty", false),
+			Entry("with a 5-segment cluster backup and single data file", "20261102155051", "20261102155058", "5-segment-db-skip-empty-single-data-file", true),
 		)
 		It("will not restore a pre-1.26.0 backup that lacks a stored SegmentCount value", func() {
 			extractDirectory := extractSavedTarFile(backupDir, "2-segment-db-1_24_0")
