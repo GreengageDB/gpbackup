@@ -424,6 +424,60 @@ func GetBackupDataSet(tables []Table) ([]Table, int64) {
 	return backupDataSet, numExtOrForeignTables
 }
 
+const emptyTablesBatchSize = 10000
+
+// SkipEmptyTables drops tables whose relation size is zero on every segment.
+// Partition parents and intermediates are kept: their own size is always zero,
+// but a COPY of a parent also reads its children.
+func SkipEmptyTables(connectionPool *dbconn.DBConn, tables []Table) []Table {
+	candidates := make([]Table, 0, len(tables))
+	for _, table := range tables {
+		if level := table.PartitionLevelInfo.Level; level != "p" && level != "i" {
+			candidates = append(candidates, table)
+		}
+	}
+
+	// pg_relation_size is evaluated inside gp_dist_random, i.e. locally on segments:
+	// one dispatch per batch instead of one per table.
+	emptyOids := make(map[uint32]bool)
+	for start := 0; start < len(candidates); start += emptyTablesBatchSize {
+		end := start + emptyTablesBatchSize
+		if end > len(candidates) {
+			end = len(candidates)
+		}
+		oids := make([]string, 0, end-start)
+		for _, table := range candidates[start:end] {
+			oids = append(oids, fmt.Sprintf("%d", table.Oid))
+		}
+		query := fmt.Sprintf(`
+		SELECT oid
+		FROM gp_dist_random('pg_class')
+		WHERE oid = ANY(ARRAY[%s]::oid[])
+		GROUP BY oid
+		HAVING max(pg_relation_size(oid)) = 0`, strings.Join(oids, ","))
+		var batchOids []uint32
+		err := connectionPool.Select(&batchOids, query)
+		gplog.FatalOnError(err)
+		for _, oid := range batchOids {
+			emptyOids[oid] = true
+		}
+	}
+	if len(emptyOids) == 0 {
+		return tables
+	}
+
+	nonEmpty := make([]Table, 0, len(tables)-len(emptyOids))
+	for _, table := range tables {
+		if emptyOids[table.Oid] {
+			gplog.Verbose("Skipping data backup of table %s because it is empty.", table.FQN())
+			continue
+		}
+		nonEmpty = append(nonEmpty, table)
+	}
+	gplog.Info("Skipping data backup of %d empty tables", len(emptyOids))
+	return nonEmpty
+}
+
 // Acquire AccessShareLock on a table with NOWAIT option. If we are unable to acquire
 // the lock, the call will fail instead of block. Return the failure for handling.
 func LockTableNoWait(dataTable Table, connNum int) error {

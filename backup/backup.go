@@ -132,6 +132,9 @@ func DoBackup() {
 	metadataTables, dataTables, allTables := RetrieveAndProcessTables()
 	dataTablesQDOnly, dataTables := SplitOutQDOnlyTables(dataTables)
 	dataTables, numExtOrForeignTables := GetBackupDataSet(dataTables)
+	if MustGetFlagBool(options.SKIP_EMPTY_TABLES) {
+		dataTables = SkipEmptyTables(connectionPool, dataTables)
+	}
 	if len(dataTables) == 0 && len(dataTablesQDOnly) == 0 && !backupReport.MetadataOnly {
 		gplog.Warn("No tables in backup set contain data. Performing metadata-only backup instead.")
 		backupReport.MetadataOnly = true

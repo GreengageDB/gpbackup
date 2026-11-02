@@ -198,6 +198,34 @@ var _ = Describe("backup/data tests", func() {
 			Expect(counters.NumRegTables).To(Equal(int64(1)))
 		})
 	})
+	Describe("SkipEmptyTables", func() {
+		var tables []backup.Table
+		BeforeEach(func() {
+			tables = []backup.Table{
+				{Relation: backup.Relation{Oid: 1, Schema: "public", Name: "empty"}},
+				{Relation: backup.Relation{Oid: 2, Schema: "public", Name: "full"}},
+				{
+					Relation:        backup.Relation{Oid: 3, Schema: "public", Name: "parent"},
+					TableDefinition: backup.TableDefinition{PartitionLevelInfo: backup.PartitionLevelInfo{Level: "p"}},
+				},
+			}
+		})
+		It("removes tables reported as empty and does not check partition parents", func() {
+			rows := sqlmock.NewRows([]string{"oid"}).AddRow(uint32(1))
+			mock.ExpectQuery(regexp.QuoteMeta("ARRAY[1,2]::oid[]")).WillReturnRows(rows)
+
+			result := backup.SkipEmptyTables(connectionPool, tables)
+
+			Expect(result).To(Equal(tables[1:]))
+		})
+		It("returns all tables if none are empty", func() {
+			mock.ExpectQuery(regexp.QuoteMeta("ARRAY[1,2]::oid[]")).WillReturnRows(sqlmock.NewRows([]string{"oid"}))
+
+			result := backup.SkipEmptyTables(connectionPool, tables)
+
+			Expect(result).To(Equal(tables))
+		})
+	})
 	Describe("GetBackupDataSet", func() {
 		config := history.BackupConfig{}
 		var testTable backup.Table
