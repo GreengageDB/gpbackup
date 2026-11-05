@@ -1,8 +1,6 @@
 package utils
 
 import (
-	"fmt"
-
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/blang/vfs"
@@ -51,12 +49,12 @@ func checkExtToolRunning(errMsg string, sensor GGDBToolSensorInterface) {
 func getCoordinatorDataDir(conn *dbconn.DBConn, sensorName string, minGreengageVersion string) (string, error) {
 	err := validateConnection(conn, sensorName, minGreengageVersion)
 	if err != nil {
-		gplog.Error(fmt.Sprintf("Error encountered validating db connection: %v", err))
+		gplog.Error("Error encountered validating db connection: %v", err)
 		return "", err
 	}
 	coordinatorDataDir, err := dbconn.SelectString(conn, CoordinatorDataDirQuery)
 	if err != nil {
-		gplog.Error(fmt.Sprintf("Error encountered retrieving data directory: %v", err))
+		gplog.Error("Error encountered retrieving data directory: %v", err)
 		return "", err
 	}
 	return coordinatorDataDir, nil

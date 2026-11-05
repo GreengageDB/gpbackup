@@ -214,7 +214,7 @@ func DoTeardown() {
 	if err := recover(); err != nil {
 		errorCode := gplog.GetErrorCode()
 		if errorCode < 2 || errorCode > 5 {
-			gplog.Error(fmt.Sprintf("%v: %s", err, debug.Stack()))
+			gplog.Error("%v: %s", err, debug.Stack())
 			gplog.SetErrorCode(5)
 		} else {
 			errStr = fmt.Sprintf("%v", err)

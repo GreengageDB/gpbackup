@@ -109,7 +109,7 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 		if backupConfig.SingleDataFile || resizeCluster {
 			agentErr := utils.CheckAgentErrorsOnSegments(globalCluster, globalFPInfo, HelperIdx(whichConn)...)
 			if agentErr != nil {
-				gplog.Error(agentErr.Error())
+				gplog.Error("%s", agentErr.Error())
 				return agentErr
 			}
 		}
@@ -117,7 +117,7 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 		partialRowsRestored, copyErr := CopyTableIn(queryContext, connectionPool, tableName, entry.AttributeString, destinationToRead, backupConfig.SingleDataFile, whichConn)
 
 		if copyErr != nil {
-			gplog.Error(copyErr.Error())
+			gplog.Error("%s", copyErr.Error())
 			if MustGetFlagBool(options.ON_ERROR_CONTINUE) {
 				if connectionPool.Version.AtLeast("6") && (backupConfig.SingleDataFile || resizeCluster) {
 					// inform segment helpers to skip this entry
@@ -141,7 +141,7 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 
 	err := CheckRowsRestored(numRowsRestored, numRowsBackedUp, tableName)
 	if err != nil {
-		gplog.Error(err.Error())
+		gplog.Error("%s", err.Error())
 		return err
 	}
 
@@ -159,7 +159,7 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 			}
 		}
 		if err != nil {
-			gplog.Error(err.Error())
+			gplog.Error("%s", err.Error())
 			return err
 		}
 	}
@@ -310,7 +310,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					gplog.Verbose("Truncating table %s prior to restoring data", tableName)
 					_, err := connectionPool.Exec(`TRUNCATE `+tableName, whichConn)
 					if err != nil {
-						gplog.Error(err.Error())
+						gplog.Error("%s", err.Error())
 					}
 				}
 				if err == nil {
