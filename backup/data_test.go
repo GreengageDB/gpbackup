@@ -58,6 +58,13 @@ var _ = Describe("backup/data tests", func() {
 			expectedDataEntries := []toc.CoordinatorDataEntry{{Schema: "public", Name: "table", Oid: 1, AttributeString: "(a)"}}
 			Expect(tocfile.DataEntries).To(Equal(expectedDataEntries))
 		})
+		It("adds an entry for an empty table with the IsEmpty flag", func() {
+			table.IsEmpty = true
+			tables := []backup.Table{table}
+			backup.AddTableDataEntriesToTOC(tables, rowsCopiedMaps)
+			expectedDataEntries := []toc.CoordinatorDataEntry{{Schema: "public", Name: "table", Oid: 1, AttributeString: "(a)", IsEmpty: true}}
+			Expect(tocfile.DataEntries).To(Equal(expectedDataEntries))
+		})
 		It("does not add an entry for an external table to the TOC", func() {
 			table.IsExternal = true
 			tables := []backup.Table{table}
@@ -196,6 +203,54 @@ var _ = Describe("backup/data tests", func() {
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(rowsCopiedMap[0]).To(Equal(int64(10)))
 			Expect(counters.NumRegTables).To(Equal(int64(1)))
+		})
+	})
+	Describe("MarkEmptyTables", func() {
+		var tables []backup.Table
+		BeforeEach(func() {
+			tables = []backup.Table{
+				{Relation: backup.Relation{Oid: 1, Schema: "public", Name: "empty"}},
+				{Relation: backup.Relation{Oid: 2, Schema: "public", Name: "full"}},
+				{
+					Relation:        backup.Relation{Oid: 3, Schema: "public", Name: "parent"},
+					TableDefinition: backup.TableDefinition{PartitionLevelInfo: backup.PartitionLevelInfo{Level: "p"}},
+				},
+			}
+		})
+		It("marks tables reported as empty and does not check partition parents", func() {
+			rows := sqlmock.NewRows([]string{"oid"}).AddRow(uint32(1))
+			mock.ExpectQuery(regexp.QuoteMeta("ARRAY[1,2]::oid[]")).WillReturnRows(rows)
+
+			backup.MarkEmptyTables(connectionPool, tables)
+
+			Expect(tables).To(HaveLen(3))
+			Expect(tables[0].IsEmpty).To(BeTrue())
+			Expect(tables[1].IsEmpty).To(BeFalse())
+			Expect(tables[2].IsEmpty).To(BeFalse())
+		})
+		It("marks nothing if no table is empty", func() {
+			mock.ExpectQuery(regexp.QuoteMeta("ARRAY[1,2]::oid[]")).WillReturnRows(sqlmock.NewRows([]string{"oid"}))
+
+			backup.MarkEmptyTables(connectionPool, tables)
+
+			for _, table := range tables {
+				Expect(table.IsEmpty).To(BeFalse())
+			}
+		})
+		It("checks the tables in batches of 10000", func() {
+			many := make([]backup.Table, 10001)
+			for i := range many {
+				many[i] = backup.Table{Relation: backup.Relation{Oid: uint32(i + 1), Schema: "public", Name: fmt.Sprintf("t%d", i+1)}}
+			}
+			mock.ExpectQuery(`ARRAY\[1,2,3,.*,9999,10000\]::oid\[\]`).WillReturnRows(sqlmock.NewRows([]string{"oid"}).AddRow(uint32(5)))
+			mock.ExpectQuery(regexp.QuoteMeta("ARRAY[10001]::oid[]")).WillReturnRows(sqlmock.NewRows([]string{"oid"}).AddRow(uint32(10001)))
+
+			backup.MarkEmptyTables(connectionPool, many)
+
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+			for _, table := range many {
+				Expect(table.IsEmpty).To(Equal(table.Oid == 5 || table.Oid == 10001))
+			}
 		})
 	})
 	Describe("GetBackupDataSet", func() {

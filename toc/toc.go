@@ -45,6 +45,8 @@ type CoordinatorDataEntry struct {
 	PartitionRoot   string
 	IsReplicated    bool
 	DistByEnum      bool
+	// The table was empty at backup time: no data file exists, restore only truncates it.
+	IsEmpty bool
 }
 
 type SegmentDataEntry struct {
@@ -344,7 +346,7 @@ func (toc *TOC) AddMetadataEntry(section string, entry MetadataEntry, start, end
 
 func (toc *TOC) AddCoordinatorDataEntry(schema string, name string, oid uint32, attributeString string, rowsCopied int64, PartitionRoot string, distPolicy string, distByEnum bool) {
 	isReplicated := strings.Contains(distPolicy, "REPLICATED")
-	toc.DataEntries = append(toc.DataEntries, CoordinatorDataEntry{schema, name, oid, attributeString, rowsCopied, PartitionRoot, isReplicated, distByEnum})
+	toc.DataEntries = append(toc.DataEntries, CoordinatorDataEntry{schema, name, oid, attributeString, rowsCopied, PartitionRoot, isReplicated, distByEnum, false})
 }
 
 func (toc *SegmentTOC) AddSegmentDataEntry(oid uint, startByte uint64, endByte uint64) {

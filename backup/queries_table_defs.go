@@ -21,6 +21,8 @@ import (
 type Table struct {
 	Relation
 	TableDefinition
+	// Set by MarkEmptyTables: no COPY on backup, restore only truncates the table.
+	IsEmpty bool
 }
 
 type TableQDOnly struct {
@@ -164,7 +166,7 @@ func ConstructDefinitionsForTables(connectionPool *dbconn.DBConn, tableRelations
 		if tableDef.Inherits == nil {
 			tableDef.Inherits = []string{}
 		}
-		tables = append(tables, Table{tableRel, tableDef})
+		tables = append(tables, Table{Relation: tableRel, TableDefinition: tableDef})
 	}
 	return tables
 }

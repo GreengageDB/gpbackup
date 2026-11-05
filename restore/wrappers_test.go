@@ -276,6 +276,12 @@ withstatistics: false
 			err = ioutil.WriteFile(configPath, []byte(sampleBackupConfig), 0777)
 			Expect(err).ToNot(HaveOccurred())
 
+			// the plugin is mocked, so the TOC of the restore plan entry has to be in place
+			planFPInfo := restore.GetBackupFPInfoForTimestamp("20180415154238")
+			Expect(os.MkdirAll(filepath.Dir(planFPInfo.GetTOCFilePath()), 0777)).To(Succeed())
+			err = ioutil.WriteFile(planFPInfo.GetTOCFilePath(), []byte("dataentries: []\n"), 0777)
+			Expect(err).ToNot(HaveOccurred())
+
 			restore.SetVersion("1.11.0+dev.28.g10571fd")
 		})
 		AfterEach(func() {

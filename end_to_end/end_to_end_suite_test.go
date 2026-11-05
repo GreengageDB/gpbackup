@@ -3202,6 +3202,57 @@ LANGUAGE plpgsql NO SQL;`)
 			Entry("Can perform a backup and incremental restore of a 2-segment cluster using a plugin", "20220909150612", "20220909150622", "2-segment-db-incremental", true, false, false, true),
 			Entry("Can perform a backup and incremental restore of a 2-segment cluster using a plugin with jobs", "20220909150612", "20220909150622", "2-segment-db-incremental", true, false, false, true, 3),
 		)
+		// The backups for this test were taken with --skip-empty-tables and --leaf-partition-data on 2- and 5-segment clusters
+		// from a database with empty and non-empty heap, AO, AOCO, replicated and partitioned tables.
+		// The archives hold a full and an incremental backup taken after these changes:
+		// INSERT INTO heap_empty VALUES (1); INSERT 10 rows into ao_empty; TRUNCATE heap_full; INSERT INTO skip_part VALUES (3, 15).
+		DescribeTable("Restores a backup taken with --skip-empty-tables to the current cluster",
+			func(fullTimestamp string, incrementalTimestamp string, tarBaseName string, isSingleDataFileRestore bool) {
+				if isSingleDataFileRestore && segmentCount != 3 {
+					Skip("Single data file resize restores currently require a 3-segment cluster to test.")
+				}
+				extractDirectory := extractSavedTarFile(backupDir, tarBaseName)
+				isMultiNode := (backupCluster.GetHostForContent(0) != backupCluster.GetHostForContent(-1))
+				moveSegmentBackupFiles(tarBaseName, extractDirectory, isMultiNode, fullTimestamp, incrementalTimestamp)
+
+				gprestore(gprestorePath, restoreHelperPath, fullTimestamp,
+					"--redirect-db", "restoredb",
+					"--backup-dir", extractDirectory,
+					"--resize-cluster")
+
+				assertDataRestored(restoreConn, map[string]int{
+					"public.heap_empty": 0, "public.heap_full": 100,
+					"public.ao_empty": 0, "public.ao_full": 100, "public.aoco_empty": 0,
+					"public.repl_empty": 0, "public.repl_full": 2,
+					"public.skip_part":         2,
+					"public.skip_part_1_prt_1": 1, "public.skip_part_1_prt_2": 0,
+					"public.skip_part_1_prt_3": 1, "public.skip_part_1_prt_4": 0,
+				})
+
+				if incrementalTimestamp == "" {
+					return
+				}
+				gprestore(gprestorePath, restoreHelperPath, incrementalTimestamp,
+					"--redirect-db", "restoredb",
+					"--backup-dir", extractDirectory,
+					"--resize-cluster",
+					"--incremental",
+					"--data-only")
+
+				assertDataRestored(restoreConn, map[string]int{
+					"public.heap_empty": 1, "public.heap_full": 0,
+					"public.ao_empty": 10, "public.ao_full": 100, "public.aoco_empty": 0,
+					"public.repl_empty": 0, "public.repl_full": 2,
+					"public.skip_part":         3,
+					"public.skip_part_1_prt_1": 1, "public.skip_part_1_prt_2": 1,
+					"public.skip_part_1_prt_3": 1, "public.skip_part_1_prt_4": 0,
+				})
+			},
+			Entry("with a 2-segment cluster backup", "20261102154423", "20261102154426", "2-segment-db-skip-empty", false),
+			Entry("with a 2-segment cluster backup and single data file", "20261102154508", "20261102154515", "2-segment-db-skip-empty-single-data-file", true),
+			Entry("with a 5-segment cluster backup", "20261102155044", "20261102155047", "5-segment-db-skip-empty", false),
+			Entry("with a 5-segment cluster backup and single data file", "20261102155051", "20261102155058", "5-segment-db-skip-empty-single-data-file", true),
+		)
 		It("will not restore a pre-1.26.0 backup that lacks a stored SegmentCount value", func() {
 			extractDirectory := extractSavedTarFile(backupDir, "2-segment-db-1_24_0")
 
@@ -3790,6 +3841,220 @@ LANGUAGE plpgsql NO SQL;`)
 			Expect(contents).ToNot(ContainSubstring("CREATE TABLE public.child_two"))
 			Expect(contents).ToNot(ContainSubstring("CREATE TABLE public.unrelated"))
 		})
+	})
+	Describe("Backup with --skip-empty-tables", func() {
+		const skipMsgFmt = "Skipping data backup of table %s because it is empty."
+		var tableToTupleCount map[string]int
+		BeforeEach(func() {
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE public.heap_empty(a int) DISTRIBUTED BY (a);`)
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE public.heap_full AS SELECT i AS a FROM generate_series(1,100) i DISTRIBUTED BY (a);`)
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE public.heap_deleted AS SELECT i AS a FROM generate_series(1,100) i DISTRIBUTED BY (a);`)
+			testhelper.AssertQueryRuns(backupConn, `DELETE FROM public.heap_deleted;`)
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE public.ao_empty(a int) WITH (appendonly=true) DISTRIBUTED BY (a);`)
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE public.ao_full WITH (appendonly=true) AS SELECT i AS a FROM generate_series(1,100) i DISTRIBUTED BY (a);`)
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE public.aoco_empty(a int, b text) WITH (appendonly=true, orientation=column) DISTRIBUTED BY (a);`)
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE public.repl_empty(a int) DISTRIBUTED REPLICATED;`)
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE public.repl_full(a int) DISTRIBUTED REPLICATED;`)
+			testhelper.AssertQueryRuns(backupConn, `INSERT INTO public.repl_full VALUES (1), (2);`)
+			testhelper.AssertQueryRuns(backupConn, `CREATE TABLE public.skip_part (id int, d int) DISTRIBUTED BY (id) PARTITION BY RANGE (d) (START (0) END (40) EVERY (10));`)
+			testhelper.AssertQueryRuns(backupConn, `INSERT INTO public.skip_part VALUES (1, 5), (2, 25);`)
+			DeferCleanup(func() {
+				for _, table := range []string{"heap_empty", "heap_full", "heap_deleted", "ao_empty", "ao_full",
+					"aoco_empty", "repl_empty", "repl_full", "skip_part"} {
+					testhelper.AssertQueryRuns(backupConn, fmt.Sprintf("DROP TABLE public.%s", table))
+				}
+			})
+			tableToTupleCount = map[string]int{
+				"public.heap_empty": 0, "public.heap_full": 100, "public.heap_deleted": 0,
+				"public.ao_empty": 0, "public.ao_full": 100, "public.aoco_empty": 0,
+				"public.repl_empty": 0, "public.repl_full": 2, "public.skip_part": 2,
+			}
+		})
+		assertSkipMessages := func(output string, skipped []string, kept []string) {
+			for _, table := range skipped {
+				Expect(output).To(ContainSubstring(fmt.Sprintf(skipMsgFmt, table)))
+			}
+			for _, table := range kept {
+				Expect(output).ToNot(ContainSubstring(fmt.Sprintf(skipMsgFmt, table)))
+			}
+		}
+		It("skips empty tables and empty leaf partitions with --leaf-partition-data", func() {
+			output := string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--leaf-partition-data", "--skip-empty-tables"))
+			timestamp := getBackupTimestamp(output)
+
+			assertSkipMessages(output,
+				[]string{"public.heap_empty", "public.ao_empty", "public.aoco_empty", "public.repl_empty",
+					"public.skip_part_1_prt_2", "public.skip_part_1_prt_4"},
+				[]string{"public.heap_full", "public.heap_deleted", "public.ao_full", "public.repl_full",
+					"public.skip_part_1_prt_1", "public.skip_part_1_prt_3", "public.skip_part"})
+
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir)
+			assertDataRestored(restoreConn, tableToTupleCount)
+			assertDataRestored(restoreConn, map[string]int{
+				"public.skip_part_1_prt_1": 1, "public.skip_part_1_prt_2": 0,
+				"public.skip_part_1_prt_3": 1, "public.skip_part_1_prt_4": 0,
+			})
+		})
+		It("does not skip partition parents without --leaf-partition-data", func() {
+			output := string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--skip-empty-tables"))
+			timestamp := getBackupTimestamp(output)
+
+			assertSkipMessages(output,
+				[]string{"public.heap_empty", "public.ao_empty", "public.aoco_empty", "public.repl_empty"},
+				[]string{"public.heap_full", "public.skip_part"})
+
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir)
+			assertDataRestored(restoreConn, tableToTupleCount)
+		})
+		It("skips empty tables with --single-data-file", func() {
+			output := string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--leaf-partition-data", "--single-data-file", "--skip-empty-tables"))
+			timestamp := getBackupTimestamp(output)
+
+			assertSkipMessages(output,
+				[]string{"public.heap_empty", "public.ao_empty", "public.skip_part_1_prt_2"},
+				[]string{"public.heap_full", "public.ao_full", "public.skip_part_1_prt_1"})
+
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir)
+			assertDataRestored(restoreConn, tableToTupleCount)
+		})
+		It("restores correctly from an incremental backup after empty tables get data", func() {
+			output := gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--leaf-partition-data", "--skip-empty-tables")
+			fullTimestamp := getBackupTimestamp(string(output))
+
+			testhelper.AssertQueryRuns(backupConn, `INSERT INTO public.heap_empty VALUES (1);`)
+			testhelper.AssertQueryRuns(backupConn, `INSERT INTO public.ao_empty SELECT generate_series(1,10);`)
+			testhelper.AssertQueryRuns(backupConn, `INSERT INTO public.skip_part VALUES (3, 15);`)
+			testhelper.AssertQueryRuns(backupConn, `TRUNCATE public.heap_full;`)
+
+			output = gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--leaf-partition-data", "--skip-empty-tables", "--incremental", "--from-timestamp", fullTimestamp)
+			incrementalTimestamp := getBackupTimestamp(string(output))
+
+			gprestore(gprestorePath, restoreHelperPath, incrementalTimestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir)
+			assertDataRestored(restoreConn, map[string]int{
+				"public.heap_empty": 1, "public.heap_full": 0, "public.ao_empty": 10,
+				"public.ao_full": 100, "public.skip_part": 3, "public.aoco_empty": 0,
+			})
+		})
+		It("truncates tables that became empty on gprestore --incremental", func() {
+			output := string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--leaf-partition-data", "--skip-empty-tables"))
+			fullTimestamp := getBackupTimestamp(output)
+			gprestore(gprestorePath, restoreHelperPath, fullTimestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir)
+			assertDataRestored(restoreConn, map[string]int{"public.heap_full": 100, "public.ao_full": 100})
+
+			testhelper.AssertQueryRuns(backupConn, `TRUNCATE public.heap_full;`)
+			testhelper.AssertQueryRuns(backupConn, `TRUNCATE public.ao_full;`)
+			output = string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--leaf-partition-data", "--skip-empty-tables", "--incremental", "--from-timestamp", fullTimestamp))
+			incrementalTimestamp := getBackupTimestamp(output)
+			assertSkipMessages(output, []string{"public.heap_full", "public.ao_full"}, []string{})
+
+			gprestore(gprestorePath, restoreHelperPath, incrementalTimestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir, "--incremental", "--data-only")
+			assertDataRestored(restoreConn, map[string]int{"public.heap_full": 0, "public.ao_full": 0})
+		})
+		It("restores a backup of only empty tables taken with --single-data-file", func() {
+			emptyTables := []string{"public.heap_empty", "public.ao_empty"}
+			output := string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--single-data-file", "--skip-empty-tables",
+				"--include-table", emptyTables[0], "--include-table", emptyTables[1]))
+			timestamp := getBackupTimestamp(output)
+			assertSkipMessages(output, emptyTables, []string{})
+
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir)
+			assertDataRestored(restoreConn, map[string]int{"public.heap_empty": 0, "public.ao_empty": 0})
+
+			testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.heap_empty VALUES (1);`)
+			testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.ao_empty SELECT generate_series(1,10);`)
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir,
+				"--data-only", "--truncate-table",
+				"--include-table", emptyTables[0], "--include-table", emptyTables[1])
+			assertDataRestored(restoreConn, map[string]int{"public.heap_empty": 0, "public.ao_empty": 0})
+			assertArtifactsCleaned(timestamp)
+		})
+		It("backs up and restores with --jobs", func() {
+			output := string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--leaf-partition-data", "--skip-empty-tables", "--jobs", "3"))
+			timestamp := getBackupTimestamp(output)
+			assertSkipMessages(output,
+				[]string{"public.heap_empty", "public.ao_empty", "public.aoco_empty", "public.repl_empty",
+					"public.skip_part_1_prt_2", "public.skip_part_1_prt_4"},
+				[]string{"public.heap_full", "public.heap_deleted", "public.ao_full", "public.repl_full",
+					"public.skip_part_1_prt_1", "public.skip_part_1_prt_3"})
+
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir, "--jobs", "3")
+			assertDataRestored(restoreConn, tableToTupleCount)
+
+			testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.heap_empty VALUES (1);`)
+			testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.ao_empty SELECT generate_series(1,10);`)
+			testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.skip_part VALUES (3, 15);`)
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb", "--backup-dir", backupDir, "--jobs", "3",
+				"--data-only", "--truncate-table",
+				"--include-table", "public.heap_empty", "--include-table", "public.ao_empty",
+				"--include-table", "public.skip_part")
+			assertDataRestored(restoreConn, map[string]int{
+				"public.heap_empty": 0, "public.ao_empty": 0, "public.skip_part": 2,
+				"public.skip_part_1_prt_1": 1, "public.skip_part_1_prt_2": 0,
+				"public.skip_part_1_prt_3": 1, "public.skip_part_1_prt_4": 0,
+			})
+		})
+		It("restores empty tables with --include-table and --redirect-schema", func() {
+			testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA IF EXISTS redirected CASCADE; CREATE SCHEMA redirected;")
+			DeferCleanup(func() { testhelper.AssertQueryRuns(restoreConn, "DROP SCHEMA redirected CASCADE") })
+			output := string(gpbackup(gpbackupPath, backupHelperPath, "--backup-dir", backupDir,
+				"--skip-empty-tables"))
+			timestamp := getBackupTimestamp(output)
+
+			args := []string{"--redirect-db", "restoredb", "--backup-dir", backupDir, "--redirect-schema", "redirected"}
+			redirectedTupleCount := make(map[string]int, len(tableToTupleCount))
+			for table, count := range tableToTupleCount {
+				args = append(args, "--include-table", table)
+				redirectedTupleCount["redirected."+strings.TrimPrefix(table, "public.")] = count
+			}
+			gprestore(gprestorePath, restoreHelperPath, timestamp, args...)
+			assertDataRestored(restoreConn, redirectedTupleCount)
+		})
+		DescribeTable("truncates empty tables on restore with --truncate-table",
+			func(backupFlags ...string) {
+				args := append([]string{"--backup-dir", backupDir, "--skip-empty-tables"}, backupFlags...)
+				output := string(gpbackup(gpbackupPath, backupHelperPath, args...))
+				timestamp := getBackupTimestamp(output)
+
+				gprestore(gprestorePath, restoreHelperPath, timestamp,
+					"--redirect-db", "restoredb", "--backup-dir", backupDir)
+				testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.heap_empty VALUES (1);`)
+				testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.ao_empty SELECT generate_series(1,10);`)
+				testhelper.AssertQueryRuns(restoreConn, `INSERT INTO public.heap_full VALUES (101);`)
+
+				gprestore(gprestorePath, restoreHelperPath, timestamp,
+					"--redirect-db", "restoredb", "--backup-dir", backupDir,
+					"--data-only", "--truncate-table",
+					"--include-table", "public.heap_empty", "--include-table", "public.ao_empty",
+					"--include-table", "public.heap_full")
+				assertDataRestored(restoreConn, map[string]int{
+					"public.heap_empty": 0, "public.ao_empty": 0, "public.heap_full": 100,
+				})
+			},
+			Entry("without --single-data-file", "--leaf-partition-data"),
+			Entry("with --single-data-file", "--leaf-partition-data", "--single-data-file"),
+		)
 	})
 	Describe("Report files", func() {
 		It("prints the correct end time in the report file", func() {

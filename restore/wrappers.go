@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/GreengageDB/gp-common-go-libs/cluster"
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gp-common-go-libs/iohelper"
@@ -238,9 +239,36 @@ func RecoverMetadataFilesUsingPlugin() {
 		pluginConfig.MustRestoreFile(fpInfo.GetTOCFilePath())
 		if backupConfig.SingleDataFile {
 			origSize, destSize, _, batches := GetResizeClusterInfo()
-			pluginConfig.RestoreSegmentTOCs(globalCluster, fpInfo, origSize, destSize, batches)
+			if hasOnlyEmptyDataEntries(toc.NewTOC(fpInfo.GetTOCFilePath()).DataEntries) {
+				createSegmentBackupDirectories(fpInfo, origSize, destSize)
+			} else {
+				pluginConfig.RestoreSegmentTOCs(globalCluster, fpInfo, origSize, destSize, batches)
+			}
 		}
 	}
+}
+
+// Backup starts no helpers, hence uploads no segment TOCs, if all its tables are empty.
+// RestoreSegmentTOCs creates the segment directories as a side effect, so do it here.
+func createSegmentBackupDirectories(fpInfo filepath.FilePathInfo, origSize int, destSize int) {
+	remoteOutput := globalCluster.GenerateAndExecuteCommand("Creating backup directories on segments", cluster.ON_SEGMENTS, func(contentID int) string {
+		if origSize != destSize && contentID >= origSize { // Contents that aren't part of the backup set
+			return ""
+		}
+		return fmt.Sprintf("mkdir -p %s", fpInfo.GetDirForContent(contentID))
+	})
+	globalCluster.CheckClusterError(remoteOutput, "Unable to create backup directories on segments", func(contentID int) string {
+		return fmt.Sprintf("Unable to create backup directory %s", fpInfo.GetDirForContent(contentID))
+	})
+}
+
+func hasOnlyEmptyDataEntries(entries []toc.CoordinatorDataEntry) bool {
+	for _, entry := range entries {
+		if !entry.IsEmpty {
+			return false
+		}
+	}
+	return len(entries) > 0
 }
 
 func FindHistoricalPluginVersion(timestamp string) string {

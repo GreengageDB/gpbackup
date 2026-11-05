@@ -11,6 +11,7 @@ import (
 	"github.com/GreengageDB/gpbackup/history"
 	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/pkg/errors"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -268,6 +269,91 @@ var _ = Describe("restore internal tests", func() {
 			}
 		})
 	})
+	Describe("hasOnlyEmptyDataEntries", func() {
+		It("is true if all data entries are empty", func() {
+			entries := []toc.CoordinatorDataEntry{{Oid: 1, IsEmpty: true}, {Oid: 2, IsEmpty: true}}
+			Expect(hasOnlyEmptyDataEntries(entries)).To(BeTrue())
+		})
+		It("is false if some data entry is not empty", func() {
+			entries := []toc.CoordinatorDataEntry{{Oid: 1, IsEmpty: true}, {Oid: 2}}
+			Expect(hasOnlyEmptyDataEntries(entries)).To(BeFalse())
+		})
+		It("is false if there are no data entries", func() {
+			Expect(hasOnlyEmptyDataEntries(nil)).To(BeFalse())
+		})
+	})
+	Describe("createSegmentBackupDirectories", func() {
+		var executor *testhelper.TestExecutor
+		var fpInfo filepath.FilePathInfo
+		BeforeEach(func() {
+			oldCluster := globalCluster
+			DeferCleanup(func() { globalCluster = oldCluster })
+			globalCluster = cluster.NewCluster([]cluster.SegConfig{{ContentID: -1, DataDir: "/data/gpseg-1"},
+				{ContentID: 0, DataDir: "/data/gpseg0"}, {ContentID: 1, DataDir: "/data/gpseg1"}})
+			executor = &testhelper.TestExecutor{ClusterOutput: &cluster.RemoteOutput{}}
+			globalCluster.Executor = executor
+			fpInfo = filepath.NewFilePathInfo(globalCluster, "", "20170101010101", "gpseg", false)
+		})
+		It("creates the backup directory on every segment", func() {
+			createSegmentBackupDirectories(fpInfo, 2, 2)
+
+			Expect(executor.ClusterCommands).To(HaveLen(1))
+			Expect(executor.ClusterCommands[0]).To(HaveLen(2))
+			for _, command := range executor.ClusterCommands[0] {
+				Expect(command.CommandString).To(ContainSubstring("mkdir -p " + fpInfo.GetDirForContent(command.Content)))
+			}
+		})
+		It("skips segments that are not part of the backup set on a resize restore", func() {
+			createSegmentBackupDirectories(fpInfo, 1, 2)
+
+			// the generator returns an empty command for contents outside the backup set
+			Expect(executor.ClusterCommands).To(HaveLen(1))
+			for _, command := range executor.ClusterCommands[0] {
+				if command.Content == 0 {
+					Expect(command.CommandString).To(ContainSubstring("mkdir -p"))
+				} else {
+					Expect(command.CommandString).ToNot(ContainSubstring("mkdir"))
+				}
+			}
+		})
+	})
+	Describe("restoreDataFromTimestamp", func() {
+		var localMock sqlmock.Sqlmock
+		BeforeEach(func() {
+			localConn, mock := testhelper.CreateAndConnectMockDB(1)
+			localMock = mock
+			oldConn, oldConfig, oldOpts := connectionPool, backupConfig, opts
+			connectionPool, backupConfig, opts = localConn, &history.BackupConfig{}, &options.Options{}
+			DeferCleanup(func() { connectionPool, backupConfig, opts = oldConn, oldConfig, oldOpts })
+		})
+		restoreEmptyAndFullTable := func() int32 {
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entries := []toc.CoordinatorDataEntry{
+				{Schema: "public", Name: "empty", Oid: 1, AttributeString: "(i)", IsEmpty: true},
+				{Schema: "public", Name: "full", Oid: 2, AttributeString: "(i)", RowsCopied: 10},
+			}
+			progressBar := utils.NewProgressBar(len(entries), "Tables restored: ", utils.PB_NONE)
+			progressBar.Start()
+			defer progressBar.Finish()
+			return restoreDataFromTimestamp(fpInfo, entries, []toc.StatementWithType{}, progressBar)
+		}
+		It("copies only the data of the table that is not empty", func() {
+			localMock.ExpectExec("COPY public.full").WillReturnResult(sqlmock.NewResult(0, 10))
+
+			Expect(restoreEmptyAndFullTable()).To(Equal(int32(0)))
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+		It("truncates both tables with --truncate-table but copies only the data of the table that is not empty", func() {
+			Expect(cmdFlags.Set(options.TRUNCATE_TABLE, "true")).To(Succeed())
+			DeferCleanup(func() { _ = cmdFlags.Set(options.TRUNCATE_TABLE, "false") })
+			localMock.ExpectExec("TRUNCATE public.empty").WillReturnResult(sqlmock.NewResult(0, 0))
+			localMock.ExpectExec("TRUNCATE public.full").WillReturnResult(sqlmock.NewResult(0, 0))
+			localMock.ExpectExec("COPY public.full").WillReturnResult(sqlmock.NewResult(0, 10))
+
+			Expect(restoreEmptyAndFullTable()).To(Equal(int32(0)))
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+	})
 	Describe("restoreSingleTableData", func() {
 		var localMock sqlmock.Sqlmock
 		BeforeEach(func() {
@@ -286,6 +372,23 @@ var _ = Describe("restore internal tests", func() {
 			backupConfig.SegmentCount = origSize
 			Expect(cmdFlags.Set(options.RESIZE_CLUSTER, "true")).To(Succeed())
 		}
+		It("does not run COPY for an empty table", func() {
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", IsEmpty: true}
+
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+		It("does not redistribute an empty table restored to a smaller cluster", func() {
+			resizeToTwoSegments(3)
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", IsEmpty: true}
+
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
 		It("returns the error of a failed redistribution of a table distributed by an enum", func() {
 			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
 			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", DistByEnum: true, RowsCopied: 10}

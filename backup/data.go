@@ -53,6 +53,9 @@ func AddTableDataEntriesToTOC(tables []Table, rowsCopiedMaps []map[uint32]int64)
 			}
 			attributes := ConstructTableAttributesList(table.ColumnDefs)
 			globalTOC.AddCoordinatorDataEntry(table.Schema, table.Name, table.Oid, attributes, rowsCopied, table.PartitionLevelInfo.RootName, table.DistPolicy.Policy, table.DistPolicy.DistByEnum)
+			if table.IsEmpty {
+				globalTOC.DataEntries[len(globalTOC.DataEntries)-1].IsEmpty = true
+			}
 		}
 	}
 }
@@ -422,6 +425,63 @@ func GetBackupDataSet(tables []Table) ([]Table, int64) {
 		}
 	}
 	return backupDataSet, numExtOrForeignTables
+}
+
+const emptyTablesBatchSize = 10000
+
+// MarkEmptyTables sets IsEmpty on tables whose relation size is zero on every segment.
+// Partition parents and intermediates are not checked: their own size is always zero,
+// but a COPY of a parent also reads its children.
+func MarkEmptyTables(connectionPool *dbconn.DBConn, tables []Table) {
+	candidates := make([]Table, 0, len(tables))
+	for _, table := range tables {
+		if level := table.PartitionLevelInfo.Level; level != "p" && level != "i" {
+			candidates = append(candidates, table)
+		}
+	}
+
+	// pg_relation_size is evaluated inside gp_dist_random, i.e. locally on segments:
+	// one dispatch per batch instead of one per table.
+	emptyOids := make(map[uint32]bool)
+	for start := 0; start < len(candidates); start += emptyTablesBatchSize {
+		end := start + emptyTablesBatchSize
+		if end > len(candidates) {
+			end = len(candidates)
+		}
+		oids := make([]string, 0, end-start)
+		for _, table := range candidates[start:end] {
+			oids = append(oids, fmt.Sprintf("%d", table.Oid))
+		}
+		// OFFSET 0 keeps pg_relation_size below the Redistribute Motion that the planner
+		// puts before GROUP BY; above it the size is read on the wrong segment and is 0.
+		query := fmt.Sprintf(`
+		SELECT oid
+		FROM (
+			SELECT oid, pg_relation_size(oid) AS size
+			FROM gp_dist_random('pg_class')
+			WHERE oid = ANY(ARRAY[%s]::oid[])
+			OFFSET 0
+		) s
+		GROUP BY oid
+		HAVING max(size) = 0`, strings.Join(oids, ","))
+		var batchOids []uint32
+		err := connectionPool.Select(&batchOids, query)
+		gplog.FatalOnError(err)
+		for _, oid := range batchOids {
+			emptyOids[oid] = true
+		}
+	}
+	if len(emptyOids) == 0 {
+		return
+	}
+
+	for i := range tables {
+		if emptyOids[tables[i].Oid] {
+			gplog.Verbose("Skipping data backup of table %s because it is empty.", tables[i].FQN())
+			tables[i].IsEmpty = true
+		}
+	}
+	gplog.Info("Skipping data backup of %d empty table(s)", len(emptyOids))
 }
 
 // Acquire AccessShareLock on a table with NOWAIT option. If we are unable to acquire
