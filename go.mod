@@ -9,8 +9,7 @@ require (
 	github.com/GreengageDB/gp-common-go-libs v1.0.23
 	github.com/blang/semver v3.5.1+incompatible
 	github.com/blang/vfs v1.0.0
-	github.com/jackc/pgconn v1.14.3
-	github.com/jackc/pgtype v1.14.4
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/klauspost/compress v1.15.15
 	github.com/lib/pq v1.10.9
@@ -35,18 +34,12 @@ require (
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/pprof v0.0.0-20240424215950-a892ee059fd6 // indirect
 	github.com/inconshreveable/mousetrap v1.0.1 // indirect
-	github.com/jackc/chunkreader/v2 v2.0.1 // indirect
-	github.com/jackc/pgio v1.0.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
-	github.com/jackc/pgproto3/v2 v2.3.3 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v4 v4.18.3 // indirect
-	github.com/jackc/pgx/v5 v5.12.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-runewidth v0.0.13 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect

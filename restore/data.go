@@ -6,6 +6,7 @@ package restore
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -17,7 +18,7 @@ import (
 	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/toc"
 	"github.com/GreengageDB/gpbackup/utils"
-	"github.com/jackc/pgconn"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pkg/errors"
 	"gopkg.in/cheggaaa/pb.v1"
 )
@@ -64,7 +65,8 @@ func CopyTableIn(queryContext context.Context, connectionPool *dbconn.DBConn, ta
 		errStr := fmt.Sprintf("Error loading data into table %s", tableName)
 
 		// The COPY ON SEGMENT error might contain useful CONTEXT output
-		if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Where != "" {
+		var pgErr *pgconn.PgError
+		if stderrors.As(err, &pgErr) && pgErr.Where != "" {
 			errStr = fmt.Sprintf("%s: %s", errStr, pgErr.Where)
 		}
 

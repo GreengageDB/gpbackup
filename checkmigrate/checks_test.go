@@ -356,7 +356,9 @@ func TestSourceChecksBindExcludedSchemas(t *testing.T) {
 		excludedSchemaNames []string
 		expectedArgument    string
 	}{
-		{name: "listed schemas", excludedSchemaNames: []string{"madlib", "arenadata_toolkit"}, expectedArgument: "{madlib,arenadata_toolkit}"},
+		// pq.StringArray quotes every element of the text[] literal, which the
+		// server accepts the same as the bare names pgtype.TextArray wrote.
+		{name: "listed schemas", excludedSchemaNames: []string{"madlib", "arenadata_toolkit"}, expectedArgument: `{"madlib","arenadata_toolkit"}`},
 		{name: "no schemas", excludedSchemaNames: nil, expectedArgument: "{}"},
 	}
 	requiredLibraryCase := sourceCheckTestCase{

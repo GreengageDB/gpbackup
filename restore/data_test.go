@@ -15,7 +15,7 @@ import (
 	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/restore"
 	"github.com/GreengageDB/gpbackup/utils"
-	"github.com/jackc/pgconn"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

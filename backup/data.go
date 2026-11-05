@@ -17,7 +17,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/utils"
-	"github.com/jackc/pgconn"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gopkg.in/cheggaaa/pb.v1"
 )
 
@@ -244,7 +244,8 @@ func BackupDataForAllTables(tables []Table) []map[uint32]int64 {
 				// tables before the metadata dumping part.
 				err := LockTableNoWait(table, whichConn)
 				if err != nil {
-					if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code != PG_LOCK_NOT_AVAILABLE {
+					var pgErr *pgconn.PgError
+					if errors.As(err, &pgErr) && pgErr.Code != PG_LOCK_NOT_AVAILABLE {
 						isErroredBackup.Store(true)
 						err = connectionPool.Rollback(whichConn)
 						if err != nil {
