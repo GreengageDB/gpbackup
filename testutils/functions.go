@@ -103,9 +103,13 @@ func SetupTestDBConnSegment(dbname string, port int, host string, gpVersion dbco
 		gpRoleGuc = "gp_role"
 	}
 
-	connStr := fmt.Sprintf("postgres://%s@%s:%d/%s?sslmode=disable&statement_cache_capacity=0&%s=utility", conn.User, conn.Host, conn.Port, conn.DBName, gpRoleGuc)
+	// The pgx caches stay off here for the reason dbconn.Connect turns them
+	// off, see the comment there. pgx/v5 rejects every query in its default
+	// cache_statement mode once the statement cache is disabled, so ask for
+	// describe_exec, which prepares an unnamed statement per query.
+	connStr := fmt.Sprintf("postgres://%s@%s:%d/%s?sslmode=disable&statement_cache_capacity=0&description_cache_capacity=0&default_query_exec_mode=describe_exec&%s=utility", conn.User, conn.Host, conn.Port, conn.DBName, gpRoleGuc)
 
-	segConn, err := conn.Driver.Connect("pgx", connStr)
+	segConn, err := conn.Driver.Connect(dbconn.DriverName, connStr)
 	if err != nil {
 		gplog.FatalOnError(err)
 	}

@@ -706,6 +706,16 @@ func end_to_end_setup() {
 
 func end_to_end_teardown() {
 	_ = os.RemoveAll(backupDir)
+	// Release a transaction a failed spec left open, so that its locks do not
+	// block the following specs and MustBegin does not abort the whole suite
+	// on the next spec that takes a lock. Both calls fail harmlessly when
+	// there is no transaction in progress.
+	if backupConn != nil {
+		_ = backupConn.Rollback()
+	}
+	if restoreConn != nil {
+		_ = restoreConn.Rollback()
+	}
 }
 
 var _ = Describe("backup and restore end to end tests", func() {
@@ -892,8 +902,8 @@ var _ = Describe("backup and restore end to end tests", func() {
 			timestamp := getBackupTimestamp(string(output))
 			gprestore(gprestorePath, restoreHelperPath, timestamp,
 				"--redirect-db", "restoredb", "--metadata-only")
-			restoreConn.MustExec(
-				"BEGIN; LOCK TABLE public.t IN ACCESS EXCLUSIVE MODE")
+			restoreConn.MustBegin()
+			restoreConn.MustExec("LOCK TABLE public.t IN ACCESS EXCLUSIVE MODE")
 			var backWg sync.WaitGroup
 			errchan := make(chan error, 2)
 			backWg.Add(1)
@@ -911,7 +921,7 @@ var _ = Describe("backup and restore end to end tests", func() {
 					"--redirect-db", "restoredb", "--data-only",
 					"--exclude-table", "public.t")
 				_, err := cmd.CombinedOutput()
-				restoreConn.MustExec("COMMIT")
+				restoreConn.MustCommit()
 				errchan <- err
 			}()
 			backWg.Wait()
@@ -2775,7 +2785,8 @@ LANGUAGE plpgsql NO SQL;`)
 					Skip("This test is not needed for old backup versions")
 				}
 				// Block on pg_trigger, which gpbackup queries after gp_segment_configuration
-				backupConn.MustExec("BEGIN; LOCK TABLE pg_trigger IN ACCESS EXCLUSIVE MODE")
+				backupConn.MustBegin()
+				backupConn.MustExec("LOCK TABLE pg_trigger IN ACCESS EXCLUSIVE MODE")
 
 				args := []string{
 					"--dbname", "testdb",
@@ -2783,7 +2794,7 @@ LANGUAGE plpgsql NO SQL;`)
 					"--verbose"}
 				cmd := exec.Command(gpbackupPath, args...)
 
-				backupConn.MustExec("COMMIT")
+				backupConn.MustCommit()
 				anotherConn := testutils.SetupTestDbConn("testdb")
 				defer anotherConn.Close()
 				var lockCount int

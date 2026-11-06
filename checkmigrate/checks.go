@@ -9,7 +9,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gpbackup/utils"
-	"github.com/jackc/pgtype"
+	"github.com/lib/pq"
 )
 
 //go:embed sql/migration_check_setup.sql
@@ -176,12 +176,14 @@ func writeObjectFinding(
 }
 
 func selectWithExcludedSchemas(connection *dbconn.DBConn, destination interface{}, query string) error {
-	excludedSchemaArgument := pgtype.TextArray{}
-	if setError := excludedSchemaArgument.Set(append([]string{}, excludedSchemaNames...)); setError != nil {
-		return fmt.Errorf("converting excluded schemas failed with %w", setError)
-	}
-
-	return connection.SelectWithArgs(destination, query, excludedSchemaArgument)
+	// pq.StringArray formats the names as the text[] literal the queries cast
+	// the argument to. It is a driver.Valuer, unlike a plain []string, which
+	// database/sql rejects before it reaches the driver.
+	//
+	// The copy is what makes a nil slice an empty one: pq.StringArray sends a
+	// nil as NULL, and "<> ALL(NULL)" is NULL rather than true, so every check
+	// would find nothing at all when no schema is excluded.
+	return connection.SelectWithArgs(destination, query, pq.StringArray(append([]string{}, excludedSchemaNames...)))
 }
 
 func logFindingOutput(output *strings.Builder) {
