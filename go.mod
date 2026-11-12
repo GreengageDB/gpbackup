@@ -6,7 +6,7 @@ toolchain go1.26.10
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/GreengageDB/gp-common-go-libs v1.0.23
+	github.com/GreengageDB/gp-common-go-libs v1.0.24
 	github.com/blang/semver v3.5.1+incompatible
 	github.com/blang/vfs v1.0.0
 	github.com/jackc/pgx/v5 v5.13.0
@@ -47,5 +47,3 @@ require (
 	golang.org/x/text v0.43.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/GreengageDB/gp-common-go-libs => github.com/GreengageDB/gp-common-go-libs v1.0.24-0.20261112065906-a7162f26c4b5
