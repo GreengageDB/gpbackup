@@ -176,13 +176,6 @@ func writeObjectFinding(
 }
 
 func selectWithExcludedSchemas(connection *dbconn.DBConn, destination interface{}, query string) error {
-	// pq.StringArray formats the names as the text[] literal the queries cast
-	// the argument to. It is a driver.Valuer, unlike a plain []string, which
-	// database/sql rejects before it reaches the driver.
-	//
-	// The copy is what makes a nil slice an empty one: pq.StringArray sends a
-	// nil as NULL, and "<> ALL(NULL)" is NULL rather than true, so every check
-	// would find nothing at all when no schema is excluded.
 	return connection.SelectWithArgs(destination, query, pq.StringArray(append([]string{}, excludedSchemaNames...)))
 }
 

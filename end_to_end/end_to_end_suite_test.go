@@ -706,16 +706,6 @@ func end_to_end_setup() {
 
 func end_to_end_teardown() {
 	_ = os.RemoveAll(backupDir)
-	// Release a transaction a failed spec left open, so that its locks do not
-	// block the following specs and MustBegin does not abort the whole suite
-	// on the next spec that takes a lock. Both calls fail harmlessly when
-	// there is no transaction in progress.
-	if backupConn != nil {
-		_ = backupConn.Rollback()
-	}
-	if restoreConn != nil {
-		_ = restoreConn.Rollback()
-	}
 }
 
 var _ = Describe("backup and restore end to end tests", func() {
