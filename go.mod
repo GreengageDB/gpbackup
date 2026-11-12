@@ -9,7 +9,7 @@ require (
 	github.com/GreengageDB/gp-common-go-libs v1.0.23
 	github.com/blang/semver v3.5.1+incompatible
 	github.com/blang/vfs v1.0.0
-	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/klauspost/compress v1.15.15
 	github.com/lib/pq v1.10.9
@@ -48,4 +48,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/GreengageDB/gp-common-go-libs => github.com/GreengageDB/gp-common-go-libs v1.0.24-0.20261105084449-21db9167919c
+replace github.com/GreengageDB/gp-common-go-libs => github.com/GreengageDB/gp-common-go-libs v1.0.24-0.20261112065906-a7162f26c4b5
