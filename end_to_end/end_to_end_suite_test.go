@@ -3363,7 +3363,7 @@ LANGUAGE plpgsql NO SQL;`)
 			output, err := gprestoreCmd.CombinedOutput()
 			Expect(err).To(HaveOccurred())
 			Expect(string(output)).To(MatchRegexp(`Error loading data into table public.t1: COPY t1, line \d+, column i: "\d+": ERROR: value "\d+" is out of range for type smallint`))
-			Expect(string(output)).To(ContainSubstring(`Error loading data into table public.t2: timeout: context canceled`))
+			Expect(string(output)).To(ContainSubstring(`Error loading data into table public.t2: context canceled`))
 			assertDataRestored(restoreConn, map[string]int{
 				"public.t0": 0,
 				"public.t1": 0,
