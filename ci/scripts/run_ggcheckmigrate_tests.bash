@@ -60,7 +60,7 @@ docker exec \
   '
 
 docker exec "${source_container}" bash -lc '
-  wget https://golang.org/dl/go1.20.5.linux-amd64.tar.gz -q -O - | tar -C /opt -xz
+  wget https://golang.org/dl/go1.26.10.linux-amd64.tar.gz -q -O - | tar -C /opt -xz
 '
 docker exec --user gpadmin "${source_container}" bash -lc '
   source /usr/local/greengage-db-devel/greengage_path.sh

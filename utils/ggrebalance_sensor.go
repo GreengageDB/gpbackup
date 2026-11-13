@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -60,7 +59,7 @@ func (sensor *GgrebalanceSensor) IsRunning() (bool, error) {
 		// check ggrebalance schema
 		schemaCheck, err := dbconn.SelectInt(sensor.postgresConn, GgrebalanceCheckSchemaQuery)
 		if err != nil {
-			gplog.Error(fmt.Sprintf("Error encountered retrieving ggrebalance schema status: %v", err))
+			gplog.Error("Error encountered retrieving ggrebalance schema status: %v", err)
 			return false, err
 		}
 		if schemaCheck <= 0 {
@@ -71,7 +70,7 @@ func (sensor *GgrebalanceSensor) IsRunning() (bool, error) {
 		// and check latest state
 		latestState, err := dbconn.SelectString(sensor.postgresConn, GgrebalanceGetLatestStateQuery)
 		if err != nil {
-			gplog.Error(fmt.Sprintf("Error encountered retrieving ggrebalance state status: %v", err))
+			gplog.Error("Error encountered retrieving ggrebalance state status: %v", err)
 			return false, err
 		}
 		if latestState == "STATE_EXECUTOR_DONE" {

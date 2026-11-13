@@ -122,11 +122,11 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 		partialRowsRestored, copyErr := CopyTableIn(queryContext, connectionPool, tableName, entry.AttributeString, destinationToRead, backupConfig.SingleDataFile, whichConn, errorFile)
 
 		if copyErr != nil {
-			gplog.Error(copyErr.Error())
+			gplog.Error("%s", copyErr.Error())
 			if backupConfig.SingleDataFile || resizeCluster {
 				agentErr := checkAgentErrors(*fpInfo, helperIdx)
 				if agentErr != nil {
-					gplog.Error(agentErr.Error())
+					gplog.Error("%s", agentErr.Error())
 					return agentErr
 				}
 			}
@@ -153,7 +153,7 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 
 	err := CheckRowsRestored(numRowsRestored, numRowsBackedUp, tableName)
 	if err != nil {
-		gplog.Error(err.Error())
+		gplog.Error("%s", err.Error())
 		/*
 		 * A helper that stops during the COPY closes its pipe after it creates its
 		 * error file, so that the COPY may end without an error and with fewer rows.
@@ -162,7 +162,7 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 		 */
 		if backupConfig.SingleDataFile || resizeCluster {
 			if agentErr := checkAgentErrors(*fpInfo, helperIdx); agentErr != nil {
-				gplog.Error(agentErr.Error())
+				gplog.Error("%s", agentErr.Error())
 				return agentErr
 			}
 		}
@@ -184,7 +184,7 @@ func restoreSingleTableData(queryContext context.Context, fpInfo *filepath.FileP
 			}
 		}
 		if err != nil {
-			gplog.Error(err.Error())
+			gplog.Error("%s", err.Error())
 			return err
 		}
 	}
@@ -415,7 +415,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 				}
 				groups.TurnDone(entryIdx)
 				if err != nil {
-					gplog.Error(err.Error())
+					gplog.Error("%s", err.Error())
 					// The COPY of the table is not run, so its helpers are told to skip it
 					if onErrorContinue && connectionPool.Version.AtLeast("6") && (backupConfig.SingleDataFile || resizeCluster) {
 						utils.CreateSkipFileOnSegments(entry.Oid, tableName, globalCluster, fpInfo, helperIdx...)
@@ -428,7 +428,7 @@ func restoreDataFromTimestamp(fpInfo filepath.FilePathInfo, dataEntries []toc.Co
 					if err == nil {
 						err = connectionPool.Commit(whichConn)
 						if err != nil {
-							gplog.Error(err.Error())
+							gplog.Error("%s", err.Error())
 						}
 					} else {
 						// No rows of the table are left behind

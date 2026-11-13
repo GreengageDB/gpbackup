@@ -25,7 +25,7 @@ fi
 gpdb_src/concourse/scripts/setup_gpadmin_user.bash
 make_cluster
 
-wget https://golang.org/dl/go1.20.5.linux-amd64.tar.gz -q -O - | tar -C /opt -xz;
+wget https://golang.org/dl/go1.26.10.linux-amd64.tar.gz -q -O - | tar -C /opt -xz;
 
 su - gpadmin -c "
 set -eo pipefail
