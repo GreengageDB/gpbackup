@@ -43,7 +43,12 @@ var _ = Describe("Deadlock handling", func() {
 		// beginning of the test) to unblock gpbackup and let gpbackup move forward to the trigger metadata dump.
 		anotherConn := testutils.SetupTestDbConn("testdb")
 		defer anotherConn.Close()
+		// Closed once anotherConn has begun its transaction, so that the goroutine committing
+		// it cannot run ahead of the one that begins it
+		triggerLocked := make(chan struct{})
 		go func() {
+			defer close(triggerLocked)
+
 			// Query to see if gpbackup's AccessShareLock request on public.foo is blocked
 			checkLockQuery := `SELECT count(*) FROM pg_locks l, pg_class c, pg_namespace n WHERE l.relation = c.oid AND n.oid = c.relnamespace AND n.nspname = 'public' AND c.relname = 'foo' AND l.granted = 'f' AND l.mode = 'AccessShareLock'`
 
@@ -106,6 +111,8 @@ var _ = Describe("Deadlock handling", func() {
 		// gpbackup and let gpbackup move forward to the data dump section.
 		var accessExclBlockedLockCount int
 		go func() {
+			<-triggerLocked
+
 			// Query to check for ungranted AccessExclusiveLock requests on our test tables
 			checkLockQuery := `SELECT count(*) FROM pg_locks WHERE granted = 'f' AND mode = 'AccessExclusiveLock'`
 
@@ -175,7 +182,12 @@ var _ = Describe("Deadlock handling", func() {
 		// beginning of the test) to unblock gpbackup and let gpbackup move forward to the trigger metadata dump.
 		anotherConn := testutils.SetupTestDbConn("testdb")
 		defer anotherConn.Close()
+		// Closed once anotherConn has begun its transaction, so that the goroutine committing
+		// it cannot run ahead of the one that begins it
+		triggerLocked := make(chan struct{})
 		go func() {
+			defer close(triggerLocked)
+
 			// Query to see if gpbackup's AccessShareLock request on public.foo is blocked
 			checkLockQuery := `SELECT count(*) FROM pg_locks l, pg_class c, pg_namespace n WHERE l.relation = c.oid AND n.oid = c.relnamespace AND n.nspname = 'public' AND c.relname = 'foo' AND l.granted = 'f' AND l.mode = 'AccessShareLock'`
 
@@ -238,6 +250,8 @@ var _ = Describe("Deadlock handling", func() {
 		// gpbackup and let gpbackup move forward to the data dump section.
 		var accessExclBlockedLockCount int
 		go func() {
+			<-triggerLocked
+
 			// Query to check for ungranted AccessExclusiveLock requests on our test tables
 			checkLockQuery := `SELECT count(*) FROM pg_locks WHERE granted = 'f' AND mode = 'AccessExclusiveLock'`
 
@@ -309,7 +323,12 @@ var _ = Describe("Deadlock handling", func() {
 		// beginning of the test) to unblock gpbackup and let gpbackup move forward to the trigger metadata dump.
 		anotherConn := testutils.SetupTestDbConn("testdb")
 		defer anotherConn.Close()
+		// Closed once anotherConn has begun its transaction, so that the goroutine committing
+		// it cannot run ahead of the one that begins it
+		triggerLocked := make(chan struct{})
 		go func() {
+			defer close(triggerLocked)
+
 			// Query to see if gpbackup's AccessShareLock request on public.foo is blocked
 			checkLockQuery := `SELECT count(*) FROM pg_locks l, pg_class c, pg_namespace n WHERE l.relation = c.oid AND n.oid = c.relnamespace AND n.nspname = 'public' AND c.relname = 'foo' AND l.granted = 'f' AND l.mode = 'AccessShareLock'`
 
@@ -372,6 +391,8 @@ var _ = Describe("Deadlock handling", func() {
 		// gpbackup and let gpbackup move forward to the data dump section.
 		var accessExclBlockedLockCount int
 		go func() {
+			<-triggerLocked
+
 			// Query to check for ungranted AccessExclusiveLock requests on our test tables
 			checkLockQuery := `SELECT count(*) FROM pg_locks WHERE granted = 'f' AND mode = 'AccessExclusiveLock'`
 

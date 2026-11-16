@@ -706,6 +706,9 @@ func end_to_end_setup() {
 
 func end_to_end_teardown() {
 	_ = os.RemoveAll(backupDir)
+	// Release a transaction a failed spec left open on a shared connection
+	_ = backupConn.Rollback()
+	_ = restoreConn.Rollback()
 }
 
 var _ = Describe("backup and restore end to end tests", func() {
