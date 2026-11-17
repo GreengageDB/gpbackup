@@ -9,7 +9,7 @@ import (
 	"github.com/GreengageDB/gp-common-go-libs/dbconn"
 	"github.com/GreengageDB/gp-common-go-libs/gplog"
 	"github.com/GreengageDB/gpbackup/utils"
-	"github.com/jackc/pgtype"
+	"github.com/lib/pq"
 )
 
 //go:embed sql/migration_check_setup.sql
@@ -176,12 +176,7 @@ func writeObjectFinding(
 }
 
 func selectWithExcludedSchemas(connection *dbconn.DBConn, destination interface{}, query string) error {
-	excludedSchemaArgument := pgtype.TextArray{}
-	if setError := excludedSchemaArgument.Set(append([]string{}, excludedSchemaNames...)); setError != nil {
-		return fmt.Errorf("converting excluded schemas failed with %w", setError)
-	}
-
-	return connection.SelectWithArgs(destination, query, excludedSchemaArgument)
+	return connection.SelectWithArgs(destination, query, pq.StringArray(append([]string{}, excludedSchemaNames...)))
 }
 
 func logFindingOutput(output *strings.Builder) {
