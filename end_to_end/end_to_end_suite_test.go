@@ -2108,8 +2108,15 @@ var _ = Describe("backup and restore end to end tests", func() {
 			// The session has read the first table, so that the TRUNCATE of the first table waits for it
 			readerConn := testutils.SetupTestDbConn("testdb")
 			defer readerConn.Close()
-			readerConn.MustExec("SET statement_timeout = '10s'")
-			readerConn.MustExec("BEGIN; LOCK TABLE truncate_reader.first IN ACCESS SHARE MODE")
+			readerConn.MustBegin()
+			readerConn.MustExec("LOCK TABLE truncate_reader.first IN ACCESS SHARE MODE")
+			// Poll pg_locks and read the second table on a separate connection: the transaction
+			// pins readerConn's only connection, and checking it out to poll would discard it
+			// and end the transaction (pgx/v5 discards connections that are left inside a
+			// transaction when they are reused)
+			watchConn := testutils.SetupTestDbConn("testdb")
+			defer watchConn.Close()
+			watchConn.MustExec("SET statement_timeout = '10s'")
 			restoreCmd := exec.Command(gprestorePath,
 				"--timestamp", timestamp,
 				"--backup-dir", backupDir,
@@ -2122,17 +2129,18 @@ var _ = Describe("backup and restore end to end tests", func() {
 				WHERE n.nspname = 'truncate_reader' AND c.relname = 'first' AND l.mode = 'AccessExclusiveLock' AND NOT l.granted`
 			Eventually(func() int {
 				var numWaiting int
-				_ = readerConn.Get(&numWaiting, truncateWaitsQuery)
+				_ = watchConn.Get(&numWaiting, truncateWaitsQuery)
 				return numWaiting
 			}, "30s", "100ms").Should(BeNumerically(">", 0))
 			// Long enough for the other connection to truncate the second table if it went ahead
 			time.Sleep(time.Second)
 
-			// The second table is not locked until the first is truncated, so the session can read it and end
+			// The second table is not locked until the first is truncated, so it can be read
+			// while the first table still waits
 			var numRows int
-			Expect(readerConn.Get(&numRows, "SELECT count(*) FROM truncate_reader.second")).To(Succeed())
+			Expect(watchConn.Get(&numRows, "SELECT count(*) FROM truncate_reader.second")).To(Succeed())
 			Expect(numRows).To(Equal(1000))
-			readerConn.MustExec("COMMIT")
+			readerConn.MustCommit()
 			Expect(restoreCmd.Wait()).To(Succeed())
 			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM truncate_reader.first")).To(Equal("1000"))
 			Expect(dbconn.MustSelectString(backupConn, "SELECT count(*) AS string FROM truncate_reader.second")).To(Equal("1000"))

@@ -481,10 +481,16 @@ var _ = Describe("Deadlock handling", func() {
 
 		anotherConn := testutils.SetupTestDbConn("testdb")
 		defer anotherConn.Close()
+		// anotherConn later holds its pg_trigger transaction, so poll pg_locks on a separate
+		// connection: the transaction pins anotherConn's only connection, and checking it out
+		// to poll would discard it and end the transaction (pgx/v5 discards connections that
+		// are left inside a transaction when they are reused)
+		pollConn := testutils.SetupTestDbConn("testdb")
+		defer pollConn.Close()
 		waitForCount := func(query string, count int) {
 			var actual int
 			for iterations := 0; iterations < 300; iterations++ {
-				_ = anotherConn.Get(&actual, query)
+				_ = pollConn.Get(&actual, query)
 				if actual >= count {
 					return
 				}
@@ -498,13 +504,14 @@ var _ = Describe("Deadlock handling", func() {
 		}
 
 		// Block gpbackup while it locks the tables, then in its metadata dump
-		backupConn.MustExec("BEGIN; LOCK TABLE pipe_test.t1 IN ACCESS EXCLUSIVE MODE")
+		backupConn.MustBegin()
+		backupConn.MustExec("LOCK TABLE pipe_test.t1 IN ACCESS EXCLUSIVE MODE")
 		// On a failure, the shared connection does not keep its transaction for the next tests,
 		// nor the DROP of the schema above in it
 		committed := false
 		defer func() {
 			if !committed {
-				_, _ = backupConn.Exec("COMMIT")
+				_ = backupConn.Rollback()
 			}
 		}()
 		cmd := exec.Command(gpbackupPath, "--dbname", "testdb", "--backup-dir", backupDir,
@@ -531,8 +538,9 @@ var _ = Describe("Deadlock handling", func() {
 			}
 		}()
 		waitForCount(ungrantedLocks("t1", "AccessShareLock"), 1)
-		anotherConn.MustExec("BEGIN; LOCK TABLE pg_catalog.pg_trigger IN ACCESS EXCLUSIVE MODE")
-		backupConn.MustExec("COMMIT")
+		anotherConn.MustBegin()
+		anotherConn.MustExec("LOCK TABLE pg_catalog.pg_trigger IN ACCESS EXCLUSIVE MODE")
+		backupConn.MustCommit()
 		committed = true
 		waitForCount(ungrantedLocks("pg_trigger", "AccessShareLock"), 1)
 
@@ -547,7 +555,7 @@ var _ = Describe("Deadlock handling", func() {
 			}(i)
 		}
 		waitForCount(`SELECT count(*) FROM pg_locks WHERE locktype = 'relation' AND mode = 'AccessExclusiveLock' AND NOT granted`, 3)
-		anotherConn.MustExec("COMMIT")
+		anotherConn.MustCommit()
 
 		stdout := <-output
 		outputRead = true
