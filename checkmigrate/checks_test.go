@@ -356,7 +356,7 @@ func TestSourceChecksBindExcludedSchemas(t *testing.T) {
 		excludedSchemaNames []string
 		expectedArgument    string
 	}{
-		{name: "listed schemas", excludedSchemaNames: []string{"madlib", "arenadata_toolkit"}, expectedArgument: "{madlib,arenadata_toolkit}"},
+		{name: "listed schemas", excludedSchemaNames: []string{"madlib", "arenadata_toolkit"}, expectedArgument: `{"madlib","arenadata_toolkit"}`},
 		{name: "no schemas", excludedSchemaNames: nil, expectedArgument: "{}"},
 	}
 	requiredLibraryCase := sourceCheckTestCase{
