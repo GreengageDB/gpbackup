@@ -1,8 +1,6 @@
 module github.com/GreengageDB/gpbackup
 
-go 1.26.9
-
-toolchain go1.26.10
+go 1.26.11
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -11,7 +9,7 @@ require (
 	github.com/blang/vfs v1.0.0
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/klauspost/compress v1.15.15
+	github.com/klauspost/compress v1.20.4
 	github.com/lib/pq v1.10.9
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/nightlyone/lockfile v1.0.0
