@@ -68,12 +68,34 @@ func SetLoggerVerbosity() {
 
 func CreateConnectionPool(unquotedDBName string) {
 	connectionPool = dbconn.NewDBConnFromEnvironment(unquotedDBName)
-	if FlagChanged(options.COPY_QUEUE_SIZE) {
-		connectionPool.MustConnect(MustGetFlagInt(options.COPY_QUEUE_SIZE))
-	} else {
-		connectionPool.MustConnect(MustGetFlagInt(options.JOBS))
-	}
+	connectionPool.MustConnect(GetNumConnections())
 	utils.ValidateGPDBVersionCompatibility(connectionPool)
+}
+
+/*
+ * GetNumConnections returns the number of connections to open.  A backup taken
+ * with --single-data-file is restored by --jobs groups of --copy-queue-size
+ * connections, each group restoring one data file at a time.
+ */
+func GetNumConnections() int {
+	if backupConfig != nil && backupConfig.SingleDataFile && FlagChanged(options.COPY_QUEUE_SIZE) {
+		return MustGetFlagInt(options.JOBS) * MustGetFlagInt(options.COPY_QUEUE_SIZE)
+	} else if FlagChanged(options.COPY_QUEUE_SIZE) {
+		return MustGetFlagInt(options.COPY_QUEUE_SIZE)
+	}
+	return MustGetFlagInt(options.JOBS)
+}
+
+/*
+ * GetNumMetadataConns returns the number of connections that restore the metadata
+ * and run ANALYZE in parallel: --jobs of them, without the connections that
+ * --copy-queue-size adds for the data of each of the --jobs groups.
+ */
+func GetNumMetadataConns() int {
+	if FlagChanged(options.JOBS) && MustGetFlagInt(options.JOBS) < connectionPool.NumConns {
+		return MustGetFlagInt(options.JOBS)
+	}
+	return connectionPool.NumConns
 }
 
 func InitializeConnectionPool(backupTimestamp string, restoreTimestamp string, unquotedDBName string) {
@@ -238,7 +260,13 @@ func RecoverMetadataFilesUsingPlugin() {
 		pluginConfig.MustRestoreFile(fpInfo.GetTOCFilePath())
 		if backupConfig.SingleDataFile {
 			origSize, destSize, _, batches := GetResizeClusterInfo()
-			pluginConfig.RestoreSegmentTOCs(globalCluster, fpInfo, origSize, destSize, batches)
+			numDataFiles := backupConfig.SingleDataFileCount
+			if backupConfig.Incremental {
+				// Each backup of an incremental chain may have its own number of data files,
+				// which for the earlier backups of the chain only their TOCs record
+				numDataFiles = toc.GetNumDataFiles(toc.NewTOC(fpInfo.GetTOCFilePath()).DataEntries)
+			}
+			pluginConfig.RestoreSegmentTOCs(globalCluster, fpInfo, origSize, destSize, batches, numDataFiles)
 		}
 	}
 }
@@ -402,6 +430,31 @@ func GetExistingTableFQNs() ([]string, error) {
 
 	err := connectionPool.Select(&existingTableFQNs, query)
 	return existingTableFQNs, err
+}
+
+/*
+ * GetPartitionAncestorFQNs returns the ancestors of each partition of the database,
+ * on GPDB 7, where the COPY into a partition locks all its ancestors.
+ */
+func GetPartitionAncestorFQNs() (map[string][]string, error) {
+	partitionAncestors := make([]struct {
+		Partition string
+		Ancestor  string
+	}, 0)
+	query := `SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS partition,
+			quote_ident(an.nspname) || '.' || quote_ident(a.relname) AS ancestor
+		  FROM pg_catalog.pg_class c
+			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			CROSS JOIN LATERAL pg_catalog.pg_partition_ancestors(c.oid) AS anc
+			JOIN pg_catalog.pg_class a ON a.oid = anc.relid
+			JOIN pg_catalog.pg_namespace an ON an.oid = a.relnamespace
+		  WHERE c.relispartition AND anc.relid <> c.oid;`
+	err := connectionPool.Select(&partitionAncestors, query)
+	ancestorsOfPartition := make(map[string][]string)
+	for _, row := range partitionAncestors {
+		ancestorsOfPartition[row.Partition] = append(ancestorsOfPartition[row.Partition], row.Ancestor)
+	}
+	return ancestorsOfPartition, err
 }
 
 func GetExistingSchemas() ([]string, error) {

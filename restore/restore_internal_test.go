@@ -11,6 +11,7 @@ import (
 	"github.com/GreengageDB/gpbackup/history"
 	"github.com/GreengageDB/gpbackup/options"
 	"github.com/GreengageDB/gpbackup/toc"
+	"github.com/GreengageDB/gpbackup/utils"
 	"github.com/pkg/errors"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -277,6 +278,41 @@ var _ = Describe("restore internal tests", func() {
 			connectionPool, backupConfig = localConn, &history.BackupConfig{}
 			DeferCleanup(func() { connectionPool, backupConfig = oldConn, oldConfig })
 		})
+		It("returns the error of a failed COPY into a table distributed by an enum when the setting cannot be reset", func() {
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", DistByEnum: true}
+			localMock.ExpectExec("SET gp_enable_segment_copy_checking TO off").WillReturnResult(sqlmock.NewResult(0, 0))
+			localMock.ExpectExec("COPY public.foo").WillReturnError(errors.New("invalid input value for enum"))
+			// The transaction of the COPY, with --single-data-file, is aborted then
+			localMock.ExpectExec("RESET gp_enable_segment_copy_checking").WillReturnError(errors.New("current transaction is aborted"))
+
+			var err error
+			copyDone := false
+			Expect(func() {
+				err = restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() { copyDone = true })
+			}).ToNot(Panic())
+			Expect(err).To(MatchError(ContainSubstring("invalid input value for enum")))
+			// The caller records the end of a failed COPY once its skip file is created
+			Expect(copyDone).To(BeFalse())
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+		It("records the end of the COPY of a table distributed by an enum before its redistribution", func() {
+			fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+			entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", DistByEnum: true, RowsCopied: 10}
+			localMock.ExpectExec("SET gp_enable_segment_copy_checking TO off").WillReturnResult(sqlmock.NewResult(0, 0))
+			localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 10))
+			localMock.ExpectExec(`ALTER TABLE public.foo SET WITH \(REORGANIZE=true\)`).WillReturnResult(sqlmock.NewResult(0, 0))
+			localMock.ExpectExec("RESET gp_enable_segment_copy_checking").WillReturnResult(sqlmock.NewResult(0, 0))
+
+			// The end of the COPY is recorded before the redistribution, which may take long
+			var unmetAtCopyDone error
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() {
+				unmetAtCopyDone = localMock.ExpectationsWereMet()
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(unmetAtCopyDone).To(MatchError(ContainSubstring("ALTER TABLE public.foo")))
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
 		// Restores a backup of origSize segments with --resize-cluster to a cluster of 2 segments
 		resizeToTwoSegments := func(origSize int) {
 			oldCluster := globalCluster
@@ -294,7 +330,7 @@ var _ = Describe("restore internal tests", func() {
 			localMock.ExpectExec(`ALTER TABLE public.foo SET WITH \(REORGANIZE=true\)`).WillReturnError(errors.New("out of memory"))
 			localMock.ExpectExec("RESET gp_enable_segment_copy_checking").WillReturnResult(sqlmock.NewResult(0, 0))
 
-			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0)
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() {})
 			Expect(err).To(MatchError("Error redistributing table public.foo: out of memory"))
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
@@ -307,7 +343,7 @@ var _ = Describe("restore internal tests", func() {
 			localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 4))
 			localMock.ExpectExec(`ALTER TABLE public.foo SET WITH \(REORGANIZE=true\)`).WillReturnError(errors.New("out of memory"))
 
-			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0)
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() {})
 			Expect(err).To(MatchError("Error redistributing table public.foo: out of memory"))
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
 		})
@@ -319,9 +355,121 @@ var _ = Describe("restore internal tests", func() {
 			localMock.ExpectExec("UPDATE gp_distribution_policy SET numsegments=1").WillReturnResult(sqlmock.NewResult(0, 1))
 			localMock.ExpectExec("ALTER TABLE public.foo EXPAND TABLE").WillReturnError(errors.New("out of memory"))
 
-			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0)
+			err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() {})
 			Expect(err).To(MatchError("Error expanding replicated table public.foo: out of memory"))
 			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+		Describe("a COPY from a single data file that ends with fewer rows", func() {
+			var testExecutor *testhelper.TestExecutor
+			BeforeEach(func() {
+				backupConfig = &history.BackupConfig{SingleDataFile: true}
+				testExecutor = &testhelper.TestExecutor{}
+				oldCluster := globalCluster
+				globalCluster = cluster.NewCluster([]cluster.SegConfig{
+					{ContentID: -1, Hostname: "localhost", DataDir: "/data/gpseg-1"},
+					{ContentID: 0, Hostname: "localhost", DataDir: "/data/gpseg0"},
+				})
+				globalCluster.Executor = testExecutor
+				DeferCleanup(func() { globalCluster = oldCluster })
+			})
+			restoreFewerRows := func() (bool, error) {
+				fpInfo := filepath.FilePathInfo{Timestamp: "20170101010101"}
+				entry := toc.CoordinatorDataEntry{Schema: "public", Name: "foo", Oid: 1, AttributeString: "(i)", RowsCopied: 10}
+				localMock.ExpectExec("COPY public.foo").WillReturnResult(sqlmock.NewResult(0, 4))
+				copyDone := false
+				err := restoreSingleTableData(context.Background(), &fpInfo, entry, "public.foo", 0, []int{}, func() { copyDone = true })
+				Expect(localMock.ExpectationsWereMet()).To(Succeed())
+				return copyDone, err
+			}
+			It("returns that the helper has stopped if it has, as it closes its pipe as it stops", func() {
+				testExecutor.ClusterOutput = &cluster.RemoteOutput{Commands: []cluster.ShellCommand{{Stdout: "error"}}}
+				copyDone, err := restoreFewerRows()
+				Expect(errors.Is(err, utils.AgentErr)).To(BeTrue())
+				// The caller records the end of the COPY once it has recorded that the helper has stopped
+				Expect(copyDone).To(BeFalse())
+				Expect(testExecutor.NumExecutions).To(Equal(1))
+			})
+			It("returns the difference of the rows if the helper has not stopped", func() {
+				testExecutor.ClusterOutput = &cluster.RemoteOutput{Commands: []cluster.ShellCommand{{Stdout: ""}}}
+				copyDone, err := restoreFewerRows()
+				Expect(err).To(MatchError("Expected to restore 10 rows to table public.foo, but restored 4 instead"))
+				Expect(copyDone).To(BeFalse())
+			})
+		})
+	})
+	Describe("beginTableTransaction", func() {
+		It("begins the transaction of a table at the default isolation level", func() {
+			localConn, localMock := testhelper.CreateAndConnectMockDB(2)
+			oldConn := connectionPool
+			connectionPool = localConn
+			DeferCleanup(func() { connectionPool = oldConn })
+			// No SET TRANSACTION ISOLATION LEVEL SERIALIZABLE follows
+			localMock.ExpectBegin()
+			localMock.ExpectExec("LOCK TABLE ONLY public.foo IN ACCESS SHARE MODE").WillReturnResult(sqlmock.NewResult(0, 0))
+			localMock.ExpectCommit()
+
+			Expect(beginTableTransaction(1)).To(Succeed())
+			Expect(connectionPool.Tx[1]).ToNot(BeNil())
+			_, err := connectionPool.Exec("LOCK TABLE ONLY public.foo IN ACCESS SHARE MODE", 1)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(connectionPool.Commit(1)).To(Succeed())
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+	})
+	Describe("entriesOfHelper", func() {
+		// The entries a connection restores, all at once
+		entriesOf := func(helper int, numHelpers int, numEntries int) []int {
+			entries := make([]int, 0)
+			nextEntryIdx := entriesOfHelper(helper, numHelpers, numEntries)
+			for entryIdx, ok := nextEntryIdx(); ok; entryIdx, ok = nextEntryIdx() {
+				entries = append(entries, entryIdx)
+			}
+			return entries
+		}
+		It("gives a connection the entries of its own gpbackup_helper, whenever it asks", func() {
+			Expect(entriesOf(0, 3, 7)).To(Equal([]int{0, 3, 6}))
+			Expect(entriesOf(1, 3, 7)).To(Equal([]int{1, 4}))
+			Expect(entriesOf(2, 3, 7)).To(Equal([]int{2, 5}))
+		})
+		It("gives no entries to a connection without a gpbackup_helper", func() {
+			// With more connections than tables, there is a helper for each table only
+			Expect(entriesOf(3, 3, 3)).To(BeEmpty())
+		})
+	})
+	Describe("lockAncestors", func() {
+		It("locks only the ancestors of a partition, not their other partitions", func() {
+			localConn, localMock := testhelper.CreateAndConnectMockDB(1)
+			oldConn := connectionPool
+			connectionPool = localConn
+			DeferCleanup(func() { connectionPool = oldConn })
+			localMock.ExpectExec(`LOCK TABLE ONLY public.sales_1_prt_2, ONLY public.sales IN ACCESS SHARE MODE`).WillReturnResult(sqlmock.NewResult(0, 0))
+
+			Expect(lockAncestors([]string{"public.sales_1_prt_2", "public.sales"}, 0)).To(Succeed())
+			Expect(localMock.ExpectationsWereMet()).To(Succeed())
+		})
+	})
+	Describe("numConnsPerDataFile", func() {
+		// Data files 0, 1 and 2, with an entry each
+		entries := []toc.CoordinatorDataEntry{{Oid: 1, DataFileIdx: 0}, {Oid: 2, DataFileIdx: 1}, {Oid: 3, DataFileIdx: 2}}
+		It("gives all connections to a single data file", func() {
+			Expect(numConnsPerDataFile([]toc.CoordinatorDataEntry{{Oid: 1}, {Oid: 2}}, 4, 1)).To(Equal(4))
+			Expect(numConnsPerDataFile([]toc.CoordinatorDataEntry{{Oid: 1}, {Oid: 2}}, 8, 2)).To(Equal(8))
+		})
+		It("gives --copy-queue-size connections to each data file with as many data files as groups or more", func() {
+			Expect(numConnsPerDataFile(entries, 3, 1)).To(Equal(1))
+			Expect(numConnsPerDataFile(entries, 4, 2)).To(Equal(2))
+			Expect(numConnsPerDataFile(entries, 6, 2)).To(Equal(2))
+		})
+		It("splits the connections among fewer data files than groups", func() {
+			Expect(numConnsPerDataFile(entries, 6, 1)).To(Equal(2))
+			Expect(numConnsPerDataFile(entries, 12, 2)).To(Equal(4))
+			// The connections left over restore nothing
+			Expect(numConnsPerDataFile(entries, 8, 1)).To(Equal(2))
+		})
+		It("counts only the data files with entries to restore", func() {
+			// After a filter, only data file 2 of the backup is left
+			Expect(numConnsPerDataFile([]toc.CoordinatorDataEntry{{Oid: 3, DataFileIdx: 2}, {Oid: 6, DataFileIdx: 2}}, 4, 1)).To(Equal(4))
+			Expect(numConnsPerDataFile([]toc.CoordinatorDataEntry{{Oid: 2, DataFileIdx: 1}, {Oid: 3, DataFileIdx: 2}}, 8, 2)).To(Equal(4))
 		})
 	})
 	Describe("getExtensionTableCondition", func() {

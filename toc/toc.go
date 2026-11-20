@@ -45,6 +45,9 @@ type CoordinatorDataEntry struct {
 	PartitionRoot   string
 	IsReplicated    bool
 	DistByEnum      bool
+	// Index of the data file this table was written to in a backup taken with
+	// --single-data-file and --jobs; 0 for every other backup.
+	DataFileIdx int `yaml:",omitempty"`
 }
 
 type SegmentDataEntry struct {
@@ -343,8 +346,36 @@ func (toc *TOC) AddMetadataEntry(section string, entry MetadataEntry, start, end
 }
 
 func (toc *TOC) AddCoordinatorDataEntry(schema string, name string, oid uint32, attributeString string, rowsCopied int64, PartitionRoot string, distPolicy string, distByEnum bool) {
-	isReplicated := strings.Contains(distPolicy, "REPLICATED")
-	toc.DataEntries = append(toc.DataEntries, CoordinatorDataEntry{schema, name, oid, attributeString, rowsCopied, PartitionRoot, isReplicated, distByEnum})
+	toc.AddCoordinatorDataEntryForDataFile(schema, name, oid, attributeString, rowsCopied, PartitionRoot, distPolicy, distByEnum, 0)
+}
+
+// AddCoordinatorDataEntryForDataFile adds the data entry of a table written to the
+// given data file of a backup taken with --single-data-file and --jobs.
+func (toc *TOC) AddCoordinatorDataEntryForDataFile(schema string, name string, oid uint32, attributeString string, rowsCopied int64, PartitionRoot string, distPolicy string, distByEnum bool, dataFileIdx int) {
+	toc.DataEntries = append(toc.DataEntries, CoordinatorDataEntry{
+		Schema:          schema,
+		Name:            name,
+		Oid:             oid,
+		AttributeString: attributeString,
+		RowsCopied:      rowsCopied,
+		PartitionRoot:   PartitionRoot,
+		IsReplicated:    strings.Contains(distPolicy, "REPLICATED"),
+		DistByEnum:      distByEnum,
+		DataFileIdx:     dataFileIdx,
+	})
+}
+
+// GetNumDataFiles returns the number of data files per segment that the data
+// entries were written to: more than one for a backup taken with
+// --single-data-file and --jobs.
+func GetNumDataFiles(dataEntries []CoordinatorDataEntry) int {
+	numDataFiles := 1
+	for _, entry := range dataEntries {
+		if entry.DataFileIdx+1 > numDataFiles {
+			numDataFiles = entry.DataFileIdx + 1
+		}
+	}
+	return numDataFiles
 }
 
 func (toc *SegmentTOC) AddSegmentDataEntry(oid uint, startByte uint64, endByte uint64) {

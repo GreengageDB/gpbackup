@@ -125,6 +125,87 @@ var _ = Describe("End to End plugin tests", func() {
 			assertDataRestored(restoreConn, schema2TupleCounts)
 			assertArtifactsCleaned(timestamp)
 		})
+		It("runs gpbackup and gprestore with single-data-file and jobs flags", func() {
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--jobs", "3",
+				"--leaf-partition-data",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--jobs", "3",
+				"--backup-dir", backupDir)
+
+			assertRelationsCreated(restoreConn, TOTAL_RELATIONS)
+			assertDataRestored(restoreConn, publicSchemaTupleCounts)
+			assertDataRestored(restoreConn, schema2TupleCounts)
+			assertArtifactsCleaned(timestamp)
+		})
+		It("runs gpbackup with single-data-file and jobs flags and gprestore without jobs flag", func() {
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--jobs", "3",
+				"--copy-queue-size", "2",
+				"--backup-dir", backupDir,
+				"--no-compression")
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--backup-dir", backupDir)
+
+			assertRelationsCreated(restoreConn, TOTAL_RELATIONS)
+			assertDataRestored(restoreConn, publicSchemaTupleCounts)
+			assertDataRestored(restoreConn, schema2TupleCounts)
+			assertArtifactsCleaned(timestamp)
+		})
+		It("runs gpbackup with single-data-file and jobs flags and gprestore with include-table", func() {
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--jobs", "3",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--jobs", "2",
+				"--include-table", "public.holds",
+				"--include-table", "schema2.ao1",
+				"--backup-dir", backupDir)
+
+			assertRelationsCreated(restoreConn, 2)
+			assertDataRestored(restoreConn, map[string]int{"public.holds": 50000, "schema2.ao1": 1000})
+			assertArtifactsCleaned(timestamp)
+		})
+		It("runs gpbackup with single-data-file and jobs flags and gprestore with jobs and copy-queue-size", func() {
+			if useOldBackupVersion {
+				Skip("This test is not needed for old backup versions")
+			}
+			output := gpbackup(gpbackupPath, backupHelperPath,
+				"--single-data-file",
+				"--jobs", "3",
+				"--leaf-partition-data",
+				"--backup-dir", backupDir)
+			timestamp := getBackupTimestamp(string(output))
+			gprestore(gprestorePath, restoreHelperPath, timestamp,
+				"--redirect-db", "restoredb",
+				"--jobs", "2",
+				"--copy-queue-size", "2",
+				"--backup-dir", backupDir)
+
+			assertRelationsCreated(restoreConn, TOTAL_RELATIONS)
+			assertDataRestored(restoreConn, publicSchemaTupleCounts)
+			assertDataRestored(restoreConn, schema2TupleCounts)
+			assertArtifactsCleaned(timestamp)
+		})
 		It("runs gpbackup and gprestore on database with all objects", func() {
 			schemaResetStatements := "DROP SCHEMA IF EXISTS schema2 CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 			testhelper.AssertQueryRuns(backupConn, schemaResetStatements)
@@ -497,6 +578,56 @@ var _ = Describe("End to End plugin tests", func() {
 					"--redirect-db", "restoredb",
 					"--plugin-config", examplePluginTestConfig,
 					"--copy-queue-size", "4")
+
+				assertRelationsCreated(restoreConn, TOTAL_RELATIONS)
+				assertDataRestored(restoreConn, publicSchemaTupleCounts)
+				assertDataRestored(restoreConn, schema2TupleCounts)
+				assertArtifactsCleaned(timestamp)
+			})
+			It("runs gpbackup and gprestore with plugin, single-data-file, and jobs", func() {
+				if useOldBackupVersion {
+					Skip("This test is not needed for old backup versions")
+				}
+				copyPluginToAllHosts(backupConn, examplePluginExec)
+
+				output := gpbackup(gpbackupPath, backupHelperPath,
+					"--single-data-file",
+					"--jobs", "3",
+					"--leaf-partition-data",
+					"--plugin-config", examplePluginTestConfig)
+				timestamp := getBackupTimestamp(string(output))
+				forceMetadataFileDownloadFromPlugin(backupConn, timestamp)
+
+				gprestore(gprestorePath, restoreHelperPath, timestamp,
+					"--redirect-db", "restoredb",
+					"--plugin-config", examplePluginTestConfig,
+					"--jobs", "3")
+
+				assertRelationsCreated(restoreConn, TOTAL_RELATIONS)
+				assertDataRestored(restoreConn, publicSchemaTupleCounts)
+				assertDataRestored(restoreConn, schema2TupleCounts)
+				assertArtifactsCleaned(timestamp)
+			})
+			It("runs gpbackup and gprestore with plugin, single-data-file, jobs, no-compression, and copy-queue-size", func() {
+				if useOldBackupVersion {
+					Skip("This test is not needed for old backup versions")
+				}
+				copyPluginToAllHosts(backupConn, examplePluginExec)
+
+				output := gpbackup(gpbackupPath, backupHelperPath,
+					"--single-data-file",
+					"--jobs", "3",
+					"--copy-queue-size", "2",
+					"--no-compression",
+					"--plugin-config", examplePluginTestConfig)
+				timestamp := getBackupTimestamp(string(output))
+				forceMetadataFileDownloadFromPlugin(backupConn, timestamp)
+
+				gprestore(gprestorePath, restoreHelperPath, timestamp,
+					"--redirect-db", "restoredb",
+					"--plugin-config", examplePluginTestConfig,
+					"--jobs", "2",
+					"--copy-queue-size", "2")
 
 				assertRelationsCreated(restoreConn, TOTAL_RELATIONS)
 				assertDataRestored(restoreConn, publicSchemaTupleCounts)

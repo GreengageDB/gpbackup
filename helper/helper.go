@@ -6,8 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -208,21 +206,6 @@ func openClosePipe(filename string) error {
 		return err
 	}
 	return nil
-}
-
-func getOidListFromFile(oidFileName string) ([]int, error) {
-	oidStr, err := operating.System.ReadFile(oidFileName)
-	if err != nil {
-		logError(fmt.Sprintf("Error encountered reading oid list from file: %v", err))
-		return nil, err
-	}
-	oidStrList := strings.Split(strings.TrimSpace(fmt.Sprintf("%s", oidStr)), "\n")
-	oidList := make([]int, len(oidStrList))
-	for i, oid := range oidStrList {
-		num, _ := strconv.Atoi(oid)
-		oidList[i] = num
-	}
-	return oidList, nil
 }
 
 /*

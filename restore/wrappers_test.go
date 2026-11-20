@@ -116,6 +116,50 @@ var _ = Describe("wrapper tests", func() {
 		})
 
 	})
+	Describe("GetNumMetadataConns", func() {
+		var numConns int
+		BeforeEach(func() {
+			numConns = connectionPool.NumConns
+			connectionPool.NumConns = 6
+		})
+		AfterEach(func() {
+			connectionPool.NumConns = numConns
+			_ = cmdFlags.Set(options.JOBS, "1")
+			cmdFlags.Lookup(options.JOBS).Changed = false
+		})
+		It("restores the metadata with --jobs connections when --copy-queue-size adds more for the data", func() {
+			_ = cmdFlags.Set(options.JOBS, "3")
+			Expect(restore.GetNumMetadataConns()).To(Equal(3))
+		})
+		It("restores the metadata with every connection without --jobs", func() {
+			Expect(restore.GetNumMetadataConns()).To(Equal(6))
+		})
+	})
+	Describe("GetNumConnections", func() {
+		BeforeEach(func() {
+			restore.SetBackupConfig(&history.BackupConfig{SingleDataFile: true})
+		})
+		AfterEach(func() {
+			_ = cmdFlags.Set(options.JOBS, "1")
+			_ = cmdFlags.Set(options.COPY_QUEUE_SIZE, "1")
+			cmdFlags.Lookup(options.COPY_QUEUE_SIZE).Changed = false
+		})
+		It("opens --jobs times --copy-queue-size connections for a backup taken with --single-data-file", func() {
+			_ = cmdFlags.Set(options.JOBS, "3")
+			_ = cmdFlags.Set(options.COPY_QUEUE_SIZE, "2")
+			Expect(restore.GetNumConnections()).To(Equal(6))
+		})
+		It("opens --jobs connections without --copy-queue-size", func() {
+			_ = cmdFlags.Set(options.JOBS, "3")
+			Expect(restore.GetNumConnections()).To(Equal(3))
+		})
+		It("opens --copy-queue-size connections before the backup is known", func() {
+			restore.SetBackupConfig(nil)
+			_ = cmdFlags.Set(options.JOBS, "3")
+			_ = cmdFlags.Set(options.COPY_QUEUE_SIZE, "2")
+			Expect(restore.GetNumConnections()).To(Equal(2))
+		})
+	})
 	Describe("restore history tests", func() {
 		sampleConfigContents := `
 executablepath: /bin/echo

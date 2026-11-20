@@ -55,6 +55,9 @@ func initializeConnectionPool(timestamp string) {
 	 * additional connection to the database.
 	 */
 	switch true {
+	case MustGetFlagBool(options.SINGLE_DATA_FILE) && FlagChanged(options.JOBS):
+		// One data file per job, written by the given number of COPY commands
+		numConns = MustGetFlagInt(options.JOBS)*MustGetFlagInt(options.COPY_QUEUE_SIZE) + 1
 	case FlagChanged(options.COPY_QUEUE_SIZE):
 		numConns = MustGetFlagInt(options.COPY_QUEUE_SIZE) + 1
 	case FlagChanged(options.JOBS):

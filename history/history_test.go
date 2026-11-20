@@ -2,6 +2,7 @@ package history_test
 
 import (
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -159,6 +160,86 @@ var _ = Describe("backup/history tests", func() {
 			Expect(config).To(structmatcher.MatchStruct(testConfig1))
 		})
 
+		It("gets the number of data files of a backup from the database", func() {
+			db, _ := history.InitializeHistoryDatabase(historyDBPath)
+			defer db.Close()
+			testConfig1.SingleDataFile = true
+			testConfig1.SingleDataFileCount = 3
+			err := history.StoreBackupHistory(db, &testConfig1)
+			Expect(err).To(BeNil())
+
+			config, err := history.GetBackupConfig(testConfig1.Timestamp, db)
+			Expect(err).To(BeNil())
+			Expect(config.SingleDataFileCount).To(Equal(3))
+		})
+		It("adds the number of data files to a database created by an earlier version", func() {
+			db, _ := history.InitializeHistoryDatabase(historyDBPath)
+			err := history.StoreBackupHistory(db, &testConfig1)
+			Expect(err).To(BeNil())
+			// The backups table of an earlier version, with its backup
+			_, err = db.Exec("ALTER TABLE backups DROP COLUMN single_data_file_count")
+			Expect(err).To(BeNil())
+			db.Close()
+
+			db, err = history.InitializeHistoryDatabase(historyDBPath)
+			Expect(err).To(BeNil())
+			defer db.Close()
+			config, err := history.GetBackupConfig(testConfig1.Timestamp, db)
+			Expect(err).To(BeNil())
+			Expect(config).To(structmatcher.MatchStruct(testConfig1))
+			Expect(config.SingleDataFileCount).To(Equal(0))
+		})
+		Describe("a database created by an earlier version", func() {
+			// The database of an earlier version, with a backup
+			createEarlierDatabase := func() {
+				_ = os.Remove(historyDBPath)
+				db, err := history.InitializeHistoryDatabase(historyDBPath)
+				Expect(err).To(BeNil())
+				Expect(history.StoreBackupHistory(db, &testConfig1)).To(Succeed())
+				_, err = db.Exec("ALTER TABLE backups DROP COLUMN single_data_file_count")
+				Expect(err).To(BeNil())
+				db.Close()
+			}
+			It("is opened by several processes at once, one of which adds the column", func() {
+				// The column used to be added in the transaction that had read the database, which
+				// SQLite fails at once with "database is locked" while another connection adds it
+				for round := 0; round < 5; round++ {
+					createEarlierDatabase()
+					var openers sync.WaitGroup
+					errs := make([]error, 8)
+					for i := range errs {
+						openers.Add(1)
+						go func(i int) {
+							defer openers.Done()
+							db, err := history.InitializeHistoryDatabase(historyDBPath)
+							errs[i] = err
+							if db != nil {
+								db.Close()
+							}
+						}(i)
+					}
+					openers.Wait()
+					for _, err := range errs {
+						Expect(err).To(BeNil())
+					}
+				}
+			})
+			It("is used without the column if it cannot be written to", func() {
+				if os.Geteuid() == 0 {
+					Skip("root can write to a read-only file")
+				}
+				createEarlierDatabase()
+				Expect(os.Chmod(historyDBPath, 0444)).To(Succeed())
+
+				db, err := history.InitializeHistoryDatabase(historyDBPath)
+				Expect(err).To(BeNil())
+				defer db.Close()
+				config, err := history.GetBackupConfig(testConfig1.Timestamp, db)
+				Expect(err).To(BeNil())
+				Expect(config).To(structmatcher.MatchStruct(testConfig1))
+				Expect(config.SingleDataFileCount).To(Equal(0))
+			})
+		})
 		It("refuses to get a config from the database if the timestamp is not present", func() {
 			db, _ := history.InitializeHistoryDatabase(historyDBPath)
 			defer db.Close()

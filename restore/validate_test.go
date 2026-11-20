@@ -316,6 +316,10 @@ var _ = Describe("restore/validate tests", func() {
 				}
 			},
 			Entry("--backup-dir combo", "--backup-dir /tmp --plugin-config /tmp/config", false),
+			Entry("--jobs values", "--timestamp=0 --jobs 1", true),
+			Entry("--jobs values", "--timestamp=0 --jobs 0", false),
+			Entry("--jobs values", "--timestamp=0 --jobs -2", false),
+			Entry("--copy-queue-size values", "--timestamp=0 --copy-queue-size 0", false),
 
 			/*
 			 * Below are all the different filter combinations
@@ -414,6 +418,34 @@ var _ = Describe("restore/validate tests", func() {
 			if err == nil {
 				Fail("invalid flag combination passed validation check")
 			}
+		})
+		validateWithArgs := func(config history.BackupConfig, args ...string) error {
+			restore.SetBackupConfig(&config)
+			testCmd := &cobra.Command{
+				Use:  "flag validation",
+				Args: cobra.NoArgs,
+				Run: func(cmd *cobra.Command, args []string) {
+					restore.ValidateBackupFlagCombinations()
+				}}
+			testCmd.SetArgs(args)
+			restore.SetCmdFlags(testCmd.Flags())
+			return testCmd.Execute()
+		}
+		It("restore with jobs passes if backup was taken with a single data file", func() {
+			err := validateWithArgs(history.BackupConfig{SingleDataFile: true}, "--jobs", "2")
+			Expect(err).ToNot(HaveOccurred())
+		})
+		It("restore with jobs passes if an incremental backup was taken with a single data file", func() {
+			err := validateWithArgs(history.BackupConfig{SingleDataFile: true, Incremental: true}, "--jobs", "2")
+			Expect(err).ToNot(HaveOccurred())
+		})
+		It("restore with jobs passes if backup was taken with single-data-file and jobs", func() {
+			err := validateWithArgs(history.BackupConfig{SingleDataFile: true, SingleDataFileCount: 3}, "--jobs", "2")
+			Expect(err).ToNot(HaveOccurred())
+		})
+		It("restore with jobs and copy-queue-size passes if backup was taken with single-data-file and jobs", func() {
+			err := validateWithArgs(history.BackupConfig{SingleDataFile: true, SingleDataFileCount: 3}, "--jobs", "2", "--copy-queue-size", "2")
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 })
